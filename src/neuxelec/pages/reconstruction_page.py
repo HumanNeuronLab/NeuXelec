@@ -1609,6 +1609,46 @@ class ReconstructionPage:
         except Exception:
             lps = None
 
+        # Warn if the picked point is in the opposite hemisphere to the one selected.
+        # In LPS, +x points toward the patient's Left. The image centre is used as a
+        # robust midline proxy, with a small tolerance to avoid false warnings near
+        # the midline.
+        if lps is not None:
+            hemi = self._current_hemi()
+            if hemi in ("L", "R"):
+                try:
+                    ref = self._ct_ref_for_lps()
+                    sz = ref.GetSize()
+                    mid = ref.TransformContinuousIndexToPhysicalPoint(
+                        (sz[0] / 2.0, sz[1] / 2.0, sz[2] / 2.0)
+                    )
+                    midline_x = float(mid[0])
+                except Exception:
+                    midline_x = 0.0
+                margin = 5.0  # mm tolerance around the midline
+                picked_right = lps[0] < midline_x - margin
+                picked_left = lps[0] > midline_x + margin
+                mismatch = (hemi == "L" and picked_right) or (hemi == "R" and picked_left)
+                if mismatch:
+                    picked_side = "right" if picked_right else "left"
+                    chosen_side = "left" if hemi == "L" else "right"
+                    parent = self.ui.window() if self.ui is not None else None
+                    keep = NeuXelecMessageDialog.question(
+                        parent,
+                        "Hemisphere mismatch",
+                        (
+                            f"The point you picked appears to be in the {picked_side} "
+                            f"hemisphere, but this electrode is set to the {chosen_side} "
+                            "hemisphere.\n\nDo you want to keep this point anyway?"
+                        ),
+                        accept_text="Keep",
+                        reject_text="Cancel",
+                    )
+                    if not keep:
+                        self._pick_mode = None
+                        self._set_pick_button_active(None)
+                        return
+
         def _set_lps_fields(le_x, le_y, le_z, lps_val):
             if lps_val is None:
                 # fallback: show voxels

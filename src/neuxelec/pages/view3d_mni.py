@@ -17,7 +17,10 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QTreeWidget
 
 from neuxelec.ui.neuxelec_color_dialog import NeuXelecColorDialog
-from neuxelec.ui.neuxelec_message_dialog import NeuXelecMessageDialog
+from neuxelec.ui.neuxelec_message_dialog import (
+    NeuXelecMessageDialog,
+    NeuXelecTextInputDialog,
+)
 
 try:
     import pyvista as pv
@@ -924,6 +927,104 @@ class View3DMniMixin:
                 self._mni_tree_updating = old_updating
             except Exception:
                 self._mni_tree_updating = False
+
+    def _mni_recolor_electrodes_by_name(self) -> None:
+        """
+        MNI mode (Ctrl+F): ask for an electrode name (e.g. "HAD"), report how many
+        matching electrodes exist across all loaded MNI patients, then apply a single
+        chosen colour to all of them at once.
+        """
+        try:
+            sets = getattr(self.state, "mni_electrode_sets", []) or []
+            if not sets:
+                NeuXelecMessageDialog.information(
+                    self._dialog_parent(),
+                    "Recolor electrodes",
+                    "No MNI electrodes are currently loaded.",
+                )
+                return
+
+            name = NeuXelecTextInputDialog.get_text(
+                self._dialog_parent(),
+                "Recolor electrodes",
+                "Enter an electrode name (e.g. HAD) to color all matching electrodes:",
+                initial_text="",
+                accept_text="Search",
+                reject_text="Cancel",
+            )
+            if name is None:
+                return
+            needle = str(name).strip().casefold()
+            if not needle:
+                return
+
+            # Collect every matching (patient index, group name) pair.
+            matches: list[tuple[int, str]] = []
+            for si, mni_set in enumerate(sets):
+                if not isinstance(mni_set, dict):
+                    continue
+                seen: set[str] = set()
+                for c in mni_set.get("contacts", []) or []:
+                    g = self._mni_group_name_from_contact(c)
+                    if g in seen:
+                        continue
+                    seen.add(g)
+                    if str(g).strip().casefold() == needle:
+                        matches.append((si, g))
+
+            if not matches:
+                NeuXelecMessageDialog.information(
+                    self._dialog_parent(),
+                    "Recolor electrodes",
+                    f'No electrode named "{str(name).strip()}" was found.',
+                )
+                return
+
+            proceed = NeuXelecMessageDialog.question(
+                self._dialog_parent(),
+                "Recolor electrodes",
+                (
+                    f'Found {len(matches)} electrode(s) named "{str(name).strip()}".\n\n'
+                    "Choose a colour to apply to all of them?"
+                ),
+                accept_text="Choose colour",
+                reject_text="Cancel",
+            )
+            if not proceed:
+                return
+
+            color_hex = NeuXelecColorDialog.get_color(
+                initial_color=QColor(255, 255, 255),
+                parent=self._dialog_parent(),
+                title=f'Choose colour for "{str(name).strip()}"',
+            )
+            if color_hex is None:
+                return
+            qcolor = QColor(color_hex)
+            if not qcolor.isValid():
+                return
+            rgb = [int(qcolor.red()), int(qcolor.green()), int(qcolor.blue())]
+
+            for si, group_name in matches:
+                mni_set = sets[si]
+                self._ensure_mni_visibility_fields(mni_set)
+                mni_set["group_color"][str(group_name)] = list(rgb)
+                try:
+                    self._update_mni_tree_group_color(si, group_name)
+                except Exception:
+                    pass
+                try:
+                    self._update_mni_group_color_only(si, group_name, render=False)
+                except Exception:
+                    pass
+
+            try:
+                self._render()
+            except Exception:
+                pass
+
+        except Exception as e:
+            print("[MNI recolor by name] failed:", e)
 
     def _set_mni_group_color(self, si: int, group_name: str) -> None:
         """

@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -72,48 +73,40 @@ def _run_cmd_with_progress(
         creationflags=creation_flags,
     )
 
-    output_lines = []
+    output_lines: list[str] = []
+
+    # Drain ANTs stdout in a background thread so the main loop NEVER blocks on
+    # readline(). ANTs can compute silently for many seconds; a blocking read
+    # would freeze the progress callback (and therefore the time-based progress
+    # bar) during those periods.
+    def _drain(stream) -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                output_lines.append(line)
+        except Exception:
+            pass
+
+    reader = None
+    if process.stdout is not None:
+        reader = threading.Thread(target=_drain, args=(process.stdout,), daemon=True)
+        reader.start()
+
     current_value = int(start_value)
     last_tick = time.time()
 
-    while True:
-        line = process.stdout.readline() if process.stdout is not None else ""
-
-        if line:
-            output_lines.append(line)
-
-            # Increment slowly while ANTs prints logs.
-            current_value = min(int(end_value) - 1, current_value + 1)
-
-            short_line = line.strip()
-            if len(short_line) > 120:
-                short_line = short_line[:117] + "..."
-
-            _report_progress(
-                progress_callback,
-                f"{message}\n{short_line}",
-                current_value,
-                100,
-            )
-
-        ret = process.poll()
-
-        # Even if ANTs is quiet, keep the progress dialog alive.
+    # Poll the process without blocking. The progress callback is invoked at a
+    # steady ~0.15 s cadence so the UI event loop is pumped regularly and the
+    # time-based progress bar advances smoothly, independently of ANTs output.
+    while process.poll() is None:
         now = time.time()
-        if now - last_tick > 0.5:
+        if now - last_tick > 0.15:
             current_value = min(int(end_value) - 1, current_value + 1)
             _report_progress(progress_callback, message, current_value, 100)
             last_tick = now
-
-        if ret is not None:
-            break
-
         time.sleep(0.05)
 
-    if process.stdout is not None:
-        remaining = process.stdout.read()
-        if remaining:
-            output_lines.append(remaining)
+    if reader is not None:
+        reader.join(timeout=1.0)
 
     if process.returncode != 0:
         msg = "".join(output_lines).strip()

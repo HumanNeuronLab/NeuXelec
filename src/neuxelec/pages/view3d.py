@@ -523,7 +523,7 @@ class View3DPage(
         self._brain_render_dialog = None
 
         self._shortcut_back_to_reco = QShortcut(QKeySequence("Ctrl+F"), self.container_3d)
-        self._shortcut_back_to_reco.activated.connect(self._go_back_to_reconstruction)
+        self._shortcut_back_to_reco.activated.connect(self._on_ctrl_f)
 
         # Surface projection markers for electrodes
         self._surface_projection_defs = {}  # elec_id -> True
@@ -9138,6 +9138,17 @@ class View3DPage(
             except Exception:
                 pass
         return None
+
+    def _on_ctrl_f(self):
+        """Ctrl+F dispatcher: in MNI mode, recolor electrodes by name; otherwise go
+        back to the Reconstruction page (previous behaviour)."""
+        try:
+            if self._mni_mode_is_active():
+                self._mni_recolor_electrodes_by_name()
+                return
+        except Exception:
+            pass
+        self._go_back_to_reconstruction()
 
     def _go_back_to_reconstruction(self):
         # 1) récupérer la position actuelle du marker 3D

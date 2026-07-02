@@ -2041,6 +2041,7 @@ class ExportCoordinatesDialog(QDialog):
         try:
             exported_any = False
             mni_electrodes_tsv = None
+            bids_space = "T1w"
 
             # ---------------------------------------------------------
             # 1) Classic exports: CSV / TSV / TXT / JSON
