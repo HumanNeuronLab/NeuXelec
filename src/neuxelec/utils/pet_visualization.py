@@ -1,6 +1,35 @@
 import matplotlib.cm as cm
 import numpy as np
 
+# Preferred colormaps for scalar overlays, in priority order. Used to give every
+# overlay layer (SISCOM, PET, ictal SPECT, inter-ictal SPECT) a distinct default
+# colormap automatically, picking the first one not already taken. This is the
+# same set offered for PET / SISCOM so the choices are consistent everywhere.
+OVERLAY_CMAP_PREFERENCE = [
+    "hot",
+    "inferno",
+    "plasma",
+    "jet",
+    "turbo",
+    "viridis",
+    "gray",
+]
+
+
+def pick_free_colormap(used, preference=None):
+    """Return the first colormap in ``preference`` not present in ``used``.
+
+    ``used`` is an iterable of colormap names already assigned to other overlays.
+    Falls back to the first preference when all are taken. Comparison is
+    case-insensitive.
+    """
+    prefs = list(preference) if preference else list(OVERLAY_CMAP_PREFERENCE)
+    used_set = {str(u).lower() for u in (used or []) if u}
+    for name in prefs:
+        if name.lower() not in used_set:
+            return name
+    return prefs[0] if prefs else "hot"
+
 
 def get_pet_window(values, pmin, pmax):
     if values is None:
@@ -15,6 +44,42 @@ def get_pet_window(values, pmin, pmax):
 
     lo = float(np.percentile(values, pmin))
     hi = float(np.percentile(values, pmax))
+    if hi <= lo:
+        hi = lo + 1e-6
+    return lo, hi
+
+
+def compute_pet_reference(pet_values):
+    """Reference intensity for ratio normalization.
+
+    Returns the median of the positive PET voxels supplied (the caller should
+    restrict them to the brain mask when available). This median represents the
+    average brain metabolism, so dividing the PET by it turns the color scale
+    into an interpretable ratio where 1.0 = brain average, < 1.0 = hypometabolism.
+    Returns None when no usable value is available.
+    """
+    v = np.asarray(pet_values, dtype=np.float32)
+    v = v[np.isfinite(v)]
+    v = v[v > 0]
+    if v.size == 0:
+        return None
+    ref = float(np.median(v))
+    if not np.isfinite(ref) or ref <= 1e-6:
+        return None
+    return ref
+
+
+def get_pet_ratio_window(ref, ratio_lo, ratio_hi):
+    """Window bounds in RAW intensity units from ratio bounds.
+
+    ``ratio_lo``/``ratio_hi`` are fractions of the reference (e.g. 0.4 and 1.6),
+    so the returned (lo, hi) = (ratio_lo * ref, ratio_hi * ref) can be fed to
+    ``normalize_pet_slice`` unchanged while the scale is anchored to the brain
+    median. Displaying lo/ref and hi/ref gives back the ratio bounds.
+    """
+    ref = float(ref)
+    lo = float(ratio_lo) * ref
+    hi = float(ratio_hi) * ref
     if hi <= lo:
         hi = lo + 1e-6
     return lo, hi

@@ -404,6 +404,16 @@ class StartupDialog(QDialog):
         self.lbl_subtitle.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.lbl_subtitle)
 
+        try:
+            from .. import __version__ as _nx_version
+        except Exception:
+            _nx_version = ""
+        self.lbl_version = QLabel(f"Version {_nx_version}" if _nx_version else "")
+        self.lbl_version.setObjectName("versionLabel")
+        self.lbl_version.setAlignment(Qt.AlignCenter)
+        self.lbl_version.setStyleSheet("color: #8A8F9C; font-size: 11px;")
+        layout.addWidget(self.lbl_version)
+
         layout.addItem(QSpacerItem(20, 14, QSizePolicy.Minimum, QSizePolicy.Fixed))
 
         self.btn_open = QPushButton("Open project")

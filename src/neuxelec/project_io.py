@@ -19,6 +19,31 @@ def _safe_list(v):
     return v if isinstance(v, list) else []
 
 
+def _json_safe(obj):
+    """Recursively convert a structure into plain JSON-serializable Python.
+
+    Handles nested dicts/lists/tuples and numpy scalars/arrays (via duck-typing,
+    without importing numpy) so electrode sets containing numpy values can be
+    written to the project JSON safely.
+    """
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(val) for k, val in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(val) for val in obj]
+    # numpy arrays expose tolist(); numpy scalars expose item().
+    if hasattr(obj, "tolist") and not isinstance(obj, (str, bytes)):
+        try:
+            return _json_safe(obj.tolist())
+        except Exception:
+            pass
+    if hasattr(obj, "item") and not isinstance(obj, (str, bytes, bool, int, float)):
+        try:
+            return obj.item()
+        except Exception:
+            pass
+    return obj
+
+
 def build_project_dict_from_state(state) -> dict[str, Any]:
     return {
         "schema_version": PROJECT_SCHEMA_VERSION,
@@ -122,6 +147,9 @@ def build_project_dict_from_state(state) -> dict[str, Any]:
         },
         "electrodes": list(getattr(state, "electrodes", []) or []),
         "markers": list(getattr(state, "markers", []) or []),
+        # MNI electrode sets (generated or loaded), including per-set ("color")
+        # and per-electrode ("group_color") colours, so they are restored on reload.
+        "mni_electrode_sets": _json_safe(getattr(state, "mni_electrode_sets", []) or []),
         "view3d": {
             "saved_camera": getattr(state, "view3d_saved_camera", None),
         },
@@ -354,6 +382,8 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
 
     state.electrodes = _safe_list(data.get("electrodes"))
     state.markers = _safe_list(data.get("markers"))
+    # Restore MNI electrode sets (with their per-set / per-electrode colours).
+    state.mni_electrode_sets = _safe_list(data.get("mni_electrode_sets"))
 
 
 def get_unsaved_validated_modalities(state) -> list[str]:

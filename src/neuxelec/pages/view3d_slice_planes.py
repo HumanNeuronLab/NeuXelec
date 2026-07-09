@@ -307,18 +307,21 @@ class View3DSlicePlanesMixin:
                 self._render_coronal_plane()
                 self._render_coronal_pet_overlay()
                 self._render_coronal_siscom_overlay()
+                self._render_plane_spect_overlays("coronal")
                 self._render_coronal_electrodes_overlay()
 
             elif which == "axial":
                 self._render_axial_plane()
                 self._render_axial_pet_overlay()
                 self._render_axial_siscom_overlay()
+                self._render_plane_spect_overlays("axial")
                 self._render_axial_electrodes_overlay()
 
             elif which == "sagittal":
                 self._render_sagittal_plane()
                 self._render_sagittal_pet_overlay()
                 self._render_sagittal_siscom_overlay()
+                self._render_plane_spect_overlays("sagittal")
                 self._render_sagittal_electrodes_overlay()
 
         except Exception:
@@ -333,6 +336,7 @@ class View3DSlicePlanesMixin:
                     self._render_coronal_plane()
                     self._render_coronal_pet_overlay()
                     self._render_coronal_siscom_overlay()
+                    self._render_plane_spect_overlays("coronal")
                     self._render_coronal_outline()
                     self._render_coronal_electrodes_overlay()
         except Exception:
@@ -344,6 +348,7 @@ class View3DSlicePlanesMixin:
                     self._render_axial_plane()
                     self._render_axial_pet_overlay()
                     self._render_axial_siscom_overlay()
+                    self._render_plane_spect_overlays("axial")
                     self._render_axial_outline()
                     self._render_axial_electrodes_overlay()
         except Exception:
@@ -355,6 +360,7 @@ class View3DSlicePlanesMixin:
                     self._render_sagittal_plane()
                     self._render_sagittal_pet_overlay()
                     self._render_sagittal_siscom_overlay()
+                    self._render_plane_spect_overlays("sagittal")
                     self._render_sagittal_outline()
                     self._render_sagittal_electrodes_overlay()
         except Exception:
@@ -494,6 +500,12 @@ class View3DSlicePlanesMixin:
             pass
         try:
             self._render_sagittal_siscom_overlay()
+        except Exception:
+            pass
+        try:
+            self._render_plane_spect_overlays("coronal")
+            self._render_plane_spect_overlays("axial")
+            self._render_plane_spect_overlays("sagittal")
         except Exception:
             pass
         try:

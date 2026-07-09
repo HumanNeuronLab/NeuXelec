@@ -49,6 +49,8 @@ from neuxelec.ui.slice_quick_tools import SliceQuickTools
 
 from ..utils.pet_visualization import (
     blend_pet_on_rgb,
+    compute_pet_reference,
+    get_pet_ratio_window,
     get_pet_window,
     normalize_pet_slice,
     normalize_threshold_map,
@@ -57,6 +59,7 @@ from ..utils.pet_visualization import (
 from ..utils.siscom_visualization import (
     get_siscom_window,
 )
+from .oblique_spect import ObliqueSpectMixin
 
 
 def _top_level_window():
@@ -71,7 +74,7 @@ def _top_level_window():
     return None
 
 
-class ObliqueSlicePage(QObject):
+class ObliqueSlicePage(ObliqueSpectMixin, QObject):
     """
     First implementation of the Oblique Slice page.
 
@@ -494,6 +497,15 @@ class ObliqueSlicePage(QObject):
         self._connect_opacity(self.sld_pet_max, self.spn_pet_max)
         self._connect_opacity(self.sld_siscom, self.spn_siscom)
 
+        # PET min/max now express a ratio to the brain median (slider value / 100),
+        # so allow up to 3.0x the reference instead of the old 0-100 percentiles.
+        for _w in (self.sld_pet_min, self.spn_pet_min, self.sld_pet_max, self.spn_pet_max):
+            if _w is not None:
+                try:
+                    _w.setRange(0, 300)
+                except Exception:
+                    pass
+
         if self.sld_pet_gamma is not None:
             try:
                 self.sld_pet_gamma.setRange(10, 300)  # gamma 0.10 -> 3.00
@@ -539,6 +551,12 @@ class ObliqueSlicePage(QObject):
                 cb.toggled.connect(
                     lambda checked=False, _cb=cb: self._on_oblique_modality_toggled(_cb, checked)
                 )
+
+        # Build and wire the ictal / inter-ictal SPECT overlay card (additive).
+        try:
+            self._oblique_spect_setup()
+        except Exception:
+            pass
 
         if self.chk_mri_t1 is not None:
             self.chk_mri_t1.toggled.connect(
@@ -815,20 +833,20 @@ class ObliqueSlicePage(QObject):
         try:
             if self.sld_pet_min is not None:
                 self.sld_pet_min.blockSignals(True)
-                self.sld_pet_min.setValue(15)
+                self.sld_pet_min.setValue(40)
                 self.sld_pet_min.blockSignals(False)
             if self.spn_pet_min is not None:
                 self.spn_pet_min.blockSignals(True)
-                self.spn_pet_min.setValue(15)
+                self.spn_pet_min.setValue(40)
                 self.spn_pet_min.blockSignals(False)
 
             if self.sld_pet_max is not None:
                 self.sld_pet_max.blockSignals(True)
-                self.sld_pet_max.setValue(75)
+                self.sld_pet_max.setValue(160)
                 self.sld_pet_max.blockSignals(False)
             if self.spn_pet_max is not None:
                 self.spn_pet_max.blockSignals(True)
-                self.spn_pet_max.setValue(75)
+                self.spn_pet_max.setValue(160)
                 self.spn_pet_max.blockSignals(False)
 
             if self.sld_pet_gamma is not None:
@@ -1092,6 +1110,13 @@ class ObliqueSlicePage(QObject):
             return False
 
         elif event.type() == QEvent.MouseButtonPress:
+            # Let right-clicks pass through so the custom context menu can appear
+            # (otherwise the press is consumed as the start of a drag).
+            try:
+                if event.button() == Qt.RightButton:
+                    return False
+            except Exception:
+                pass
             # ONLY handle mouse press for the 2 slice views
             if obj in (self.frame1, self.image1):
                 try:
@@ -1658,6 +1683,13 @@ class ObliqueSlicePage(QObject):
         except Exception:
             pass
 
+        # Gate the SPECT checkboxes: enabled only once the coregistration has
+        # been validated (same idea as PET/SISCOM availability).
+        try:
+            self._oblique_spect_update_availability()
+        except Exception:
+            pass
+
     def refresh_available_modalities(
         self,
         refresh: bool = True,
@@ -2122,8 +2154,6 @@ class ObliqueSlicePage(QObject):
             finite = finite[finite > 0]
 
             if finite.size > 0:
-                pmin = float(self.spn_pet_min.value()) if self.spn_pet_min is not None else 15.0
-                pmax = float(self.spn_pet_max.value()) if self.spn_pet_max is not None else 75.0
                 gamma = 1.0
                 try:
                     if self.spn_pet_gamma is not None:
@@ -2135,7 +2165,9 @@ class ObliqueSlicePage(QObject):
 
                 gamma = max(0.1, gamma)
 
-                lo, hi = get_pet_window(finite, pmin, pmax)
+                # Anchor the window to the brain-median ratio so the same colour
+                # always maps to the same metabolic level across slices.
+                lo, hi, _ = self._pet_window(finite)
                 pet_norm = normalize_pet_slice(arr_pet, lo, hi, gamma=gamma)
                 pet_rgb = pet_norm_to_colormap(pet_norm, self._pet_colormap_name)
 
@@ -2517,6 +2549,15 @@ class ObliqueSlicePage(QObject):
         # 4) Compose final image
         # -----------------------------
         img_rgb = self._compose_rgb_with_pet(base_rgb, pet_rgb, pet_norm, pet_opacity)
+
+        # Blend ictal / inter-ictal SPECT overlays on top (additive, no colour
+        # scale). Uses the same plane geometry; a no-op unless a layer is active.
+        try:
+            img_rgb = self._blend_spect_on_oblique_rgb(
+                img_rgb, center, u, w, s_min, s_max, t_min, t_max, H, W
+            )
+        except Exception:
+            pass
 
         if img_rgb is None:
             pm = None
@@ -5024,12 +5065,18 @@ class ObliqueSlicePage(QObject):
                 global_pos,
                 color_scale_visible=bool(getattr(self, "_show_color_scales", True)),
                 show_color_scale_option=bool(self._is_pet_or_siscom_checked()),
+                show_ictal_color=True,
+                show_interictal_color=True,
             )
 
             if choice == "pet":
                 self._choose_pet_colormap()
             elif choice == "siscom":
                 self._choose_siscom_colormap()
+            elif choice == "ictal_color":
+                self._choose_oblique_spect_colormap("ictal")
+            elif choice == "interictal_color":
+                self._choose_oblique_spect_colormap("interictal")
             elif choice == "toggle_color_scale":
                 self._toggle_color_scales()
         except Exception:
@@ -5147,11 +5194,9 @@ class ObliqueSlicePage(QObject):
             if vals.size == 0:
                 return None
 
-            pmin = float(self.spn_pet_min.value()) if self.spn_pet_min is not None else 15.0
-            pmax = float(self.spn_pet_max.value()) if self.spn_pet_max is not None else 75.0
             gamma = self._get_pet_gamma_value()
 
-            lo, hi = get_pet_window(vals, pmin, pmax)
+            lo, hi, ref = self._pet_window(vals)
             if hi <= lo:
                 hi = lo + 1.0
 
@@ -5159,6 +5204,7 @@ class ObliqueSlicePage(QObject):
                 "lo": float(lo),
                 "hi": float(hi),
                 "gamma": float(gamma),
+                "ref": (float(ref) if ref else None),
             }
         except Exception:
             return None
@@ -5310,6 +5356,79 @@ class ObliqueSlicePage(QObject):
         painter.end()
         return out
 
+    def _get_pet_reference(self):
+        """Brain-median PET intensity used to normalize the color scale to a ratio.
+
+        Cached per PET image; restricted to the brain mask when available, else
+        computed over all positive PET voxels. Returns None if unavailable.
+        """
+        pet_img = getattr(self.state, "pet_in_t1", None)
+        if pet_img is None:
+            return None
+        key = id(pet_img)
+        if getattr(self, "_pet_ref_key", None) == key:
+            return getattr(self, "_pet_ref_value", None)
+        ref = None
+        try:
+            pet_np = sitk.GetArrayFromImage(pet_img).astype(np.float32)
+            vals = None
+            mask_img = getattr(self.state, "brainmask_sitk", None)
+            if mask_img is not None:
+                try:
+                    m = sitk.Resample(
+                        mask_img,
+                        pet_img,
+                        sitk.Transform(3, sitk.sitkIdentity),
+                        sitk.sitkNearestNeighbor,
+                        0.0,
+                        sitk.sitkUInt8,
+                    )
+                    m_np = sitk.GetArrayFromImage(m)
+                    sel = (m_np > 0) & np.isfinite(pet_np) & (pet_np > 0)
+                    if np.any(sel):
+                        vals = pet_np[sel]
+                except Exception:
+                    vals = None
+            if vals is None:
+                vals = pet_np[np.isfinite(pet_np) & (pet_np > 0)]
+            ref = compute_pet_reference(vals)
+        except Exception:
+            ref = None
+        self._pet_ref_key = key
+        self._pet_ref_value = ref
+        return ref
+
+    def _pet_ratio_bounds(self):
+        """(ratio_lo, ratio_hi) from the min/max sliders (slider value / 100)."""
+        rmin = (
+            float(self.spn_pet_min.value()) / 100.0
+            if self.spn_pet_min is not None
+            else 0.40
+        )
+        rmax = (
+            float(self.spn_pet_max.value()) / 100.0
+            if self.spn_pet_max is not None
+            else 1.60
+        )
+        if rmax <= rmin:
+            rmax = rmin + 0.01
+        return rmin, rmax
+
+    def _pet_window(self, fallback_values=None):
+        """Return (lo, hi, ref): raw-intensity window bounds and the reference.
+
+        Uses ratio bounds anchored to the brain median when available, so the
+        same color always maps to the same metabolic ratio; otherwise falls back
+        to a fixed 2-98 percentile window (ref = None).
+        """
+        ref = self._get_pet_reference()
+        rmin, rmax = self._pet_ratio_bounds()
+        if ref is not None:
+            lo, hi = get_pet_ratio_window(ref, rmin, rmax)
+            return lo, hi, ref
+        lo, hi = get_pet_window(fallback_values, 2.0, 98.0)
+        return lo, hi, None
+
     def _overlay_pet_scalar_bar_on_pixmap(self, pm: QPixmap) -> QPixmap:
         if pm is None or pm.isNull():
             return pm
@@ -5325,10 +5444,19 @@ class ObliqueSlicePage(QObject):
         gamma = float(info["gamma"])
         lo = float(info["lo"])
         hi = float(info["hi"])
+        ref = info.get("ref", None)
+
+        if ref:
+            # Display the scale as a ratio to the brain median (1.0 = average).
+            title = f"PET / brain median (γ={gamma:.2f})"
+            lo = lo / float(ref)
+            hi = hi / float(ref)
+        else:
+            title = f"PET intensity a.u. (γ={gamma:.2f})"
 
         return self._draw_vertical_scalar_bar_on_pixmap(
             pm=pm,
-            title=f"PET (γ={gamma:.2f})",
+            title=title,
             lo=lo,
             hi=hi,
             cmap_name=self._pet_colormap_name,
@@ -5740,12 +5868,10 @@ class ObliqueSlicePage(QObject):
         if finite.size == 0:
             return None, None
 
-        pmin = float(self.spn_pet_min.value()) if self.spn_pet_min is not None else 15.0
-        pmax = float(self.spn_pet_max.value()) if self.spn_pet_max is not None else 75.0
         gamma = self._get_pet_gamma_value()
         gamma = max(0.1, float(gamma))
 
-        lo, hi = get_pet_window(finite, pmin, pmax)
+        lo, hi, _ = self._pet_window(finite)
         pet_norm = normalize_pet_slice(arr_pet, lo, hi, gamma=gamma)
         pet_rgb = pet_norm_to_colormap(pet_norm, self._pet_colormap_name)
 

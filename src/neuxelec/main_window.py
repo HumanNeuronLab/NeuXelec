@@ -820,6 +820,19 @@ class NeuxelecWindow(QWidget):
     def _restore_electrodes(self) -> None:
         self.reco_page._electrodes = self.state.electrodes
 
+        # Restore MNI electrode sets (generated or loaded) into the 3D view:
+        # repopulate the MNI list and re-render the MNI scene from the state that
+        # was just loaded from the project JSON, including their saved colours.
+        try:
+            vp = getattr(self, "view3d_page", None)
+            if vp is not None and getattr(self.state, "mni_electrode_sets", None):
+                if hasattr(vp, "_refresh_mni_tree_items"):
+                    vp._refresh_mni_tree_items()
+                if hasattr(vp, "_render_mni_scene"):
+                    vp._render_mni_scene(reset_camera=False)
+        except Exception:
+            pass
+
     def apply_app_mode(self, mode: str) -> None:
         mode = str(mode or "edit").lower().strip()
         self.state.app_mode = mode

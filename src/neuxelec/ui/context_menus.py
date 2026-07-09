@@ -147,6 +147,8 @@ def exec_3d_view_menu(
     can_add_marker: bool = False,
     marker_under_cursor: bool = False,
     has_hidden_markers: bool = False,
+    show_ictal_color: bool = False,
+    show_interictal_color: bool = False,
 ) -> str | None:
 
     menu = make_base_menu()
@@ -180,11 +182,18 @@ def exec_3d_view_menu(
     act_pet = None
     act_siscom = None
     act_ct = None
+    act_ictal = None
+    act_interictal = None
 
     if native_actions_enabled:
         act_pet = menu.addAction("Color PET")
         act_siscom = menu.addAction("Color SISCOM")
         act_ct = menu.addAction("Color CT")
+        # Exactly like Color PET: shown in native mode, hidden in MNI mode.
+        if show_ictal_color:
+            act_ictal = menu.addAction("Color Ictal SPECT")
+        if show_interictal_color:
+            act_interictal = menu.addAction("Color Inter-ictal SPECT")
 
     act_toggle_color_scale = None
     if show_color_scale_option:
@@ -268,6 +277,12 @@ def exec_3d_view_menu(
     if act_siscom is not None and action == act_siscom:
         return "siscom"
 
+    if act_ictal is not None and action == act_ictal:
+        return "ictal_color"
+
+    if act_interictal is not None and action == act_interictal:
+        return "interictal_color"
+
     if act_ct is not None and action == act_ct:
         return "ct"
 
@@ -309,11 +324,17 @@ def exec_oblique_slice_menu(
     *,
     color_scale_visible: bool = True,
     show_color_scale_option: bool = True,
+    show_ictal_color: bool = False,
+    show_interictal_color: bool = False,
 ) -> str | None:
     menu = make_base_menu()
 
     act_pet = menu.addAction("Color PET")
     act_siscom = menu.addAction("Color SISCOM")
+    act_ictal = menu.addAction("Color Ictal SPECT") if show_ictal_color else None
+    act_interictal = (
+        menu.addAction("Color Inter-ictal SPECT") if show_interictal_color else None
+    )
 
     act_toggle_color_scale = None
     if show_color_scale_option:
@@ -330,6 +351,10 @@ def exec_oblique_slice_menu(
         return "pet"
     if action == act_siscom:
         return "siscom"
+    if act_ictal is not None and action == act_ictal:
+        return "ictal_color"
+    if act_interictal is not None and action == act_interictal:
+        return "interictal_color"
 
     if act_toggle_color_scale is not None and action == act_toggle_color_scale:
         return "toggle_color_scale"

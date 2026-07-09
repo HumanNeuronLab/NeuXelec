@@ -635,6 +635,22 @@ class FilesPage:
     def _view3d(self):
         return getattr(self.state, "view3d_page", None)
 
+    def _notify_spect_validated(self) -> None:
+        """After a SPECT coregistration is validated, refresh the SPECT checkbox
+        availability in the 3D and oblique pages so the layer becomes usable."""
+        try:
+            vp = self._view3d()
+            if vp is not None and hasattr(vp, "_spect_update_checkbox_availability"):
+                vp._spect_update_checkbox_availability()
+        except Exception:
+            pass
+        try:
+            op = getattr(self.state, "oblique_page", None)
+            if op is not None and hasattr(op, "_oblique_spect_update_availability"):
+                op._oblique_spect_update_availability()
+        except Exception:
+            pass
+
     def _dialog_parent(self):
         """
         Return the main NeuXelec window as parent for all dialogs opened
@@ -3825,12 +3841,19 @@ class FilesPage:
                 self._enable_3d_checkbox("chk_3d_showPET", True)
 
             elif modality == "ictalSPECT":
-                self.state.ictal_spect_coreg_in_t1 = refined_img
+                # Keep the coregistered image; only replace it if the viewer
+                # returned a (manually refined) image, otherwise it would be
+                # wiped to None and the overlay could never be shown.
+                if refined_img is not None:
+                    self.state.ictal_spect_coreg_in_t1 = refined_img
                 self.state.ictal_spect_validated = True
+                self._notify_spect_validated()
 
             elif modality == "interictalSPECT":
-                self.state.interictal_spect_coreg_in_t1 = refined_img
+                if refined_img is not None:
+                    self.state.interictal_spect_coreg_in_t1 = refined_img
                 self.state.interictal_spect_validated = True
+                self._notify_spect_validated()
 
             self._update_buttons()
 

@@ -49,6 +49,7 @@ from .view3d_fullscreen import View3DFullscreenMixin
 from .view3d_markers import View3DMarkersMixin
 from .view3d_mni import View3DMniMixin
 from .view3d_slice_planes import View3DSlicePlanesMixin
+from .view3d_spect import View3DSpectMixin
 
 try:
     import pyvista as pv
@@ -61,6 +62,8 @@ except Exception:
 
 from neuxelec.utils.pet_visualization import (
     blend_pet_on_rgba,
+    compute_pet_reference,
+    get_pet_ratio_window,
     get_pet_window,
     normalize_pet_slice,
     pet_norm_to_colormap,
@@ -190,6 +193,7 @@ class View3DPage(
     View3DMarkersMixin,
     View3DMniMixin,
     View3DSlicePlanesMixin,
+    View3DSpectMixin,
     View3DCameraMixin,
 ):
     def __init__(self, ui_root: QObject, state: object):
@@ -1365,25 +1369,25 @@ class View3DPage(
 
         self.sld_pet_opacity = self.ui.findChild(QSlider, "sld_3d_petOpacity")
 
+        # PET min/max express a ratio to the brain median (slider value / 100),
+        # so 40 = 0.40x and 160 = 1.60x; allow up to 3.0x the reference.
         if self.sld_pet_min is not None:
             self.sld_pet_min.setMinimum(0)
-            self.sld_pet_min.setMaximum(100)
-            if self.sld_pet_min.value() < 0:
-                self.sld_pet_min.setValue(30)
+            self.sld_pet_min.setMaximum(300)
+            self.sld_pet_min.setValue(40)
 
         if self.sb_pet_min is not None:
             self.sb_pet_min.setMinimum(0)
-            self.sb_pet_min.setMaximum(100)
+            self.sb_pet_min.setMaximum(300)
 
         if self.sld_pet_max is not None:
             self.sld_pet_max.setMinimum(0)
-            self.sld_pet_max.setMaximum(100)
-            if self.sld_pet_max.value() <= 0:
-                self.sld_pet_max.setValue(98)
+            self.sld_pet_max.setMaximum(300)
+            self.sld_pet_max.setValue(160)
 
         if self.sb_pet_max is not None:
             self.sb_pet_max.setMinimum(0)
-            self.sb_pet_max.setMaximum(100)
+            self.sb_pet_max.setMaximum(300)
 
         if self.sld_pet_gamma is not None:
             self.sld_pet_gamma.setMinimum(10)
@@ -1549,6 +1553,12 @@ class View3DPage(
             self.sld_siscom_opacity.valueChanged.connect(
                 lambda _: self._update_visible_siscom_overlay_opacity_only()
             )
+
+        # Build and wire the ictal / inter-ictal SPECT overlay card (additive).
+        try:
+            self._spect_setup()
+        except Exception:
+            pass
 
         if self.chk_ct is not None:
             self.chk_ct.toggled.connect(lambda _: self._render_ct())
@@ -2870,8 +2880,9 @@ class View3DPage(
             pass
 
     def _get_pet_minmax_percentiles(self):
-        pmin = 30.0
-        pmax = 98.0
+        # Values are now ratio-to-brain-median x100 (40 = 0.40x, 160 = 1.60x).
+        pmin = 40.0
+        pmax = 160.0
 
         try:
             if self.sld_pet_min is not None:
@@ -2902,6 +2913,69 @@ class View3DPage(
         except Exception:
             pass
         return 1.0
+
+    def _get_pet_reference(self):
+        """Brain-median PET intensity used to normalize the color scale to a ratio.
+
+        Cached per PET image; restricted to the brain mask when available, else
+        computed over all positive PET voxels. Returns None if unavailable.
+        """
+        pet_img = self._pet_img
+        if pet_img is None:
+            return None
+        key = id(pet_img)
+        if getattr(self, "_pet_ref_key", None) == key:
+            return getattr(self, "_pet_ref_value", None)
+        ref = None
+        try:
+            pet_np = sitk.GetArrayFromImage(pet_img).astype(np.float32)
+            vals = None
+            mask_img = self._brainmask_img or getattr(
+                getattr(self, "state", None), "brainmask_sitk", None
+            )
+            if mask_img is not None:
+                try:
+                    m = sitk.Resample(
+                        mask_img,
+                        pet_img,
+                        sitk.Transform(3, sitk.sitkIdentity),
+                        sitk.sitkNearestNeighbor,
+                        0.0,
+                        sitk.sitkUInt8,
+                    )
+                    m_np = sitk.GetArrayFromImage(m)
+                    sel = (m_np > 0) & np.isfinite(pet_np) & (pet_np > 0)
+                    if np.any(sel):
+                        vals = pet_np[sel]
+                except Exception:
+                    vals = None
+            if vals is None:
+                vals = pet_np[np.isfinite(pet_np) & (pet_np > 0)]
+            ref = compute_pet_reference(vals)
+        except Exception:
+            ref = None
+        self._pet_ref_key = key
+        self._pet_ref_value = ref
+        return ref
+
+    def _pet_window(self, fallback_values=None):
+        """Return (lo, hi, ref): raw-intensity window bounds and the reference.
+
+        The min/max sliders express a ratio to the brain median (value / 100), so
+        the window is anchored (same colour = same metabolic ratio) when a
+        reference is available; otherwise falls back to a 2-98 percentile window.
+        """
+        ref = self._get_pet_reference()
+        pmin, pmax = self._get_pet_minmax_percentiles()
+        rmin = float(pmin) / 100.0
+        rmax = float(pmax) / 100.0
+        if rmax <= rmin:
+            rmax = rmin + 0.01
+        if ref is not None:
+            lo, hi = get_pet_ratio_window(ref, rmin, rmax)
+            return lo, hi, ref
+        lo, hi = get_pet_window(fallback_values, 2.0, 98.0)
+        return lo, hi, None
 
     def _any_slice_plane_visible(self) -> bool:
         return any(
@@ -3107,6 +3181,13 @@ class View3DPage(
         if siscom:
             self._slice_siscom_rgba_cache = None
             self._slice_siscom_cache_ready = False
+
+        # SPECT overlay caches share the same reference grid / brain mask, so
+        # invalidate them alongside the others (no-op until the card is set up).
+        try:
+            self._spect_invalidate_caches()
+        except Exception:
+            pass
 
     def _same_sitk_geometry(self, a: sitk.Image | None, b: sitk.Image | None) -> bool:
         if a is None or b is None:
@@ -3445,8 +3526,7 @@ class View3DPage(
         if pet_vals.size == 0:
             return None
 
-        pmin, pmax = self._get_pet_minmax_percentiles()
-        lo, hi = get_pet_window(pet_vals, pmin, pmax)
+        lo, hi, _ = self._pet_window(pet_vals)
         gamma = self._get_pet_gamma_value()
 
         pet_norm = normalize_pet_slice(
@@ -5451,6 +5531,11 @@ class View3DPage(
                 self._update_plane_slider_enabled_states()
 
                 self._update_brain_opacity_slider_states()
+                # MNI mode: disable (and uncheck) the SPECT checkboxes too.
+                try:
+                    self._spect_update_checkbox_availability()
+                except Exception:
+                    pass
                 return
         except Exception:
             pass
@@ -5608,6 +5693,13 @@ class View3DPage(
                 self.chk_pial.setEnabled(bool(pial_loaded))
                 if not pial_loaded:
                     self._set_checked(self.chk_pial, False)
+        except Exception:
+            pass
+
+        # Gate the SPECT checkboxes: disabled (and unchecked) in MNI mode, and in
+        # native mode only enabled once the coregistration has been validated.
+        try:
+            self._spect_update_checkbox_availability()
         except Exception:
             pass
 
@@ -7155,6 +7247,8 @@ class View3DPage(
                 can_add_marker=bool(clicked_slice_ras is not None),
                 marker_under_cursor=bool(clicked_marker_id is not None),
                 has_hidden_markers=bool(has_hidden_markers),
+                show_ictal_color=True,
+                show_interictal_color=True,
             )
             if choice == "marker_list":
                 self._open_marker_list_dialog()
@@ -7185,6 +7279,12 @@ class View3DPage(
 
             elif choice == "siscom":
                 self._choose_siscom_colormap()
+
+            elif choice == "ictal_color":
+                self._choose_spect_colormap("ictal")
+
+            elif choice == "interictal_color":
+                self._choose_spect_colormap("interictal")
 
             elif choice == "ct":
                 self._choose_modality_color("ct")
@@ -8216,9 +8316,8 @@ class View3DPage(
                 self._render()
                 return
 
-            pmin, pmax = self._get_pet_minmax_percentiles()
             gamma = self._get_pet_gamma_value()
-            lo, hi = get_pet_window(vals, pmin, pmax)
+            lo, hi, ref = self._pet_window(vals)
 
             layout = self._scalar_bar_layout()
             pet_layout = layout["pet"]
@@ -8229,6 +8328,17 @@ class View3DPage(
 
             if hi <= lo:
                 hi = lo + 1.0
+
+            # The legend shows a ratio to the brain median (1.0 = average) when a
+            # reference is available; the actual overlay still uses lo/hi (raw).
+            if ref:
+                disp_lo = lo / float(ref)
+                disp_hi = hi / float(ref)
+                pet_title = f"PET / brain median (γ={gamma:.2f})"
+            else:
+                disp_lo = lo
+                disp_hi = hi
+                pet_title = f"PET a.u. (γ={gamma:.2f})"
 
             # check whether the visible scalar bar still exists
             sb = None
@@ -8244,17 +8354,17 @@ class View3DPage(
                 self._remove_pet_scalar_bar()
 
                 dummy = pv.PolyData(np.array([[0.0, 0.0, 0.0]], dtype=np.float32))
-                dummy["PET"] = np.array([lo], dtype=np.float32)
+                dummy["PET"] = np.array([disp_lo], dtype=np.float32)
 
                 self._pet_scalar_bar_actor = self.plotter.add_mesh(
                     dummy,
                     scalars="PET",
                     cmap=self._pet_colormap_name,
-                    clim=[float(lo), float(hi)],
+                    clim=[float(disp_lo), float(disp_hi)],
                     opacity=0.0,
                     show_scalar_bar=True,
                     scalar_bar_args={
-                        "title": f"PET (γ={gamma:.2f})",
+                        "title": pet_title,
                         "vertical": True,
                         "position_x": pet_layout["position_x"],
                         "position_y": pet_layout["position_y"],
@@ -8272,12 +8382,12 @@ class View3DPage(
                 try:
                     mapper = self._pet_scalar_bar_actor.GetMapper()
                     if mapper is not None:
-                        mapper.SetScalarRange(float(lo), float(hi))
+                        mapper.SetScalarRange(float(disp_lo), float(disp_hi))
                 except Exception:
                     pass
 
                 try:
-                    sb.SetTitle(f"PET (γ={gamma:.2f})")
+                    sb.SetTitle(pet_title)
                 except Exception:
                     pass
 
@@ -8767,8 +8877,14 @@ class View3DPage(
 
             try:
                 # Keep T1 planes exactly on the anatomical slice.
-                # Only PET/SISCOM overlays should be offset.
-                if actor_name.endswith("_pet") or actor_name.endswith("_siscom"):
+                # Only scalar overlays (PET/SISCOM/SPECT) should be offset to
+                # avoid z-fighting with the anatomical plane.
+                if (
+                    actor_name.endswith("_pet")
+                    or actor_name.endswith("_siscom")
+                    or actor_name.endswith("_ictal")
+                    or actor_name.endswith("_interictal")
+                ):
                     if actor_name.startswith("coronal"):
                         n = self._get_effective_plane_normal("coronal", geom)
                     elif actor_name.startswith("axial"):
