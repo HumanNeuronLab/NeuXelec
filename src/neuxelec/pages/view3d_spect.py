@@ -186,6 +186,13 @@ class View3DSpectMixin:
                 return img
         return None
 
+    def _any_spect_on(self) -> bool:
+        """True when at least one SPECT layer is currently displayed (used to show
+        the Remove/Add color scale option even when only SPECT is on)."""
+        if not getattr(self, "_spect_ready", False):
+            return False
+        return any(self._spect_is_on(ly) for ly in SPECT_LAYERS)
+
     def _spect_is_on(self, layer: str) -> bool:
         w = self._spect_widgets.get(layer, {})
         chk = w.get("chk")
@@ -552,6 +559,12 @@ class View3DSpectMixin:
                     chk.blockSignals(False)
                 except Exception:
                     pass
+        # Availability may have unchecked layers (e.g. entering MNI mode); keep
+        # the SPECT colour scales in sync so they disappear like the others.
+        try:
+            self._update_spect_scalar_bars()
+        except Exception:
+            pass
 
     def _update_spect_controls_enabled(self, layer: str) -> None:
         """Grey out a layer's sliders/spin boxes when its checkbox is unchecked,

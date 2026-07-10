@@ -142,6 +142,8 @@ def exec_3d_view_menu(
     show_mni_parcellation_table_option: bool = False,
     show_keep_electrodes_through_slices_option: bool = False,
     keep_electrodes_through_slices: bool = False,
+    show_siscom_crop_option: bool = False,
+    siscom_dont_crop: bool = False,
     show_slice_plane_frames_option: bool = False,
     slice_plane_frames_visible: bool = True,
     can_add_marker: bool = False,
@@ -233,6 +235,14 @@ def exec_3d_view_menu(
         act_keep_electrodes_through_slices.setCheckable(True)
         act_keep_electrodes_through_slices.setChecked(bool(keep_electrodes_through_slices))
 
+    act_siscom_dont_crop = None
+    if show_siscom_crop_option:
+        if not show_keep_electrodes_through_slices_option:
+            menu.addSeparator()
+        act_siscom_dont_crop = menu.addAction("Don't crop SISCOM blob through slices")
+        act_siscom_dont_crop.setCheckable(True)
+        act_siscom_dont_crop.setChecked(bool(siscom_dont_crop))
+
     act_toggle_lh = None
     act_toggle_rh = None
 
@@ -306,6 +316,9 @@ def exec_3d_view_menu(
         and action == act_keep_electrodes_through_slices
     ):
         return "toggle_keep_electrodes_through_slices"
+
+    if act_siscom_dont_crop is not None and action == act_siscom_dont_crop:
+        return "toggle_siscom_dont_crop"
 
     if act_toggle_lh is not None and action == act_toggle_lh:
         return "toggle_lh"

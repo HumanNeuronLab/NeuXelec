@@ -543,6 +543,9 @@ class View3DPage(
         # Electrodes remain visible with the current display mode:
         # contacts only or contacts + shaft.
         self._keep_electrodes_visible_through_slices = False
+        # When True, the SISCOM 3D blob stays visible (uncropped) even when
+        # anatomical slice planes are active (right-click "Don't crop SISCOM blob").
+        self._keep_siscom_blob_through_slices = False
 
     def _get_local_electrode_visible(self, elec_id: int) -> bool:
         return bool(self._page_electrode_visible.get(int(elec_id), True))
@@ -3103,6 +3106,38 @@ class View3DPage(
             except Exception:
                 pass
 
+    def _show_siscom_crop_option(self) -> bool:
+        """Show the SISCOM crop toggle only when SISCOM is displayed and at least
+        one slice plane is visible (otherwise cropping is irrelevant)."""
+        try:
+            siscom_on = bool(
+                self.chk_siscom is not None
+                and self.chk_siscom.isChecked()
+                and self._siscom_img is not None
+            )
+            return bool(siscom_on and self._any_slice_plane_visible())
+        except Exception:
+            return False
+
+    def _toggle_siscom_blob_through_slices(self) -> None:
+        """Toggle whether the SISCOM 3D blob stays whole (uncropped) through the
+        anatomical slice planes, mirroring the keep-electrodes behaviour."""
+        self._keep_siscom_blob_through_slices = not bool(
+            getattr(self, "_keep_siscom_blob_through_slices", False)
+        )
+        try:
+            self._render_siscom()
+        except Exception:
+            pass
+        try:
+            self._apply_actor_clipping()
+        except Exception:
+            pass
+        try:
+            self._render()
+        except Exception:
+            pass
+
     def _toggle_keep_electrodes_visible_through_slices(self) -> None:
         """
         Toggle whether coronal/axial/sagittal slices are allowed to hide electrodes.
@@ -3870,7 +3905,9 @@ class View3DPage(
             self._render()
             return
 
-        if self._any_slice_plane_visible():
+        if self._any_slice_plane_visible() and not bool(
+            getattr(self, "_keep_siscom_blob_through_slices", False)
+        ):
             self._remove_actor("siscom")
             self._apply_actor_clipping()
             self._render()
@@ -6437,9 +6474,20 @@ class View3DPage(
             self._brain_actor,
             self._ct_actor,
             self._pet_actor,
-            self._siscom_actor,
             self._mni_atlas_actor,
         ]
+
+        # SISCOM blob: clipped normally, unless "don't crop" mode keeps it whole.
+        if bool(getattr(self, "_keep_siscom_blob_through_slices", False)):
+            try:
+                if self._siscom_actor is not None:
+                    m = self._siscom_actor.GetMapper()
+                    if m is not None:
+                        m.RemoveAllClippingPlanes()
+            except Exception:
+                pass
+        else:
+            actors.append(self._siscom_actor)
 
         keep_electrodes = bool(getattr(self, "_keep_electrodes_visible_through_slices", False))
 
@@ -7002,6 +7050,10 @@ class View3DPage(
                 self._remove_siscom_scalar_bar()
             except Exception:
                 pass
+            try:
+                self._update_spect_scalar_bars()
+            except Exception:
+                pass
             self._render()
             return
 
@@ -7011,6 +7063,10 @@ class View3DPage(
             pass
         try:
             self._update_siscom_scalar_bar()
+        except Exception:
+            pass
+        try:
+            self._update_spect_scalar_bars()
         except Exception:
             pass
         self._render()
@@ -7232,7 +7288,7 @@ class View3DPage(
                 show_rh=getattr(self, "_show_rh_pial", True),
                 color_scale_visible=bool(getattr(self, "_show_color_scales", True)),
                 show_pial_options=bool(pial_checked),
-                show_color_scale_option=bool(pet_or_siscom_checked),
+                show_color_scale_option=bool(pet_or_siscom_checked or self._any_spect_on()),
                 show_mni_load_option=bool(mni_checked),
                 show_mni_t1_option=False,
                 mni_t1_visible=bool(getattr(self, "_mni_t1_slices_visible", False)),
@@ -7241,6 +7297,10 @@ class View3DPage(
                 show_keep_electrodes_through_slices_option=self._show_keep_electrodes_through_slices_option(),
                 keep_electrodes_through_slices=bool(
                     getattr(self, "_keep_electrodes_visible_through_slices", False)
+                ),
+                show_siscom_crop_option=self._show_siscom_crop_option(),
+                siscom_dont_crop=bool(
+                    getattr(self, "_keep_siscom_blob_through_slices", False)
                 ),
                 show_slice_plane_frames_option=self._slice_plane_frames_option_available(),
                 slice_plane_frames_visible=bool(getattr(self, "_slice_plane_frames_visible", True)),
@@ -7309,6 +7369,9 @@ class View3DPage(
 
             elif choice == "toggle_keep_electrodes_through_slices":
                 self._toggle_keep_electrodes_visible_through_slices()
+
+            elif choice == "toggle_siscom_dont_crop":
+                self._toggle_siscom_blob_through_slices()
 
         except Exception as e:
             print("[3D context menu] failed:", e)
