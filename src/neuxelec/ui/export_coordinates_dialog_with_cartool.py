@@ -893,8 +893,9 @@ class ExportCoordinatesDialog(QDialog):
         # ---------------------------------------------------------
         # Coordinates
         # ---------------------------------------------------------
-        grp_coords = QGroupBox("Coordinates to include")
-        grp_coords.setObjectName("optionGroup")
+        self.grp_coords = QGroupBox("Coordinates to include")
+        self.grp_coords.setObjectName("optionGroup")
+        grp_coords = self.grp_coords
 
         lay_coords = QVBoxLayout(grp_coords)
         lay_coords.setContentsMargins(14, 20, 14, 12)
@@ -1005,6 +1006,16 @@ class ExportCoordinatesDialog(QDialog):
             child.setEnabled(False)
 
         self.chk_bids.toggled.connect(self._toggle_bids_section)
+
+        # The LPS/RAS/Voxel checkboxes only apply to the tabular formats
+        # (TXT/CSV/TSV/JSON). Cartool ELS uses its own fixed voxel conversion
+        # and BIDS has its own convention radios, so disable the coordinate
+        # group when no tabular format is selected (e.g. only ELS checked).
+        for chk in (self.chk_txt, self.chk_csv, self.chk_tsv, self.chk_json):
+            chk.toggled.connect(
+                lambda _=None: self._update_coordinate_group_enabled()
+            )
+        self._update_coordinate_group_enabled()
 
         content.addWidget(self.grp_bids)
 
@@ -2152,6 +2163,34 @@ class ExportCoordinatesDialog(QDialog):
             keys.update(r.keys())
 
         return [k for k in preferred if k in keys] + sorted(k for k in keys if k not in preferred)
+
+    def _update_coordinate_group_enabled(self):
+        """
+        Enable the LPS/RAS/Voxel coordinate selection only when a tabular
+        format (TXT/CSV/TSV/JSON) is selected.
+
+        Cartool ELS ignores these checkboxes (it always writes continuous
+        voxel indices in the native T1), and BIDS uses its own convention
+        radios, so the coordinate group is confusing when only ELS/BIDS is
+        selected.
+        """
+        try:
+            tabular_on = any(
+                chk.isChecked()
+                for chk in (
+                    self.chk_txt,
+                    self.chk_csv,
+                    self.chk_tsv,
+                    self.chk_json,
+                )
+            )
+        except Exception:
+            tabular_on = True
+
+        try:
+            self.grp_coords.setEnabled(bool(tabular_on))
+        except Exception:
+            pass
 
     def _toggle_bids_section(self, checked: bool):
         for child in self.grp_bids.findChildren(QRadioButton):
