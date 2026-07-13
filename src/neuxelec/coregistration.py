@@ -378,14 +378,37 @@ def ants_generate_brainmask_t1(
     ]
     _run_cmd(apply_cmd, cwd=str(outd))
 
-    # Binarize + cast for safety
+    # Binarize + clean up the mask so it fully covers the cortex.
+    #
+    # The template-based mask can slightly under-segment the cortical rim
+    # (a few mm) on some subjects, which would clip the cortex when the mask
+    # is applied to functional overlays (PET/SPECT). To guarantee full
+    # cortical coverage we fill holes, close small sulcal gaps, and apply a
+    # safety dilation. A slightly generous mask is the right trade-off here:
+    # a thin rim of non-brain around the edge is harmless for masking, while
+    # losing cortex is not.
     try:
         m = sitk.ReadImage(out_mask)
         m = sitk.Cast(m > 0.5, sitk.sitkUInt8)
+
+        spacing = m.GetSpacing()
+
+        def _radius_mm(mm: float) -> list[int]:
+            return [max(1, int(round(mm / float(s)))) for s in spacing]
+
+        # Fill interior holes (ventricles, sulci voids)
+        m = sitk.BinaryFillhole(m)
+        # Close small gaps at the cortical surface (~3 mm)
+        m = sitk.BinaryMorphologicalClosing(m, _radius_mm(3.0), sitk.sitkBall)
+        m = sitk.BinaryFillhole(m)
+        # Safety dilation to fully include the cortical rim (~5 mm)
+        m = sitk.BinaryDilate(m, _radius_mm(5.0), sitk.sitkBall)
+
+        m = sitk.Cast(m > 0, sitk.sitkUInt8)
         sitk.WriteImage(m, out_mask)
     except Exception:
         logger.warning(
-            "Failed to binarize/cast brain mask %s; leaving ANTs output as-is",
+            "Failed to post-process brain mask %s; leaving ANTs output as-is",
             out_mask,
             exc_info=True,
         )
