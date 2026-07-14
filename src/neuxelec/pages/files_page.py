@@ -1510,6 +1510,40 @@ class FilesPage:
             except Exception:
                 pass
 
+    @staticmethod
+    def _physical_overlap_fraction(img: sitk.Image, t1: sitk.Image) -> float:
+        """
+        Intersection-over-union of the two images' physical (world) bounding
+        boxes, computed from their eight voxel corners mapped to world space.
+
+        A value near 1 means the images occupy the same physical region (so an
+        overlay sampled by physical position will be placed correctly, even if
+        the raw voxel grids differ, e.g. a FreeSurfer/FastSurfer conformed
+        parcellation vs an obliquely-acquired T1). A low value means the images
+        live in different world spaces and the overlay would be misplaced.
+        """
+        def _world_aabb(im: sitk.Image):
+            sx, sy, sz = im.GetSize()
+            corners = []
+            for i in (0, sx - 1):
+                for j in (0, sy - 1):
+                    for k in (0, sz - 1):
+                        corners.append(im.TransformIndexToPhysicalPoint((i, j, k)))
+            arr = np.asarray(corners, dtype=float)
+            return arr.min(axis=0), arr.max(axis=0)
+
+        amin, amax = _world_aabb(img)
+        bmin, bmax = _world_aabb(t1)
+
+        inter = np.maximum(0.0, np.minimum(amax, bmax) - np.maximum(amin, bmin))
+        inter_vol = float(np.prod(inter))
+        vol_a = float(np.prod(amax - amin))
+        vol_b = float(np.prod(bmax - bmin))
+        union = vol_a + vol_b - inter_vol
+        if union <= 0:
+            return 0.0
+        return inter_vol / union
+
     def _warn_geometry_mismatch_against_t1(self, img: sitk.Image, label: str) -> None:
         t1 = getattr(self.state, "t1_sitk", None)
         if t1 is None:
@@ -1524,14 +1558,33 @@ class FilesPage:
                 mismatch.append(f"Origin: {label} {img.GetOrigin()} vs T1 {t1.GetOrigin()}")
             if tuple(np.round(img.GetDirection(), 6)) != tuple(np.round(t1.GetDirection(), 6)):
                 mismatch.append(f"Direction differs ({label} vs T1)")
-            if mismatch:
-                NeuXelecMessageDialog.warning(
-                    None,
-                    f"{label} geometry mismatch",
-                    f"Warning: {label} does not match the T1 geometry.\n"
-                    "Overlay may be incorrect unless it is already in T1 space.\n\n"
-                    + "\n".join(mismatch),
-                )
+
+            if not mismatch:
+                return
+
+            # The raw voxel grids differ, but that alone does not mean the
+            # overlay is wrong: overlays are sampled by physical position, so
+            # what matters is whether the two images share the same world
+            # space. FreeSurfer/FastSurfer parcellations use a conformed grid
+            # (256^3, axis-aligned) that never matches an obliquely-acquired
+            # T1, yet they are correctly aligned in world coordinates. Only
+            # warn when the physical bounding boxes genuinely disagree.
+            try:
+                overlap = self._physical_overlap_fraction(img, t1)
+            except Exception:
+                overlap = 0.0
+
+            if overlap >= 0.80:
+                return
+
+            NeuXelecMessageDialog.warning(
+                None,
+                f"{label} geometry mismatch",
+                f"Warning: {label} does not match the T1 geometry.\n"
+                "Overlay may be incorrect unless it is already in T1 space.\n\n"
+                + "\n".join(mismatch)
+                + f"\n\nPhysical-space overlap with T1: {overlap * 100:.0f}%",
+            )
         except Exception:
             pass
 

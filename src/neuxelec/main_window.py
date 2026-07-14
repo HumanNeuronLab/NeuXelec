@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import SimpleITK as sitk
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -22,6 +22,7 @@ from .pages.reconstruction_page import ReconstructionPage
 from .pages.view3d import View3DPage
 from .project_io import (
     apply_project_dict_to_state,
+    build_project_dict_from_state,
     get_unsaved_validated_modalities,
     save_project_json,
 )
@@ -120,6 +121,9 @@ class NeuxelecWindow(QWidget):
         # have been created. This avoids interfering with VTK/PyVista startup.
         self._setup_custom_window_frame()
 
+        # "Save project" force-save button under the Patient ID card.
+        self._setup_save_project_button()
+
     def _make_padded_logo_pixmap(
         self,
         logo: QPixmap,
@@ -210,6 +214,114 @@ class NeuxelecWindow(QWidget):
                 drag_widget.installEventFilter(self)
 
         self._sync_maximize_button()
+
+    # ------------------------------------------------------------------
+    # "Save project" force-save button
+    # ------------------------------------------------------------------
+    def _setup_save_project_button(self) -> None:
+        """Wire the force-save button and keep its rose 'saved' outline in sync.
+
+        The rose outline stays lit while the in-memory project matches the
+        file on disk (whether it was just saved via this button or by any
+        automatic save), and clears as soon as the project is modified.
+        """
+        btn = self.ui.findChild(QPushButton, "btn_menu_saveProject")
+        self._save_project_btn = btn
+        self._project_clean_signature = None
+        self._project_last_mtime = None
+        if btn is None:
+            return
+
+        btn.clicked.connect(self._on_save_project_clicked)
+        self._set_save_project_saved(False)
+
+        # Poll so any save (button or automatic) lights the outline, and any
+        # modification clears it, without hooking every mutation site.
+        self._save_state_timer = QTimer(self)
+        self._save_state_timer.setInterval(800)
+        self._save_state_timer.timeout.connect(self._refresh_save_project_state)
+        self._save_state_timer.start()
+
+    def _project_signature(self):
+        """Cheap hashable signature of the serialisable project state."""
+        try:
+            data = build_project_dict_from_state(self.state)
+            if isinstance(data, dict):
+                data = {k: v for k, v in data.items() if k != "last_saved"}
+            import json
+
+            return hash(json.dumps(data, sort_keys=True, default=str, ensure_ascii=False))
+        except Exception:
+            return None
+
+    def _set_save_project_saved(self, saved: bool) -> None:
+        btn = getattr(self, "_save_project_btn", None)
+        if btn is None:
+            return
+        if bool(btn.property("saved")) == bool(saved):
+            return
+        btn.setProperty("saved", bool(saved))
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
+        btn.update()
+
+    def _refresh_save_project_state(self) -> None:
+        import os
+
+        path = getattr(self.state, "project_path", None)
+        if not path:
+            self._set_save_project_saved(False)
+            return
+        try:
+            mtime = os.path.getmtime(path) if os.path.exists(path) else None
+        except Exception:
+            mtime = None
+
+        # A fresh write (this button or any automatic save) bumps mtime: the
+        # file then holds the current in-memory state, so record it as clean.
+        if mtime is not None and mtime != self._project_last_mtime:
+            self._project_last_mtime = mtime
+            self._project_clean_signature = self._project_signature()
+
+        clean = (
+            mtime is not None
+            and self._project_clean_signature is not None
+            and self._project_signature() == self._project_clean_signature
+        )
+        self._set_save_project_saved(clean)
+
+    def _on_save_project_clicked(self) -> None:
+        path = getattr(self.state, "project_path", None)
+        if not path:
+            from PySide6.QtWidgets import QFileDialog
+
+            pid = str(getattr(self.state, "patient_id", "") or "project").strip() or "project"
+            fn, _ = QFileDialog.getSaveFileName(
+                self, "Save project", f"{pid}.json", "NeuXelec project (*.json)"
+            )
+            if not fn:
+                return
+            self.state.project_path = fn
+            path = fn
+
+        try:
+            save_project_json(self.state, path)
+        except Exception as e:
+            NeuXelecMessageDialog.critical(
+                self,
+                "Project save failed",
+                f"The project could not be saved.\n\nDetails:\n{e}",
+            )
+            return
+
+        import os
+
+        try:
+            self._project_last_mtime = os.path.getmtime(path)
+        except Exception:
+            self._project_last_mtime = None
+        self._project_clean_signature = self._project_signature()
+        self._set_save_project_saved(True)
 
     def _toggle_maximized(self) -> None:
         if self.isMaximized():

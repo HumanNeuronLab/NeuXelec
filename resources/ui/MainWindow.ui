@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='utf-8'?>
+<?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
  <class>Form</class>
  <widget class="QWidget" name="Form">
@@ -21,7 +21,7 @@
 QWidget#Form {
     background-color: #06070D;
     color: #F2F2F5;
-    font-family: "Segoe UI", "Arial";
+    font-family: &quot;Segoe UI&quot;, &quot;Arial&quot;;
     font-size: 12px;
 }
 
@@ -479,41 +479,41 @@ QScrollArea#filesWorkflowScrollArea QScrollBar::add-line:vertical,
 QScrollArea#filesWorkflowScrollArea QScrollBar::sub-line:vertical {
     height: 0px; background: transparent; border: none;
 }
-QLabel[uiRole="pageTitle"] {
+QLabel[uiRole=&quot;pageTitle&quot;] {
     color: #F5E6E2;
     font-size: 22px;
     font-weight: 600;
     letter-spacing: 1.5px;
 }
-QLabel[uiRole="pageSubtitle"] {
+QLabel[uiRole=&quot;pageSubtitle&quot;] {
     color: #8D919F;
     font-size: 12px;
     padding-bottom: 6px;
 }
-QFrame[workflowCard="true"] {
+QFrame[workflowCard=&quot;true&quot;] {
     background-color: #0D0F17;
     border: 1px solid #20232F;
     border-radius: 16px;
 }
-QLabel[uiRole="sectionTitle"] {
+QLabel[uiRole=&quot;sectionTitle&quot;] {
     color: #F4D9D0;
     font-size: 16px;
     font-weight: 600;
     letter-spacing: 1px;
 }
-QLabel[uiRole="sectionSubtitle"] {
+QLabel[uiRole=&quot;sectionSubtitle&quot;] {
     color: #7F8494;
     font-size: 11px;
     padding-bottom: 4px;
 }
-QLabel[uiRole="microLabel"] {
+QLabel[uiRole=&quot;microLabel&quot;] {
     color: #717786;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 1px;
 }
-QFrame[fileCell="true"] { background: transparent; border: none; }
-QPushButton[uiRole="loadFile"] {
+QFrame[fileCell=&quot;true&quot;] { background: transparent; border: none; }
+QPushButton[uiRole=&quot;loadFile&quot;] {
     color: #E7E8EE;
     background-color: #12141C;
     border: 1px solid #343844;
@@ -523,65 +523,65 @@ QPushButton[uiRole="loadFile"] {
     font-size: 12px;
     font-weight: 600;
 }
-QPushButton[uiRole="loadFile"]:hover {
+QPushButton[uiRole=&quot;loadFile&quot;]:hover {
     background-color: #151720;
     border: 1px solid #FF487D;
 }
-QPushButton[uiRole="loadFile"][loaded="true"] {
+QPushButton[uiRole=&quot;loadFile&quot;][loaded=&quot;true&quot;] {
     color: white;
     border: none;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8000, stop:1 #FF00A0);
 }
-QPushButton[uiRole="loadFile"][loaded="true"]:hover {
+QPushButton[uiRole=&quot;loadFile&quot;][loaded=&quot;true&quot;]:hover {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF922B, stop:1 #FF33B8);
 }
-QLineEdit[uiRole="pathLabel"] {
+QLineEdit[uiRole=&quot;pathLabel&quot;] {
     color: #858A98;
     background-color: transparent;
     border: none;
     padding: 0px 4px;
     font-size: 10px;
 }
-QLineEdit[uiRole="pathLabel"][hasFile="true"] { color: #CDD0DA; }
+QLineEdit[uiRole=&quot;pathLabel&quot;][hasFile=&quot;true&quot;] { color: #CDD0DA; }
 QFrame#coregReferenceBox {
     background-color: #11131B;
     border: 1px solid #252936;
     border-radius: 10px;
 }
-QCheckBox[uiRole="referenceCheck"] {
+QCheckBox[uiRole=&quot;referenceCheck&quot;] {
     color: #707583;
     font-size: 12px;
     font-weight: 600;
     spacing: 8px;
 }
-QCheckBox[uiRole="referenceCheck"][referenceLoaded="true"] {
+QCheckBox[uiRole=&quot;referenceCheck&quot;][referenceLoaded=&quot;true&quot;] {
     color: #F5F5F8;
     border: none;
     border-radius: 8px;
     padding: 5px 10px;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8000, stop:1 #FF00A0);
 }
-QCheckBox[uiRole="referenceCheck"][referenceLoaded="true"]::indicator {
+QCheckBox[uiRole=&quot;referenceCheck&quot;][referenceLoaded=&quot;true&quot;]::indicator {
     background-color: rgba(255,255,255,42);
     border: 1px solid rgba(255,255,255,130);
 }
-QCheckBox[uiRole="referenceCheck"][referenceLoaded="true"]::indicator:checked {
+QCheckBox[uiRole=&quot;referenceCheck&quot;][referenceLoaded=&quot;true&quot;]::indicator:checked {
     background-color: white;
     border: 1px solid white;
 }
-QCheckBox[uiRole="modalityCheck"] {
+QCheckBox[uiRole=&quot;modalityCheck&quot;] {
     color: #C8CBD5;
     font-size: 12px;
     font-weight: 500;
     spacing: 8px;
     padding: 5px 7px;
 }
-QCheckBox[uiRole="modalityCheck"]:disabled { color: #555A68; }
-QCheckBox[uiRole="modalityCheck"]::indicator:checked {
+QCheckBox[uiRole=&quot;modalityCheck&quot;]:disabled { color: #555A68; }
+QCheckBox[uiRole=&quot;modalityCheck&quot;]::indicator:checked {
     border: 1px solid #FF487D;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8000, stop:1 #FF00A0);
 }
-QPushButton[uiRole="workflowAction"] {
+QPushButton[uiRole=&quot;workflowAction&quot;] {
     color: #E7E8EE;
     background-color: #12141C;
     border: 1px solid #343844;
@@ -590,11 +590,11 @@ QPushButton[uiRole="workflowAction"] {
     font-size: 12px;
     font-weight: 600;
 }
-QPushButton[uiRole="workflowAction"]:hover:enabled {
+QPushButton[uiRole=&quot;workflowAction&quot;]:hover:enabled {
     border: 1px solid #FF487D;
     background-color: #151720;
 }
-QPushButton[uiRole="reviewAction"] {
+QPushButton[uiRole=&quot;reviewAction&quot;] {
     color: #707583;
     background-color: #10121A;
     border: 1px solid #252936;
@@ -603,15 +603,15 @@ QPushButton[uiRole="reviewAction"] {
     font-size: 12px;
     font-weight: 600;
 }
-QPushButton[uiRole="reviewAction"][completed="true"] {
+QPushButton[uiRole=&quot;reviewAction&quot;][completed=&quot;true&quot;] {
     color: white;
     border: none;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8000, stop:1 #FF00A0);
 }
-QPushButton[uiRole="reviewAction"][completed="true"]:hover {
+QPushButton[uiRole=&quot;reviewAction&quot;][completed=&quot;true&quot;]:hover {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF922B, stop:1 #FF33B8);
 }
-QPushButton[uiRole="saveAction"] {
+QPushButton[uiRole=&quot;saveAction&quot;] {
     color: #636977;
     background-color: #10121A;
     border: 1px solid #252936;
@@ -620,13 +620,13 @@ QPushButton[uiRole="saveAction"] {
     font-size: 12px;
     font-weight: 600;
 }
-QPushButton[uiRole="saveAction"]:enabled {
+QPushButton[uiRole=&quot;saveAction&quot;]:enabled {
     color: #F1F2F6;
     background-color: #12141C;
     border: 1px solid #FF487D;
 }
-QPushButton[uiRole="saveAction"]:enabled:hover { background-color: #1A1620; }
-QProgressBar[uiRole="workflowProgress"] {
+QPushButton[uiRole=&quot;saveAction&quot;]:enabled:hover { background-color: #1A1620; }
+QProgressBar[uiRole=&quot;workflowProgress&quot;] {
     color: #F2F2F5;
     background-color: #161923;
     border: 1px solid #252936;
@@ -636,12 +636,12 @@ QProgressBar[uiRole="workflowProgress"] {
     font-size: 10px;
     font-weight: 600;
 }
-QProgressBar[uiRole="workflowProgress"]::chunk {
+QProgressBar[uiRole=&quot;workflowProgress&quot;]::chunk {
     border-radius: 8px;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8000, stop:1 #FF00A0);
 }
 
-QPushButton[uiRole="saveAllAction"] {
+QPushButton[uiRole=&quot;saveAllAction&quot;] {
     color: #817B86;
     background-color: #15131B;
     border: 1px solid #583047;
@@ -651,15 +651,15 @@ QPushButton[uiRole="saveAllAction"] {
     font-weight: 700;
     letter-spacing: 0.5px;
 }
-QPushButton[uiRole="saveAllAction"]:enabled {
+QPushButton[uiRole=&quot;saveAllAction&quot;]:enabled {
     color: white;
     border: none;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF8000, stop:1 #FF00A0);
 }
-QPushButton[uiRole="saveAllAction"]:enabled:hover {
+QPushButton[uiRole=&quot;saveAllAction&quot;]:enabled:hover {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF922B, stop:1 #FF33B8);
 }
-QPushButton[uiRole="saveAllAction"]:enabled:pressed {
+QPushButton[uiRole=&quot;saveAllAction&quot;]:enabled:pressed {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #E56F00, stop:1 #E0008C);
 }
 
@@ -1045,7 +1045,7 @@ QWidget#pageObliqueSlices QFrame#cardObliqueSISCOM QLabel#lblObliqueSISCOMCard {
 
 /* ---------------------------------------------------------------
    Clean spin boxes and SVG buttons - no protruding native arrows
-   If your real folder is named "resources", replace "ressources" below.
+   If your real folder is named &quot;resources&quot;, replace &quot;ressources&quot; below.
    --------------------------------------------------------------- */
 QWidget#pageObliqueSlices QSpinBox,
 QWidget#pageObliqueSlices QDoubleSpinBox {
@@ -1310,41 +1310,69 @@ QWidget#pageObliqueSlices QTabWidget#tabWidget::pane {
     top: 0px;
 }
 
+/* Save project (force-save) button, under the Patient ID card.
+   Neutral at rest, rose outline on hover, and a permanent rose outline
+   while the in-memory project matches the saved file (property saved=&quot;true&quot;). */
+QFrame#menu QPushButton#btn_menu_saveProject {
+    color: #F2F2F5;
+    background-color: #11131B;
+    border: 1px solid #2B2D38;
+    border-radius: 10px;
+    padding: 0px;
+    min-height: 32px;
+    max-height: 32px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QFrame#menu QPushButton#btn_menu_saveProject:hover {
+    color: white;
+    background-color: #171923;
+    border: 1px solid #FF487D;
+}
+QFrame#menu QPushButton#btn_menu_saveProject[saved=&quot;true&quot;] {
+    color: #F1F2F6;
+    background-color: #12141C;
+    border: 1px solid #FF487D;
+}
+QFrame#menu QPushButton#btn_menu_saveProject[saved=&quot;true&quot;]:hover {
+    border: 1px solid #FF487D;
+}
+
 
 /* ===============================================================
    FILES LOAD/SAVE STATES + REGULAR NAVIGATION - final refinement
    =============================================================== */
 
 /* Loaded inputs: no gradient, only a permanent validation outline. */
-QPushButton[uiRole="loadFile"][loaded="true"] {
+QPushButton[uiRole=&quot;loadFile&quot;][loaded=&quot;true&quot;] {
     color: #F1F2F6;
     background-color: #12141C;
     border: 1px solid #FF487D;
 }
-QPushButton[uiRole="loadFile"][loaded="true"]:hover {
+QPushButton[uiRole=&quot;loadFile&quot;][loaded=&quot;true&quot;]:hover {
     color: white;
     background-color: #151720;
     border: 1px solid #FF487D;
 }
 
 /* Validated outputs remain neutral until hovered or actually saved. */
-QPushButton[uiRole="saveAction"]:enabled {
+QPushButton[uiRole=&quot;saveAction&quot;]:enabled {
     color: #F1F2F6;
     background-color: #12141C;
     border: 1px solid #343844;
 }
-QPushButton[uiRole="saveAction"]:enabled:hover {
+QPushButton[uiRole=&quot;saveAction&quot;]:enabled:hover {
     color: white;
     background-color: #171923;
     border: 1px solid #FF487D;
 }
-QPushButton[uiRole="saveAction"][saved="true"],
-QPushButton[uiRole="saveAction"][saved="true"]:enabled {
+QPushButton[uiRole=&quot;saveAction&quot;][saved=&quot;true&quot;],
+QPushButton[uiRole=&quot;saveAction&quot;][saved=&quot;true&quot;]:enabled {
     color: #F1F2F6;
     background-color: #12141C;
     border: 1px solid #FF487D;
 }
-QPushButton[uiRole="saveAction"][saved="true"]:hover {
+QPushButton[uiRole=&quot;saveAction&quot;][saved=&quot;true&quot;]:hover {
     color: white;
     background-color: #171923;
     border: 1px solid #FF487D;
@@ -1659,7 +1687,7 @@ QWidget#Form {
     border: 1px solid #FF487D;
     border-radius: 16px;
 }
-QWidget#Form[maximized="true"] {
+QWidget#Form[maximized=&quot;true&quot;] {
     border: none;
     border-radius: 0px;
 }
@@ -1669,7 +1697,7 @@ QFrame#customTitleBar {
     border-top-left-radius: 16px;
     border-top-right-radius: 16px;
 }
-QWidget#Form[maximized="true"] QFrame#customTitleBar {
+QWidget#Form[maximized=&quot;true&quot;] QFrame#customTitleBar {
     border-radius: 0px;
 }
 QLabel#lbl_windowTitle {
@@ -1677,7 +1705,7 @@ QLabel#lbl_windowTitle {
     background-color: transparent;
     border: none;
 }
-QPushButton[uiRole="windowControl"] {
+QPushButton[uiRole=&quot;windowControl&quot;] {
     color: #D8DAE4;
     background-color: transparent;
     border: 1px solid transparent;
@@ -1705,7 +1733,7 @@ QPushButton#btn_window_close:hover {
         stop:1 #FF00A0
     );
 }
-QPushButton[uiRole="windowControl"]:pressed {
+QPushButton[uiRole=&quot;windowControl&quot;]:pressed {
     background-color: #252834;
 }
 QLabel#appTitle {
@@ -1749,49 +1777,49 @@ QWidget#pageFiles QLabel#cardFilesToSaveSubtitle {
 }
 
 /* Loaded inputs remain dark; their pink border confirms availability. */
-QWidget#pageFiles QPushButton[uiRole="loadFile"][loaded="true"] {
+QWidget#pageFiles QPushButton[uiRole=&quot;loadFile&quot;][loaded=&quot;true&quot;] {
     color: #F2F2F5;
     background-color: #12141C;
     border: 1px solid #FF487D;
 }
-QWidget#pageFiles QPushButton[uiRole="loadFile"][loaded="true"]:hover {
+QWidget#pageFiles QPushButton[uiRole=&quot;loadFile&quot;][loaded=&quot;true&quot;]:hover {
     color: white;
     background-color: #171923;
     border: 1px solid #FF6BA0;
 }
 
 /* Reviewed/validated actions remain dark with a persistent pink outline. */
-QWidget#pageFiles QPushButton[uiRole="reviewAction"][completed="true"] {
+QWidget#pageFiles QPushButton[uiRole=&quot;reviewAction&quot;][completed=&quot;true&quot;] {
     color: #F2F2F5;
     background-color: #12141C;
     border: 1px solid #FF487D;
 }
-QWidget#pageFiles QPushButton[uiRole="reviewAction"][completed="true"]:hover {
+QWidget#pageFiles QPushButton[uiRole=&quot;reviewAction&quot;][completed=&quot;true&quot;]:hover {
     color: white;
     background-color: #171923;
     border: 1px solid #FF487D;
 }
 
 /* Individual output buttons never receive the gradient. */
-QWidget#pageFiles QPushButton[uiRole="saveAction"]:enabled {
+QWidget#pageFiles QPushButton[uiRole=&quot;saveAction&quot;]:enabled {
     color: #F1F2F6;
     background-color: #12141C;
     border: 1px solid #343844;
 }
-QWidget#pageFiles QPushButton[uiRole="saveAction"]:enabled:hover {
+QWidget#pageFiles QPushButton[uiRole=&quot;saveAction&quot;]:enabled:hover {
     color: white;
     background-color: #171923;
     border: 1px solid #FF487D;
 }
-QWidget#pageFiles QPushButton[uiRole="saveAction"][saved="true"],
-QWidget#pageFiles QPushButton[uiRole="saveAction"][saved="true"]:enabled {
+QWidget#pageFiles QPushButton[uiRole=&quot;saveAction&quot;][saved=&quot;true&quot;],
+QWidget#pageFiles QPushButton[uiRole=&quot;saveAction&quot;][saved=&quot;true&quot;]:enabled {
     color: #F1F2F6;
     background-color: #12141C;
     border: 1px solid #FF487D;
 }
 
 /* Save all is deliberately the sole gradient action once export is possible. */
-QWidget#pageFiles QPushButton[uiRole="saveAllAction"]:enabled {
+QWidget#pageFiles QPushButton[uiRole=&quot;saveAllAction&quot;]:enabled {
     color: white;
     border: none;
     background: qlineargradient(
@@ -1800,7 +1828,7 @@ QWidget#pageFiles QPushButton[uiRole="saveAllAction"]:enabled {
         stop:1 #FF00A0
     );
 }
-QWidget#pageFiles QPushButton[uiRole="saveAllAction"]:enabled:hover {
+QWidget#pageFiles QPushButton[uiRole=&quot;saveAllAction&quot;]:enabled:hover {
     background: qlineargradient(
         x1:0, y1:0, x2:1, y2:0,
         stop:0 #FF922B,
@@ -1809,7 +1837,7 @@ QWidget#pageFiles QPushButton[uiRole="saveAllAction"]:enabled:hover {
 }
 
 /* Progress is gradient, but softened to 75 percent opacity. */
-QWidget#pageFiles QProgressBar[uiRole="workflowProgress"]::chunk {
+QWidget#pageFiles QProgressBar[uiRole=&quot;workflowProgress&quot;]::chunk {
     border-radius: 8px;
     background: qlineargradient(
         x1:0, y1:0, x2:1, y2:0,
@@ -1857,7 +1885,7 @@ QFrame#menu QPushButton#btn_menu_fileCoreg,
 QFrame#menu QPushButton#btn_menu_reconstruction,
 QFrame#menu QPushButton#btn_menu_obliqueSlice,
 QFrame#menu QPushButton#btn_menu_3Dview {
-    font-family: "Segoe UI";
+    font-family: &quot;Segoe UI&quot;;
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 1px;
@@ -1868,19 +1896,19 @@ Step 2 - T1 is the fixed reference.
 Only the checkbox indicator is highlighted after T1 is available:
 the full T1 row must stay dark.
 */
-QWidget#pageFiles QCheckBox[uiRole="referenceCheck"][referenceLoaded="true"] {
+QWidget#pageFiles QCheckBox[uiRole=&quot;referenceCheck&quot;][referenceLoaded=&quot;true&quot;] {
     color: #F2F2F5;
     background-color: transparent;
     border: none;
     border-radius: 0px;
     padding: 5px 0px;
 }
-QWidget#pageFiles QCheckBox[uiRole="referenceCheck"][referenceLoaded="true"]::indicator {
+QWidget#pageFiles QCheckBox[uiRole=&quot;referenceCheck&quot;][referenceLoaded=&quot;true&quot;]::indicator {
     border: 1px solid #FF487D;
     border-radius: 5px;
     background-color: #151720;
 }
-QWidget#pageFiles QCheckBox[uiRole="referenceCheck"][referenceLoaded="true"]::indicator:checked {
+QWidget#pageFiles QCheckBox[uiRole=&quot;referenceCheck&quot;][referenceLoaded=&quot;true&quot;]::indicator:checked {
     border: 1px solid #FF487D;
     background: qlineargradient(
         x1:0, y1:0, x2:1, y2:1,
@@ -1936,7 +1964,7 @@ QFrame#cardFilesToSave QLabel#cardFilesToSaveSubtitle {
    =============================================================== */
 
 /* Remove the small vertical grouping strokes beside load buttons. */
-QWidget#pageFiles QFrame[fileCell="true"],
+QWidget#pageFiles QFrame[fileCell=&quot;true&quot;],
 QFrame#btn_FilesCoreg_loadT1Cell,
 QFrame#btn_FilesCoreg_loadT2Cell,
 QFrame#btn_FilesCoreg_loadCTCell,
@@ -1957,9 +1985,9 @@ QFrame#btn_FilesCoreg_loadBrainMaskCell {
 /* Files/Coregistration checkboxes: checked = dark fill + pink border + white cross.
    This overrides the older gradient rules for T1 reference and modality checks. */
 QWidget#pageFiles QCheckBox::indicator:checked,
-QWidget#pageFiles QCheckBox[uiRole="referenceCheck"]::indicator:checked,
-QWidget#pageFiles QCheckBox[uiRole="referenceCheck"][referenceLoaded="true"]::indicator:checked,
-QWidget#pageFiles QCheckBox[uiRole="modalityCheck"]::indicator:checked {
+QWidget#pageFiles QCheckBox[uiRole=&quot;referenceCheck&quot;]::indicator:checked,
+QWidget#pageFiles QCheckBox[uiRole=&quot;referenceCheck&quot;][referenceLoaded=&quot;true&quot;]::indicator:checked,
+QWidget#pageFiles QCheckBox[uiRole=&quot;modalityCheck&quot;]::indicator:checked {
     background-color: #151720;
     border: 1px solid #FF487D;
     border-radius: 5px;
@@ -1967,17 +1995,17 @@ QWidget#pageFiles QCheckBox[uiRole="modalityCheck"]::indicator:checked {
 }
 
 QWidget#pageFiles QCheckBox::indicator:checked:hover,
-QWidget#pageFiles QCheckBox[uiRole="referenceCheck"]::indicator:checked:hover,
-QWidget#pageFiles QCheckBox[uiRole="referenceCheck"][referenceLoaded="true"]::indicator:checked:hover,
-QWidget#pageFiles QCheckBox[uiRole="modalityCheck"]::indicator:checked:hover {
+QWidget#pageFiles QCheckBox[uiRole=&quot;referenceCheck&quot;]::indicator:checked:hover,
+QWidget#pageFiles QCheckBox[uiRole=&quot;referenceCheck&quot;][referenceLoaded=&quot;true&quot;]::indicator:checked:hover,
+QWidget#pageFiles QCheckBox[uiRole=&quot;modalityCheck&quot;]::indicator:checked:hover {
     background-color: #181A24;
     border: 1px solid #FF487D;
     image: url(resources/images/neuxelec_checkbox_cross.svg);
 }
 
 QWidget#pageFiles QCheckBox::indicator:checked:disabled,
-QWidget#pageFiles QCheckBox[uiRole="referenceCheck"]::indicator:checked:disabled,
-QWidget#pageFiles QCheckBox[uiRole="modalityCheck"]::indicator:checked:disabled {
+QWidget#pageFiles QCheckBox[uiRole=&quot;referenceCheck&quot;]::indicator:checked:disabled,
+QWidget#pageFiles QCheckBox[uiRole=&quot;modalityCheck&quot;]::indicator:checked:disabled {
     background-color: rgba(21, 23, 32, 130);
     border: 1px solid rgba(255, 72, 125, 125);
     image: url(resources/images/neuxelec_checkbox_cross.svg);
@@ -2286,16 +2314,16 @@ QFrame#cardBulkImport, QFrame#cardFilesStatusOverview {
     border: 1px solid #20232F;
     border-radius: 16px;
 }
-QFrame#cardBulkImport QPushButton[uiRole="loadFile"] {
+QFrame#cardBulkImport QPushButton[uiRole=&quot;loadFile&quot;] {
     min-height: 52px;
     font-size: 13px;
 }
-QFrame[uiRole="statusGroupCard"] {
+QFrame[uiRole=&quot;statusGroupCard&quot;] {
     background-color: #0D0F16;
     border: 1px solid #252936;
     border-radius: 12px;
 }
-QLabel[uiRole="statusGroupTitle"] {
+QLabel[uiRole=&quot;statusGroupTitle&quot;] {
     color: #F4D9D0;
     background-color: transparent;
     border: none;
@@ -2303,31 +2331,31 @@ QLabel[uiRole="statusGroupTitle"] {
     font-weight: 700;
     letter-spacing: 1px;
 }
-QLabel[uiRole="statusPill"] {
+QLabel[uiRole=&quot;statusPill&quot;] {
     color: #525764;
     font-size: 14px;
     font-weight: 900;
     padding-left: 2px;
     padding-right: 2px;
 }
-QLabel[uiRole="statusPill"][status="loaded"] { color: #3FA7FF; }
-QLabel[uiRole="statusPill"][status="validated"] { color: #42D67A; }
-QLabel[uiRole="statusPill"][status="warning"] { color: #3FA7FF; }
-QLabel[uiRole="statusPill"][status="missing"] { color: #525764; }
-QLabel[uiRole="statusName"] {
+QLabel[uiRole=&quot;statusPill&quot;][status=&quot;loaded&quot;] { color: #3FA7FF; }
+QLabel[uiRole=&quot;statusPill&quot;][status=&quot;validated&quot;] { color: #42D67A; }
+QLabel[uiRole=&quot;statusPill&quot;][status=&quot;warning&quot;] { color: #3FA7FF; }
+QLabel[uiRole=&quot;statusPill&quot;][status=&quot;missing&quot;] { color: #525764; }
+QLabel[uiRole=&quot;statusName&quot;] {
     color: #D7D9E3;
     font-size: 11px;
     font-weight: 600;
 }
-QLabel[uiRole="statusText"] {
+QLabel[uiRole=&quot;statusText&quot;] {
     color: #737887;
     font-size: 10px;
     font-weight: 600;
 }
-QLabel[uiRole="statusText"][status="loaded"] { color: #3FA7FF; }
-QLabel[uiRole="statusText"][status="validated"] { color: #42D67A; }
-QLabel[uiRole="statusText"][status="warning"] { color: #3FA7FF; }
-QLabel[uiRole="statusText"][status="missing"] { color: #737887; }
+QLabel[uiRole=&quot;statusText&quot;][status=&quot;loaded&quot;] { color: #3FA7FF; }
+QLabel[uiRole=&quot;statusText&quot;][status=&quot;validated&quot;] { color: #42D67A; }
+QLabel[uiRole=&quot;statusText&quot;][status=&quot;warning&quot;] { color: #3FA7FF; }
+QLabel[uiRole=&quot;statusText&quot;][status=&quot;missing&quot;] { color: #737887; }
 
 /* ===============================================================
    FILES / COREGISTRATION - exact title unification patch
@@ -2416,7 +2444,7 @@ QWidget#pageFiles QLabel#cardFilesToSaveSubtitle {
       <item>
        <widget class="QLabel" name="lbl_windowTitle">
         <property name="text">
-         <string />
+         <string/>
         </property>
        </widget>
       </item>
@@ -2613,7 +2641,7 @@ QWidget#pageFiles QLabel#cardFilesToSaveSubtitle {
                   </size>
                  </property>
                  <property name="text">
-                  <string />
+                  <string/>
                  </property>
                  <property name="pixmap">
                   <pixmap>../images/neuxelec_logo.png</pixmap>
@@ -2648,17 +2676,49 @@ QWidget#pageFiles QLabel#cardFilesToSaveSubtitle {
                   <item alignment="Qt::AlignmentFlag::AlignHCenter">
                    <widget class="QLabel" name="label">
                     <property name="text">
-                     <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=" font-weight:700;"&gt;Patient ID&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                     <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-weight:700;&quot;&gt;Patient ID&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                     </property>
                    </widget>
                   </item>
                   <item alignment="Qt::AlignmentFlag::AlignHCenter">
-                   <widget class="QLineEdit" name="le_menu_patientID" />
+                   <widget class="QLineEdit" name="le_menu_patientID"/>
                   </item>
                  </layout>
                 </widget>
                </item>
               </layout>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btn_menu_saveProject">
+               <property name="minimumSize">
+                <size>
+                 <width>186</width>
+                 <height>34</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>206</width>
+                 <height>34</height>
+                </size>
+               </property>
+               <property name="font">
+                <font>
+                 <family>Segoe UI</family>
+                 <pointsize>-1</pointsize>
+                 <fontweight>DemiBold</fontweight>
+                </font>
+               </property>
+               <property name="cursor">
+                <cursorShape>PointingHandCursor</cursorShape>
+               </property>
+               <property name="toolTip">
+                <string>Save the current patient project file</string>
+               </property>
+               <property name="text">
+                <string>Save project</string>
+               </property>
+              </widget>
              </item>
              <item>
               <spacer name="verticalSpacer">
@@ -2917,7 +2977,7 @@ QLabel {
                    </size>
                   </property>
                   <property name="text">
-                   <string />
+                   <string/>
                   </property>
                   <property name="pixmap">
                    <pixmap>resources/images/logo_HUG.png</pixmap>
@@ -2945,7 +3005,7 @@ QLabel {
                    </size>
                   </property>
                   <property name="text">
-                   <string />
+                   <string/>
                   </property>
                   <property name="pixmap">
                    <pixmap>resources/images/logo_UNIGE.png</pixmap>
@@ -6465,7 +6525,7 @@ QLabel {
                                        </widget>
                                       </item>
                                       <item>
-                                       <widget class="QComboBox" name="comboReco_electrodeRef" />
+                                       <widget class="QComboBox" name="comboReco_electrodeRef"/>
                                       </item>
                                      </layout>
                                     </item>
@@ -7319,7 +7379,7 @@ QLabel {
                              <property name="frameShadow">
                               <enum>QFrame::Shadow::Plain</enum>
                              </property>
-                             <layout class="QVBoxLayout" name="verticalLayout_42" />
+                             <layout class="QVBoxLayout" name="verticalLayout_42"/>
                             </widget>
                            </item>
                           </layout>
@@ -7332,7 +7392,7 @@ QLabel {
                            <item alignment="Qt::AlignmentFlag::AlignHCenter">
                             <widget class="QLabel" name="label_21">
                              <property name="text">
-                              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p align="center"&gt;&lt;span style="font-weight:600;"&gt;1&lt;sup style="font-size:8pt;"&gt;ST&lt;/sup&gt; OBLIQUE SLICE&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p align=&quot;center&quot;&gt;&lt;span style=&quot;font-weight:600;&quot;&gt;1&lt;sup style=&quot;font-size:8pt;&quot;&gt;ST&lt;/sup&gt; OBLIQUE SLICE&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                              </property>
                             </widget>
                            </item>
@@ -7401,7 +7461,7 @@ QLabel {
                                   <x>0</x>
                                   <y>0</y>
                                   <width>278</width>
-                                  <height>707</height>
+                                  <height>1144</height>
                                  </rect>
                                 </property>
                                 <layout class="QVBoxLayout" name="verticalLayout_26">
@@ -7468,7 +7528,7 @@ QLabel {
                                        </widget>
                                       </item>
                                       <item>
-                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_SizeContacts" />
+                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_SizeContacts"/>
                                       </item>
                                      </layout>
                                     </item>
@@ -7523,7 +7583,7 @@ QLabel {
                                        </widget>
                                       </item>
                                       <item>
-                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_CT" />
+                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_CT"/>
                                       </item>
                                      </layout>
                                     </item>
@@ -7547,7 +7607,7 @@ QLabel {
                                        </widget>
                                       </item>
                                       <item>
-                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_MRI" />
+                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_MRI"/>
                                       </item>
                                      </layout>
                                     </item>
@@ -7623,7 +7683,7 @@ QLabel {
                                        </widget>
                                       </item>
                                       <item>
-                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_petOpacity" />
+                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_petOpacity"/>
                                       </item>
                                      </layout>
                                     </item>
@@ -7652,7 +7712,7 @@ QLabel {
                                          </widget>
                                         </item>
                                         <item>
-                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMin" />
+                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMin"/>
                                         </item>
                                        </layout>
                                       </item>
@@ -7676,7 +7736,7 @@ QLabel {
                                          </widget>
                                         </item>
                                         <item>
-                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMax" />
+                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMax"/>
                                         </item>
                                        </layout>
                                       </item>
@@ -7700,7 +7760,7 @@ QLabel {
                                          </widget>
                                         </item>
                                         <item>
-                                         <widget class="QDoubleSpinBox" name="dsb_obliqueSlice_petGamma" />
+                                         <widget class="QDoubleSpinBox" name="dsb_obliqueSlice_petGamma"/>
                                         </item>
                                        </layout>
                                       </item>
@@ -7757,7 +7817,7 @@ QLabel {
                                        </widget>
                                       </item>
                                       <item>
-                                       <widget class="QSpinBox" name="sb_obliqueSlice_SISCOM" />
+                                       <widget class="QSpinBox" name="sb_obliqueSlice_SISCOM"/>
                                       </item>
                                      </layout>
                                     </item>
@@ -7774,14 +7834,15 @@ QLabel {
                                        </widget>
                                       </item>
                                       <item>
-                                       <widget class="QDoubleSpinBox" name="doubleSpinBox_ObliqueSlices_zScoreSISCOM" />
+                                       <widget class="QDoubleSpinBox" name="doubleSpinBox_ObliqueSlices_zScoreSISCOM"/>
                                       </item>
                                      </layout>
                                     </item>
                                    </layout>
                                   </widget>
                                  </item>
-                                 <item><widget class="QFrame" name="cardObliqueSPECT">
+                                 <item>
+                                  <widget class="QFrame" name="cardObliqueSPECT">
                                    <property name="frameShape">
                                     <enum>QFrame::Shape::NoFrame</enum>
                                    </property>
@@ -7828,7 +7889,7 @@ QLabel {
                                        </widget>
                                       </item>
                                       <item>
-                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_petOpacity_ictal" />
+                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_petOpacity_ictal"/>
                                       </item>
                                      </layout>
                                     </item>
@@ -7857,7 +7918,7 @@ QLabel {
                                          </widget>
                                         </item>
                                         <item>
-                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMin_ictal" />
+                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMin_ictal"/>
                                         </item>
                                        </layout>
                                       </item>
@@ -7881,7 +7942,7 @@ QLabel {
                                          </widget>
                                         </item>
                                         <item>
-                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMax_ictal" />
+                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMax_ictal"/>
                                         </item>
                                        </layout>
                                       </item>
@@ -7905,13 +7966,13 @@ QLabel {
                                          </widget>
                                         </item>
                                         <item>
-                                         <widget class="QDoubleSpinBox" name="dsb_obliqueSlice_petGamma_ictal" />
+                                         <widget class="QDoubleSpinBox" name="dsb_obliqueSlice_petGamma_ictal"/>
                                         </item>
                                        </layout>
                                       </item>
                                      </layout>
                                     </item>
-                                   <item>
+                                    <item>
                                      <layout class="QHBoxLayout" name="horizontalLayout_38_interictal">
                                       <property name="spacing">
                                        <number>8</number>
@@ -7931,7 +7992,7 @@ QLabel {
                                        </widget>
                                       </item>
                                       <item>
-                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_petOpacity_interictal" />
+                                       <widget class="QSpinBox" name="spinBox_obliqueSlice_petOpacity_interictal"/>
                                       </item>
                                      </layout>
                                     </item>
@@ -7960,7 +8021,7 @@ QLabel {
                                          </widget>
                                         </item>
                                         <item>
-                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMin_interictal" />
+                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMin_interictal"/>
                                         </item>
                                        </layout>
                                       </item>
@@ -7984,7 +8045,7 @@ QLabel {
                                          </widget>
                                         </item>
                                         <item>
-                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMax_interictal" />
+                                         <widget class="QSpinBox" name="sb_obliqueSlice_petMax_interictal"/>
                                         </item>
                                        </layout>
                                       </item>
@@ -8008,7 +8069,7 @@ QLabel {
                                          </widget>
                                         </item>
                                         <item>
-                                         <widget class="QDoubleSpinBox" name="dsb_obliqueSlice_petGamma_interictal" />
+                                         <widget class="QDoubleSpinBox" name="dsb_obliqueSlice_petGamma_interictal"/>
                                         </item>
                                        </layout>
                                       </item>
@@ -8016,7 +8077,8 @@ QLabel {
                                     </item>
                                    </layout>
                                   </widget>
-                                 </item><item>
+                                 </item>
+                                 <item>
                                   <spacer name="obliqueOverlayStretch">
                                    <property name="orientation">
                                     <enum>Qt::Orientation::Vertical</enum>
@@ -8060,7 +8122,7 @@ QLabel {
                                 </widget>
                                </item>
                                <item>
-                                <widget class="QSpinBox" name="spinBox_obliqueSlice_Parcellation1" />
+                                <widget class="QSpinBox" name="spinBox_obliqueSlice_Parcellation1"/>
                                </item>
                               </layout>
                              </item>
@@ -8081,7 +8143,7 @@ QLabel {
                                 </widget>
                                </item>
                                <item>
-                                <widget class="QSpinBox" name="spinBox_obliqueSlice_Parcellation2" />
+                                <widget class="QSpinBox" name="spinBox_obliqueSlice_Parcellation2"/>
                                </item>
                               </layout>
                              </item>
@@ -8119,7 +8181,7 @@ QLabel {
                            <item alignment="Qt::AlignmentFlag::AlignHCenter">
                             <widget class="QLabel" name="label_23">
                              <property name="text">
-                              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p align="center"&gt;&lt;span style="font-weight:600;"&gt;2&lt;sup style="font-size:8pt;"&gt;ND&lt;/sup&gt; OBLIQUE SLICE&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p align=&quot;center&quot;&gt;&lt;span style=&quot;font-weight:600;&quot;&gt;2&lt;sup style=&quot;font-size:8pt;&quot;&gt;ND&lt;/sup&gt; OBLIQUE SLICE&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                              </property>
                             </widget>
                            </item>
@@ -8180,7 +8242,7 @@ QLabel {
                       <item alignment="Qt::AlignmentFlag::AlignHCenter">
                        <widget class="QLabel" name="label_24">
                         <property name="text">
-                         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=" font-weight:700;"&gt;Electrodes&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-weight:700;&quot;&gt;Electrodes&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                         </property>
                        </widget>
                       </item>
@@ -8574,7 +8636,7 @@ QLabel {
                                                </widget>
                                               </item>
                                               <item>
-                                               <widget class="QSpinBox" name="spinBox_3d_sizeContacts" />
+                                               <widget class="QSpinBox" name="spinBox_3d_sizeContacts"/>
                                               </item>
                                              </layout>
                                             </item>
@@ -8807,7 +8869,7 @@ QLabel {
                                    <x>0</x>
                                    <y>0</y>
                                    <width>418</width>
-                                   <height>765</height>
+                                   <height>1166</height>
                                   </rect>
                                  </property>
                                  <layout class="QVBoxLayout" name="verticalLayout_50">
@@ -9058,7 +9120,7 @@ QLabel {
                                                  </widget>
                                                 </item>
                                                 <item>
-                                                 <widget class="QSpinBox" name="sb_3d_petMin" />
+                                                 <widget class="QSpinBox" name="sb_3d_petMin"/>
                                                 </item>
                                                </layout>
                                               </item>
@@ -9082,7 +9144,7 @@ QLabel {
                                                  </widget>
                                                 </item>
                                                 <item>
-                                                 <widget class="QSpinBox" name="sb_3d_petMax" />
+                                                 <widget class="QSpinBox" name="sb_3d_petMax"/>
                                                 </item>
                                                </layout>
                                               </item>
@@ -9106,7 +9168,7 @@ QLabel {
                                                  </widget>
                                                 </item>
                                                 <item>
-                                                 <widget class="QDoubleSpinBox" name="dsb_3d_petGamma" />
+                                                 <widget class="QDoubleSpinBox" name="dsb_3d_petGamma"/>
                                                 </item>
                                                </layout>
                                               </item>
@@ -9199,7 +9261,7 @@ QLabel {
                                              </widget>
                                             </item>
                                             <item>
-                                             <widget class="QDoubleSpinBox" name="dsb_3d_siscomZthr" />
+                                             <widget class="QDoubleSpinBox" name="dsb_3d_siscomZthr"/>
                                             </item>
                                            </layout>
                                           </item>
@@ -9227,7 +9289,8 @@ QLabel {
                                          </layout>
                                         </widget>
                                        </item>
-                                       <item><widget class="QFrame" name="card3DSPECT">
+                                       <item>
+                                        <widget class="QFrame" name="card3DSPECT">
                                          <property name="frameShape">
                                           <enum>QFrame::Shape::NoFrame</enum>
                                          </property>
@@ -9288,7 +9351,7 @@ QLabel {
                                                  </widget>
                                                 </item>
                                                 <item>
-                                                 <widget class="QSpinBox" name="sb_3d_petMin_ictal" />
+                                                 <widget class="QSpinBox" name="sb_3d_petMin_ictal"/>
                                                 </item>
                                                </layout>
                                               </item>
@@ -9312,7 +9375,7 @@ QLabel {
                                                  </widget>
                                                 </item>
                                                 <item>
-                                                 <widget class="QSpinBox" name="sb_3d_petMax_ictal" />
+                                                 <widget class="QSpinBox" name="sb_3d_petMax_ictal"/>
                                                 </item>
                                                </layout>
                                               </item>
@@ -9336,7 +9399,7 @@ QLabel {
                                                  </widget>
                                                 </item>
                                                 <item>
-                                                 <widget class="QDoubleSpinBox" name="dsb_3d_petGamma_ictal" />
+                                                 <widget class="QDoubleSpinBox" name="dsb_3d_petGamma_ictal"/>
                                                 </item>
                                                </layout>
                                               </item>
@@ -9365,7 +9428,7 @@ QLabel {
                                             </item>
                                            </layout>
                                           </item>
-                                         <item>
+                                          <item>
                                            <layout class="QHBoxLayout" name="horizontalLayout_56_interictal">
                                             <property name="spacing">
                                              <number>8</number>
@@ -9399,7 +9462,7 @@ QLabel {
                                                  </widget>
                                                 </item>
                                                 <item>
-                                                 <widget class="QSpinBox" name="sb_3d_petMin_interictal" />
+                                                 <widget class="QSpinBox" name="sb_3d_petMin_interictal"/>
                                                 </item>
                                                </layout>
                                               </item>
@@ -9423,7 +9486,7 @@ QLabel {
                                                  </widget>
                                                 </item>
                                                 <item>
-                                                 <widget class="QSpinBox" name="sb_3d_petMax_interictal" />
+                                                 <widget class="QSpinBox" name="sb_3d_petMax_interictal"/>
                                                 </item>
                                                </layout>
                                               </item>
@@ -9447,7 +9510,7 @@ QLabel {
                                                  </widget>
                                                 </item>
                                                 <item>
-                                                 <widget class="QDoubleSpinBox" name="dsb_3d_petGamma_interictal" />
+                                                 <widget class="QDoubleSpinBox" name="dsb_3d_petGamma_interictal"/>
                                                 </item>
                                                </layout>
                                               </item>
@@ -9478,7 +9541,8 @@ QLabel {
                                           </item>
                                          </layout>
                                         </widget>
-                                       </item><item>
+                                       </item>
+                                       <item>
                                         <widget class="QFrame" name="card3DParcellation">
                                          <property name="frameShape">
                                           <enum>QFrame::Shape::NoFrame</enum>
@@ -9526,7 +9590,7 @@ QLabel {
                                              </widget>
                                             </item>
                                             <item>
-                                             <widget class="QSpinBox" name="spinBox_3dView_Parcell1" />
+                                             <widget class="QSpinBox" name="spinBox_3dView_Parcell1"/>
                                             </item>
                                            </layout>
                                           </item>
@@ -9550,7 +9614,7 @@ QLabel {
                                              </widget>
                                             </item>
                                             <item>
-                                             <widget class="QSpinBox" name="spinBox_3dView_Parcell2" />
+                                             <widget class="QSpinBox" name="spinBox_3dView_Parcell2"/>
                                             </item>
                                            </layout>
                                           </item>
@@ -9621,7 +9685,7 @@ QLabel {
                       <item alignment="Qt::AlignmentFlag::AlignHCenter">
                        <widget class="QLabel" name="label_26">
                         <property name="text">
-                         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=" font-weight:700;"&gt;Electrodes&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                         <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-weight:700;&quot;&gt;Electrodes&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                         </property>
                        </widget>
                       </item>
@@ -9697,7 +9761,7 @@ QLabel {
                      <property name="frameShadow">
                       <enum>QFrame::Shadow::Raised</enum>
                      </property>
-                     <layout class="QHBoxLayout" name="horizontalLayout_65" />
+                     <layout class="QHBoxLayout" name="horizontalLayout_65"/>
                     </widget>
                    </item>
                   </layout>
@@ -9732,6 +9796,6 @@ QLabel {
    </item>
   </layout>
  </widget>
- <resources />
- <connections />
+ <resources/>
+ <connections/>
 </ui>
