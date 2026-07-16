@@ -419,6 +419,112 @@ def ants_generate_brainmask_t1(
 
 
 # =============================================================================
+# ANTs defacing (on-demand, for anonymized export)
+# =============================================================================
+
+
+def _default_deface_mask_path() -> Path | None:
+    """Return the bundled template-space deface mask, if present."""
+    tdir = _templates_dir()
+    for name in ("template_deface_mask.nii.gz", "template_deface_mask.nii"):
+        p = tdir / name
+        if p.exists():
+            return p
+    return None
+
+
+def ants_deface_mask_in_subject_space(
+    t1_path: str,
+    out_dir: str | None = None,
+    progress_cb: Callable[[int], None] | None = None,
+    template_t1_path: str | None = None,
+    deface_mask_path: str | None = None,
+) -> str:
+    """
+    Bring the template-space deface mask into the subject T1 space.
+
+    Method (same registration as the brain mask):
+      1) Register subject T1 (moving) to template T1 (fixed) (Affine + light SyN)
+      2) Warp the TEMPLATE deface mask back into SUBJECT space (NearestNeighbor)
+
+    Returns: path to the subject-space deface mask (uint8 0/1). Voxels set to 1
+    are the face region to be zeroed out in the exported images.
+    """
+    _ants_exe("antsRegistration.exe")
+    _ants_exe("antsApplyTransforms.exe")
+
+    _report_progress(progress_cb, 0)
+
+    if template_t1_path is None:
+        tpl, _msk = _default_brainmask_template_paths()
+        template_t1_path = str(tpl)
+    if deface_mask_path is None:
+        dm = _default_deface_mask_path()
+        deface_mask_path = str(dm) if dm is not None else None
+
+    if not deface_mask_path or not Path(deface_mask_path).exists():
+        raise FileNotFoundError(
+            "Deface mask template not found. Expected tools/templates/template_deface_mask.nii.gz"
+        )
+    if not Path(template_t1_path).exists():
+        raise FileNotFoundError(f"Template T1 not found: {template_t1_path}")
+
+    outd = _ants_out_dir(out_dir)
+    prefix = str(outd / "deface_")
+    ants_reg = str(_ants_exe("antsRegistration.exe"))
+    ants_apply = str(_ants_exe("antsApplyTransforms.exe"))
+
+    reg_cmd = [
+        ants_reg,
+        "--dimensionality", "3",
+        "--float", "1",
+        "--output", f"[{prefix},{prefix}Warped.nii.gz,{prefix}InverseWarped.nii.gz]",
+        "--interpolation", "Linear",
+        "--winsorize-image-intensities", "[0.005,0.995]",
+        "--use-histogram-matching", "0",
+        "--initial-moving-transform", f"[{template_t1_path},{t1_path},1]",
+        "--transform", "Affine[0.1]",
+        "--metric", f"MI[{template_t1_path},{t1_path},1,32,Regular,0.25]",
+        "--convergence", "[500x250x100,1e-6,10]",
+        "--shrink-factors", "8x4x2",
+        "--smoothing-sigmas", "3x2x1vox",
+        "--transform", "SyN[0.1,3,0]",
+        "--metric", f"CC[{template_t1_path},{t1_path},1,4]",
+        "--convergence", "[80x40x20,1e-6,10]",
+        "--shrink-factors", "8x4x2",
+        "--smoothing-sigmas", "3x2x1vox",
+    ]
+    _run_cmd(reg_cmd, cwd=str(outd))
+    _report_progress(progress_cb, 70)
+
+    affine = f"{prefix}0GenericAffine.mat"
+    inv_warp = f"{prefix}1InverseWarp.nii.gz"
+    out_mask = str(outd / "T1_deface_mask.nii.gz")
+
+    apply_cmd = [
+        ants_apply,
+        "-d", "3",
+        "-i", str(deface_mask_path),
+        "-r", str(t1_path),
+        "-o", out_mask,
+        "-n", "NearestNeighbor",
+        "-t", inv_warp,
+        "-t", f"[{affine},1]",
+    ]
+    _run_cmd(apply_cmd, cwd=str(outd))
+
+    try:
+        m = sitk.ReadImage(out_mask)
+        m = sitk.Cast(m > 0.5, sitk.sitkUInt8)
+        sitk.WriteImage(m, out_mask)
+    except Exception:
+        logger.warning("Failed to binarize deface mask %s", out_mask, exc_info=True)
+
+    _report_progress(progress_cb, 100)
+    return out_mask
+
+
+# =============================================================================
 # ANTs coregistration
 # =============================================================================
 

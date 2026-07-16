@@ -520,6 +520,7 @@ def exec_mni_electrode_tree_menu(
     act_show_coronal = None
     act_show_axial = None
     act_show_sagittal = None
+    act_delete_patient = None
 
     if kind == "mni_set":
         act_color = menu.addAction("Color")
@@ -531,6 +532,9 @@ def exec_mni_electrode_tree_menu(
         act_toggle_patient_name = menu.addAction(
             "Remove patient name" if patient_name_on else "Add patient name"
         )
+
+        menu.addSeparator()
+        act_delete_patient = menu.addAction("Delete patient")
 
     elif kind == "mni_group":
         act_color = menu.addAction("Color")
@@ -564,6 +568,9 @@ def exec_mni_electrode_tree_menu(
 
     if act_toggle_patient_name is not None and action == act_toggle_patient_name:
         return "toggle_patient_name"
+
+    if act_delete_patient is not None and action == act_delete_patient:
+        return "delete_patient"
 
     if act_show_coronal is not None and action == act_show_coronal:
         return "show_coronal_slice"

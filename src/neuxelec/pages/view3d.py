@@ -2222,6 +2222,12 @@ class View3DPage(
                 img = None
 
         self._parcel1_img = img
+        try:
+            from pathlib import Path as _P
+
+            self._parcel1_name = _P(path).name if path else ""
+        except Exception:
+            self._parcel1_name = ""
         self._invalidate_slice_volume_cache(base=True, pet=False, siscom=False)
 
         try:
@@ -2247,6 +2253,12 @@ class View3DPage(
                 img = None
 
         self._parcel2_img = img
+        try:
+            from pathlib import Path as _P
+
+            self._parcel2_name = _P(path).name if path else ""
+        except Exception:
+            self._parcel2_name = ""
         self._invalidate_slice_volume_cache(base=True, pet=False, siscom=False)
 
         try:
@@ -2263,6 +2275,25 @@ class View3DPage(
 
         self._update_modality_controls_enabled_states()
         self._refresh_multiplanar_clipped_scene()
+
+    def _update_parcellation_tooltips(self) -> None:
+        """Show the loaded native parcellation file name on hover, in native
+        mode only (in MNI mode the parcellation checkboxes refer to the MNI
+        atlases, not the loaded FreeSurfer files)."""
+        try:
+            native = not self._mni_mode_is_active()
+        except Exception:
+            native = True
+        for chk, name in (
+            (getattr(self, "chk_parcel1", None), getattr(self, "_parcel1_name", "")),
+            (getattr(self, "chk_parcel2", None), getattr(self, "_parcel2_name", "")),
+        ):
+            if chk is None:
+                continue
+            try:
+                chk.setToolTip(name if (native and name) else "")
+            except Exception:
+                pass
 
     def _get_active_parcellation_img_and_lut(self):
         p1_on = bool(self.chk_parcel1 is not None and self.chk_parcel1.isChecked())
@@ -5434,6 +5465,8 @@ class View3DPage(
         return n
 
     def _update_modality_controls_enabled_states(self) -> None:
+
+        self._update_parcellation_tooltips()
 
         try:
             if self.chk_mni_atlas is not None and self.chk_mni_atlas.isChecked():
@@ -9480,30 +9513,48 @@ class View3DPage(
         loaded = 0
         errors = []
 
-        existing_paths = set()
+        # Index existing sets by subject so that re-exporting / re-importing the
+        # same patient updates the already-loaded set in place (preserving its
+        # color) instead of adding a duplicate. This is more robust than a plain
+        # path check, because the same patient exported to a different folder has
+        # a different path but is the same electrode set.
+        def _subject_of(s):
+            return str(s.get("subject", "")).strip() if isinstance(s, dict) else ""
+
+        sets = self.state.mni_electrode_sets
+        existing_by_subject = {}
         try:
-            for s in getattr(self.state, "mni_electrode_sets", []) or []:
-                if isinstance(s, dict):
-                    existing_paths.add(str(s.get("path", "")))
+            for i, s in enumerate(sets or []):
+                subj = _subject_of(s)
+                if subj:
+                    existing_by_subject[subj] = i
         except Exception:
-            existing_paths = set()
+            existing_by_subject = {}
 
         for path in paths:
             try:
                 p = str(Path(path))
+                mni_set = load_bids_mni_electrodes_tsv(p)
+                subj = _subject_of(mni_set)
 
-                if p in existing_paths:
+                if subj and subj in existing_by_subject:
+                    # Same patient already loaded: update it in place, keeping
+                    # the color the user may have chosen.
+                    idx = existing_by_subject[subj]
+                    old = sets[idx] if isinstance(sets[idx], dict) else {}
+                    mni_set["color"] = old.get("color", [255, 255, 255])
+                    mni_set["group_color"] = old.get("group_color", {})
+                    mni_set["visible"] = old.get("visible", True)
+                    sets[idx] = mni_set
+                    loaded += 1
                     continue
 
-                mni_set = load_bids_mni_electrodes_tsv(p)
-
-                # Default MNI list style:
-                # white background, black text, like the native white electrode row.
+                # New subject: white row style, like the native white electrode row.
                 mni_set["color"] = [255, 255, 255]
                 mni_set.setdefault("group_color", {})
 
-                self.state.mni_electrode_sets.append(mni_set)
-                existing_paths.add(p)
+                sets.append(mni_set)
+                existing_by_subject[subj] = len(sets) - 1
                 loaded += 1
 
             except Exception as e:
@@ -11023,6 +11074,9 @@ class View3DPage(
                     mni_set["patient_name_visible"] = not bool(patient_name_on)
                     self._render_mni_patient_name_label_only(si)
 
+                elif choice == "delete_patient":
+                    self._delete_mni_patient(si)
+
             elif kind == "mni_group":
                 group_name = str(item.data(0, Qt.UserRole + 52))
 
@@ -11067,6 +11121,41 @@ class View3DPage(
 
         except Exception as e:
             print("[MNI tree menu] failed:", e)
+
+    def _delete_mni_patient(self, si: int) -> None:
+        """Remove an imported MNI patient (electrode set) from the MNI view."""
+        try:
+            sets = getattr(self.state, "mni_electrode_sets", []) or []
+            if not (0 <= si < len(sets)):
+                return
+
+            mni_set = sets[si]
+            subject = str(mni_set.get("subject", "") or "this patient")
+
+            confirmed = NeuXelecMessageDialog.question(
+                self._dialog_parent() if hasattr(self, "_dialog_parent") else None,
+                "Delete patient",
+                f"Remove {subject} from the MNI view?\n\n"
+                "This only removes it from the current MNI display; the exported "
+                "files on disk are not affected.",
+            )
+            if not confirmed:
+                return
+
+            del self.state.mni_electrode_sets[si]
+
+            # Rebuild the tree and the MNI scene from the updated list so all
+            # indices are recomputed.
+            try:
+                self._refresh_mni_tree_items()
+            except Exception:
+                pass
+            try:
+                self._render_mni_scene()
+            except Exception:
+                pass
+        except Exception as e:
+            print("[MNI delete patient] failed:", e)
 
     def _set_mni_labels_visible_from_item(self, item, visible: bool) -> None:
         try:

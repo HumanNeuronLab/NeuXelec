@@ -5719,6 +5719,20 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             str(self._pet_colormap_name),
         )
 
+    @staticmethod
+    def _label_fallback_color(lab: int):
+        """Deterministic distinct color (0-255 RGB) for a label without a LUT entry.
+
+        Ensures any parcellation (including non-FreeSurfer atlases or ones whose
+        LUT is missing) still renders with distinguishable colors, instead of
+        showing nothing.
+        """
+        import colorsys
+
+        h = (int(lab) * 0.61803398875) % 1.0
+        r, g, b = colorsys.hsv_to_rgb(h, 0.62, 1.0)
+        return (r * 255.0, g * 255.0, b * 255.0)
+
     def _build_base_rgb(
         self,
         arr_t1,
@@ -5811,11 +5825,12 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
                     for lab in unique_labels:
                         entry = lut.get(int(lab), None)
                         if entry is None:
-                            continue
-                        try:
-                            _, (r, g, b) = entry
-                        except Exception:
-                            continue
+                            r, g, b = self._label_fallback_color(int(lab))
+                        else:
+                            try:
+                                _, (r, g, b) = entry
+                            except Exception:
+                                r, g, b = self._label_fallback_color(int(lab))
 
                         m = labels == int(lab)
                         rgb_parc[m, 0] = float(r)
@@ -5841,11 +5856,12 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
                     for lab in unique_labels:
                         entry = lut.get(int(lab), None)
                         if entry is None:
-                            continue
-                        try:
-                            _, (r, g, b) = entry
-                        except Exception:
-                            continue
+                            r, g, b = self._label_fallback_color(int(lab))
+                        else:
+                            try:
+                                _, (r, g, b) = entry
+                            except Exception:
+                                r, g, b = self._label_fallback_color(int(lab))
 
                         m = labels == int(lab)
                         rgb_parc[m, 0] = float(r)
@@ -6200,6 +6216,14 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
 
         self._parcel1_img = img
 
+        try:
+            if self.chk_parcel1 is not None and path:
+                from pathlib import Path as _P
+
+                self.chk_parcel1.setToolTip(_P(path).name)
+        except Exception:
+            pass
+
         # Keep a local copy of the LUT so it does not disappear if state changes later
         try:
             lut = getattr(self.state, "parcellation1_lut", {})
@@ -6243,6 +6267,14 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         self._parcel2_img = img
 
         try:
+            if self.chk_parcel2 is not None and path:
+                from pathlib import Path as _P
+
+                self.chk_parcel2.setToolTip(_P(path).name)
+        except Exception:
+            pass
+
+        try:
             lut = getattr(self.state, "parcellation2_lut", {})
             if isinstance(lut, dict):
                 self._parcel2_lut = dict(lut)
@@ -6274,16 +6306,61 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         self._update_modality_controls_enabled_states()
         self._schedule_refresh(slices=True, brain=False)
 
+    @staticmethod
+    def _load_bundled_freesurfer_lut(path):
+        """Load the bundled FreeSurfer LUT if `path` is a FreeSurfer-style atlas.
+
+        Returns {label: (name, (r, g, b))} or {}. Used to recover the LUT when
+        it is missing (e.g. after reopening a project), so that both
+        parcellations behave identically.
+        """
+        from pathlib import Path as _P
+
+        try:
+            name = _P(path).name.lower() if path else ""
+        except Exception:
+            name = ""
+        if not any(tag in name for tag in ("aparc", "aseg", "wmparc")):
+            return {}
+        lut_path = _P(__file__).resolve().parent.parent / "utils" / "FreeSurferColorLUT.txt"
+        out = {}
+        try:
+            with open(lut_path, encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split()
+                    if len(parts) < 5:
+                        continue
+                    try:
+                        out[int(parts[0])] = (
+                            parts[1],
+                            (int(parts[2]), int(parts[3]), int(parts[4])),
+                        )
+                    except Exception:
+                        continue
+        except Exception:
+            return {}
+        return out
+
     def _get_parcellation1_lut(self):
         lut = getattr(self, "_parcel1_lut", None)
         if isinstance(lut, dict) and len(lut) > 0:
             return lut
 
         lut = getattr(self.state, "parcellation1_lut", None)
-        if isinstance(lut, dict):
+        if isinstance(lut, dict) and len(lut) > 0:
             return lut
 
-        return {}
+        lut = self._load_bundled_freesurfer_lut(getattr(self.state, "parcel1_path", None))
+        if lut:
+            self._parcel1_lut = lut
+            try:
+                self.state.parcellation1_lut = lut
+            except Exception:
+                pass
+        return lut or {}
 
     def _lookup_parcellation1_region(self, label: int):
         lut = self._get_parcellation1_lut()
@@ -6306,10 +6383,17 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             return lut
 
         lut = getattr(self.state, "parcellation2_lut", None)
-        if isinstance(lut, dict):
+        if isinstance(lut, dict) and len(lut) > 0:
             return lut
 
-        return {}
+        lut = self._load_bundled_freesurfer_lut(getattr(self.state, "parcel2_path", None))
+        if lut:
+            self._parcel2_lut = lut
+            try:
+                self.state.parcellation2_lut = lut
+            except Exception:
+                pass
+        return lut or {}
 
     def _lookup_parcellation2_region(self, label: int):
         lut = self._get_parcellation2_lut()

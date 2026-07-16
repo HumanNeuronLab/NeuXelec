@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import SimpleITK as sitk
+
+logger = logging.getLogger(__name__)
 from PySide6.QtCore import QElapsedTimer, QEvent, QPoint, Qt, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
@@ -121,6 +124,52 @@ def _sample_parcellation_label(img: sitk.Image | None, lps_xyz):
         return int(img.GetPixel(*idx))
     except Exception:
         return None
+
+
+def _read_image_or_none(path):
+    """Read a NIfTI/MGZ image from disk, or return None on any failure."""
+    try:
+        if path and Path(path).exists():
+            return sitk.ReadImage(str(path))
+    except Exception:
+        pass
+    return None
+
+
+def _load_freesurfer_lut_dict(lut_path: Path) -> dict:
+    """Parse a FreeSurfer color lookup table into {label: (name, (r, g, b))}."""
+    out: dict[int, tuple[str, tuple[int, int, int]]] = {}
+    try:
+        with open(lut_path, encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                try:
+                    out[int(parts[0])] = (
+                        parts[1],
+                        (int(parts[2]), int(parts[3]), int(parts[4])),
+                    )
+                except Exception:
+                    continue
+    except Exception:
+        return {}
+    return out
+
+
+def _freesurfer_lut_for(path) -> dict:
+    """Return the bundled FreeSurfer LUT if the file looks like a FreeSurfer atlas."""
+    try:
+        name = Path(path).name.lower()
+    except Exception:
+        return {}
+    if not any(tag in name for tag in ("aparc", "aseg", "wmparc")):
+        return {}
+    lut_path = Path(__file__).resolve().parent.parent / "utils" / "FreeSurferColorLUT.txt"
+    return _load_freesurfer_lut_dict(lut_path)
 
 
 def _lookup_lut_region(lut: Any, label: int | None) -> str:
@@ -941,8 +990,9 @@ class ExportCoordinatesDialog(QDialog):
         # ---------------------------------------------------------
         # Coordinates
         # ---------------------------------------------------------
-        grp_coords = QGroupBox("Coordinates to include")
-        grp_coords.setObjectName("optionGroup")
+        self.grp_coords = QGroupBox("Coordinates to include")
+        self.grp_coords.setObjectName("optionGroup")
+        grp_coords = self.grp_coords
 
         lay_coords = QVBoxLayout(grp_coords)
         lay_coords.setContentsMargins(14, 20, 14, 12)
@@ -1048,11 +1098,33 @@ class ExportCoordinatesDialog(QDialog):
 
         lay_bids.addLayout(bids_options_row)
 
+        # Optional defacing for the native BIDS export (anonymization).
+        self.chk_deface = QCheckBox(
+            "Deface exported images (anonymize) - native BIDS only"
+        )
+        self.chk_deface.setToolTip(
+            "Remove facial features (face, nose, ears region) from the exported "
+            "T1, CT, PET and SISCOM images. Uses an ANTs registration to a "
+            "template deface mask; the brain is preserved. Adds a few minutes "
+            "to the export."
+        )
+        self.chk_deface.setEnabled(False)
+        lay_bids.addWidget(self.chk_deface)
+
         # Disable BIDS radio controls until BIDS export is enabled.
         for child in self.grp_bids.findChildren(QRadioButton):
             child.setEnabled(False)
 
         self.chk_bids.toggled.connect(self._toggle_bids_section)
+        self.chk_bids.toggled.connect(self.chk_deface.setEnabled)
+
+        # The LPS/RAS/Voxel checkboxes only apply to the tabular formats
+        # (TXT/CSV/TSV/JSON). Cartool ELS uses its own fixed voxel conversion
+        # and BIDS has its own convention radios, so disable the coordinate
+        # group when no tabular format is selected (e.g. only ELS checked).
+        for chk in (self.chk_txt, self.chk_csv, self.chk_tsv, self.chk_json):
+            chk.toggled.connect(lambda _=None: self._update_coordinate_group_enabled())
+        self._update_coordinate_group_enabled()
 
         content.addWidget(self.grp_bids)
 
@@ -1524,8 +1596,24 @@ class ExportCoordinatesDialog(QDialog):
         if parcel2_img is None:
             parcel2_img = getattr(self.state, "parcellation2_img", None)
 
+        parcel1_path = getattr(self.state, "parcel1_path", None)
+        parcel2_path = getattr(self.state, "parcel2_path", None)
+
+        # When a project is reopened, only the parcellation path is restored,
+        # not the in-memory image or its LUT. Load them on demand from the path
+        # so exported parcellation labels are never silently empty.
+        if parcel1_img is None and parcel1_path:
+            parcel1_img = _read_image_or_none(parcel1_path)
+        if parcel2_img is None and parcel2_path:
+            parcel2_img = _read_image_or_none(parcel2_path)
+
         lut1 = getattr(self.state, "parcellation1_lut", {}) or {}
         lut2 = getattr(self.state, "parcellation2_lut", {}) or {}
+
+        if not lut1 and parcel1_path:
+            lut1 = _freesurfer_lut_for(parcel1_path)
+        if not lut2 and parcel2_path:
+            lut2 = _freesurfer_lut_for(parcel2_path)
 
         return parcel1_img, parcel2_img, lut1, lut2
 
@@ -2092,11 +2180,16 @@ class ExportCoordinatesDialog(QDialog):
                 progress_dlg = self._create_export_progress_dialog(progress_title)
                 progress_callback = self._make_progress_callback(progress_dlg)
 
-                # The MNI export runs ANTs normalization (~3 min). Drive the
-                # bar smoothly over time to 98% and hold there until the real
-                # completion forces 100%, instead of jumping with ANTs logs.
+                # Drive the bar smoothly over time to 98% and hold there until
+                # the real completion forces 100%, instead of jumping with ANTs
+                # logs. Durations match the typical wall-clock:
+                #   - MNI: ~3 min (ANTs normalization)
+                #   - native + defacing: ~5 min (ANTs deface registration)
+                #   - native without defacing: ~2 min (image copies)
                 if bids_space == "MNI":
                     progress_dlg.start_smooth_progress(180)
+                else:
+                    progress_dlg.start_smooth_progress(300 if self._deface_requested() else 120)
 
                 try:
                     # -------------------------------------------------
@@ -2265,6 +2358,21 @@ class ExportCoordinatesDialog(QDialog):
 
         return [k for k in preferred if k in keys] + sorted(k for k in keys if k not in preferred)
 
+    def _update_coordinate_group_enabled(self):
+        """Enable LPS/RAS/Voxel selection only when a tabular format
+        (TXT/CSV/TSV/JSON) is selected. Cartool ELS and BIDS ignore it."""
+        try:
+            tabular_on = any(
+                chk.isChecked()
+                for chk in (self.chk_txt, self.chk_csv, self.chk_tsv, self.chk_json)
+            )
+        except Exception:
+            tabular_on = True
+        try:
+            self.grp_coords.setEnabled(bool(tabular_on))
+        except Exception:
+            pass
+
     def _toggle_bids_section(self, checked: bool):
         for child in self.grp_bids.findChildren(QRadioButton):
             child.setEnabled(bool(checked))
@@ -2300,14 +2408,33 @@ class ExportCoordinatesDialog(QDialog):
             except Exception:
                 pass
 
+    def _parcellation_names(self):
+        """Return (name1, name2): the loaded parcellation file names, or ''."""
+        def _name(path):
+            try:
+                return Path(path).name if path else ""
+            except Exception:
+                return ""
+
+        return (
+            _name(getattr(self.state, "parcel1_path", None)),
+            _name(getattr(self.state, "parcel2_path", None)),
+        )
+
     def _metadata(self):
         now = datetime.now()
-        return {
+        md = {
             "type": "SEEG_electrode_coordinates",
             "patient": getattr(self.state, "patient_id", ""),
             "export_date": now.strftime("%Y-%m-%d"),
             "export_time": now.strftime("%H:%M:%S"),
         }
+        name1, name2 = self._parcellation_names()
+        if name1:
+            md["parcellation1"] = name1
+        if name2:
+            md["parcellation2"] = name2
+        return md
 
     def _write_csv(self, path: Path, rows: list[dict[str, Any]]):
         metadata = self._metadata()
@@ -2378,6 +2505,11 @@ class ExportCoordinatesDialog(QDialog):
             f.write(f"Export time: {metadata.get('export_time', '')}\n")
             if coord_system:
                 f.write(f"Coordinate system: {coord_system}\n")
+            name1, name2 = self._parcellation_names()
+            if name1:
+                f.write(f"Parcellation 1: {name1}\n")
+            if name2:
+                f.write(f"Parcellation 2: {name2}\n")
             f.write("=" * 40 + "\n\n")
 
             current_elec = None
@@ -2432,6 +2564,142 @@ class ExportCoordinatesDialog(QDialog):
         except Exception:
             pass
 
+    def _copy_image_as(self, src, dst: Path):
+        """Copy an image to dst, transcoding when needed so the file is valid.
+
+        A raw byte copy of an uncompressed .nii into a .nii.gz name (or an .mgz
+        into .nii.gz) produces a file whose extension lies about its content.
+        When the compression/format of source and destination differ, re-encode
+        through SimpleITK so the written file truly matches its extension.
+        """
+        if not src:
+            return
+        try:
+            src = Path(src)
+            if not src.exists():
+                return
+            dst.parent.mkdir(parents=True, exist_ok=True)
+
+            s = src.name.lower()
+            d = dst.name.lower()
+            src_gz = s.endswith(".nii.gz")
+            dst_gz = d.endswith(".nii.gz")
+            src_plain_nii = s.endswith(".nii") and not src_gz
+
+            same_format = (src_gz and dst_gz) or (
+                src_plain_nii and d.endswith(".nii") and not dst_gz
+            )
+
+            if same_format:
+                shutil.copyfile(src, dst)
+            else:
+                img = sitk.ReadImage(str(src))
+                sitk.WriteImage(img, str(dst))
+        except Exception:
+            try:
+                shutil.copyfile(src, dst)
+            except Exception:
+                pass
+
+    def _mni_template_t1_path(self):
+        """Return the MNI152NLin2009cAsym template T1 used for normalization."""
+        p = getattr(self.state, "mni_template_path", None)
+        try:
+            if p and Path(p).exists():
+                return str(p)
+        except Exception:
+            pass
+        try:
+            from neuxelec.coregistration import _default_brainmask_template_paths
+
+            template_t1, _mask = _default_brainmask_template_paths()
+            if template_t1 is not None and Path(template_t1).exists():
+                return str(template_t1)
+        except Exception:
+            pass
+        return None
+
+    def _mni_template_mask_path(self):
+        """Return the MNI152NLin2009cAsym template brain mask."""
+        try:
+            from neuxelec.coregistration import _default_brainmask_template_paths
+
+            _t1, template_mask = _default_brainmask_template_paths()
+            if template_mask is not None and Path(template_mask).exists():
+                return str(template_mask)
+        except Exception:
+            pass
+        return None
+
+    def _deface_requested(self) -> bool:
+        chk = getattr(self, "chk_deface", None)
+        try:
+            return bool(chk is not None and chk.isEnabled() and chk.isChecked())
+        except Exception:
+            return False
+
+    def _build_subject_deface_mask(self):
+        """Compute the subject-space deface mask (sitk uint8), brain-protected.
+
+        Returns a SimpleITK image (1 = face voxels to zero out) or None.
+        """
+        t1p = getattr(self.state, "t1_path", None) or getattr(self.state, "t1_source_path", None)
+        if not t1p or not Path(t1p).exists():
+            return None
+        try:
+            import tempfile
+
+            from neuxelec.coregistration import ants_deface_mask_in_subject_space
+
+            mask_path = ants_deface_mask_in_subject_space(
+                str(t1p),
+                out_dir=tempfile.mkdtemp(prefix="neuxelec_deface_"),
+            )
+            mimg = sitk.ReadImage(mask_path)
+
+            bm = getattr(self.state, "brainmask_sitk", None)
+            if bm is not None:
+                bmr = sitk.Resample(
+                    bm, mimg, sitk.Transform(3, sitk.sitkIdentity),
+                    sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
+                )
+                bmr = sitk.BinaryDilate(sitk.Cast(bmr > 0, sitk.sitkUInt8), [3, 3, 3], sitk.sitkBall)
+                face = sitk.Cast(mimg > 0, sitk.sitkUInt8)
+                face = sitk.And(face, sitk.Not(bmr))
+                face.CopyInformation(mimg)
+                return face
+            return sitk.Cast(mimg > 0, sitk.sitkUInt8)
+        except Exception:
+            logger.warning("Defacing failed; images will be exported unmodified", exc_info=True)
+            return None
+
+    def _copy_image_defaced(self, src, dst: Path, deface_img):
+        """Zero the face region of `src` (resampling the mask to its grid) and write it."""
+        if not src:
+            return
+        try:
+            src = Path(src)
+            if not src.exists():
+                return
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if deface_img is None:
+                self._copy_image_as(src, dst)
+                return
+            img = sitk.ReadImage(str(src))
+            dm = sitk.Resample(
+                deface_img, img, sitk.Transform(3, sitk.sitkIdentity),
+                sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
+            )
+            arr = sitk.GetArrayFromImage(img)
+            m = sitk.GetArrayViewFromImage(dm) > 0
+            arr[m] = 0
+            out = sitk.GetImageFromArray(arr)
+            out.CopyInformation(img)
+            sitk.WriteImage(out, str(dst))
+        except Exception:
+            logger.warning("Defaced copy failed for %s; copying unmodified", src, exc_info=True)
+            self._copy_image_as(src, dst)
+
     def _write_bids_export(
         self,
         out_dir: Path,
@@ -2446,7 +2714,9 @@ class ExportCoordinatesDialog(QDialog):
         is_mni = str(bids_space or "").upper() == "MNI"
         space_label = "MNI152NLin2009cAsym" if is_mni else "T1w"
 
-        dataset_dir = out_dir
+        # Put native and MNI exports in separate dataset folders so they are
+        # never confused and never overwrite each other.
+        dataset_dir = out_dir / f"BIDS_{space_label}"
         sub_dir = dataset_dir / sub
         anat_dir = sub_dir / "anat"
         ieeg_dir = sub_dir / "ieeg"
@@ -2475,59 +2745,80 @@ class ExportCoordinatesDialog(QDialog):
         with open(dataset_dir / "dataset_description.json", "w", encoding="utf-8") as f:
             json.dump(dataset_description, f, indent=2, ensure_ascii=False)
 
-        self._copy_if_exists(
-            getattr(self.state, "t1_path", None) or getattr(self.state, "t1_source_path", None),
-            anat_dir / f"{sub}_T1w.nii.gz",
-        )
-
-        self._copy_if_exists(
-            getattr(self.state, "ct_coreg_path", None) or getattr(self.state, "ct_path", None),
-            deriv_dir / f"{sub}_desc-coregCT_space-T1w_ct.nii.gz",
-        )
-
-        self._copy_if_exists(
-            getattr(self.state, "pet_coreg_path", None) or getattr(self.state, "pet_path", None),
-            deriv_dir / f"{sub}_desc-coregPET_space-T1w_pet.nii.gz",
-        )
-
-        self._copy_if_exists(
-            getattr(self.state, "siscom_coreg_path", None)
-            or getattr(self.state, "siscom_path", None),
-            deriv_dir / f"{sub}_desc-SISCOM_space-T1w_siscom.nii.gz",
-        )
-
-        self._copy_if_exists(
-            getattr(self.state, "parcel1_path", None),
-            deriv_dir / f"{sub}_desc-parcellation1_space-T1w_dseg.nii.gz",
-        )
-
-        self._copy_if_exists(
-            getattr(self.state, "parcel2_path", None),
-            deriv_dir / f"{sub}_desc-parcellation2_space-T1w_dseg.nii.gz",
-        )
-
         if is_mni:
+            # MNI-pure export: the anatomical reference is the standard
+            # MNI152NLin2009cAsym template (+ its brain mask), and only the
+            # native-to-MNI transforms are shipped (for reproducibility). The
+            # patient's native T1 and the T1w-space derivatives are left out so
+            # the package stays consistent and anonymized.
+            self._copy_image_as(
+                self._mni_template_t1_path(),
+                anat_dir / f"{sub}_space-{space_label}_T1w.nii.gz",
+            )
+            self._copy_image_as(
+                self._mni_template_mask_path(),
+                anat_dir / f"{sub}_space-{space_label}_desc-brain_mask.nii.gz",
+            )
+
             self._copy_if_exists(
                 getattr(self.state, "t1_to_mni_affine_path", None),
                 deriv_dir / f"{sub}_from-T1w_to-{space_label}_xfm.mat",
             )
-
             self._copy_if_exists(
                 getattr(self.state, "t1_to_mni_warp_path", None),
                 deriv_dir / f"{sub}_from-T1w_to-{space_label}_warp.nii.gz",
             )
-
             self._copy_if_exists(
                 getattr(self.state, "t1_to_mni_inverse_warp_path", None),
                 deriv_dir / f"{sub}_from-{space_label}_to-T1w_inversewarp.nii.gz",
             )
+        else:
+            # Native T1w export: patient T1 plus the coregistered derivatives
+            # (all in native T1w space). Optionally deface every image (they
+            # share the T1 space, so one deface mask applies to all).
+            deface_img = self._build_subject_deface_mask() if self._deface_requested() else None
 
-            self._copy_if_exists(
-                getattr(self.state, "t1_to_mni_warped_path", None),
-                deriv_dir / f"{sub}_space-{space_label}_desc-warpedT1w.nii.gz",
+            def _put(src, dst):
+                if deface_img is not None:
+                    self._copy_image_defaced(src, dst, deface_img)
+                else:
+                    self._copy_image_as(src, dst)
+
+            _put(
+                getattr(self.state, "t1_path", None)
+                or getattr(self.state, "t1_source_path", None),
+                anat_dir / f"{sub}_T1w.nii.gz",
+            )
+            _put(
+                getattr(self.state, "ct_coreg_path", None)
+                or getattr(self.state, "ct_path", None),
+                deriv_dir / f"{sub}_desc-coregCT_space-T1w_ct.nii.gz",
+            )
+            _put(
+                getattr(self.state, "pet_coreg_path", None)
+                or getattr(self.state, "pet_path", None),
+                deriv_dir / f"{sub}_desc-coregPET_space-T1w_pet.nii.gz",
+            )
+            _put(
+                getattr(self.state, "siscom_coreg_path", None)
+                or getattr(self.state, "siscom_path", None),
+                deriv_dir / f"{sub}_desc-SISCOM_space-T1w_siscom.nii.gz",
+            )
+            _put(
+                getattr(self.state, "parcel1_path", None),
+                deriv_dir / f"{sub}_desc-parcellation1_space-T1w_dseg.nii.gz",
+            )
+            _put(
+                getattr(self.state, "parcel2_path", None),
+                deriv_dir / f"{sub}_desc-parcellation2_space-T1w_dseg.nii.gz",
             )
 
         electrodes_tsv = ieeg_dir / f"{sub}_space-{space_label}_electrodes.tsv"
+
+        def _na(v):
+            # BIDS requires empty cells to be written as "n/a".
+            s = "" if v is None else str(v).strip()
+            return s if s != "" else "n/a"
 
         bids_rows = []
         for row in rows:
@@ -2535,19 +2826,19 @@ class ExportCoordinatesDialog(QDialog):
 
             bids_rows.append(
                 {
-                    "name": formatted_row.get("contact", ""),
-                    "x": formatted_row.get("x", "n/a"),
-                    "y": formatted_row.get("y", "n/a"),
-                    "z": formatted_row.get("z", "n/a"),
+                    "name": _na(formatted_row.get("contact", "")),
+                    "x": _na(formatted_row.get("x", "n/a")),
+                    "y": _na(formatted_row.get("y", "n/a")),
+                    "z": _na(formatted_row.get("z", "n/a")),
                     "size": 5,
                     "type": "depth SEEG",
                     "material": "Ti",
                     "manufacturer": "DIXI",
-                    "group": formatted_row.get("electrode", ""),
-                    "hemisphere": formatted_row.get("hemisphere", ""),
-                    "reference": formatted_row.get("reference", ""),
-                    "parcel1_region": formatted_row.get("parcel1_region", ""),
-                    "parcel2_region": formatted_row.get("parcel2_region", ""),
+                    "group": _na(formatted_row.get("electrode", "")),
+                    "hemisphere": _na(formatted_row.get("hemisphere", "")),
+                    "reference": _na(formatted_row.get("reference", "")),
+                    "parcel1_region": _na(formatted_row.get("parcel1_region", "")),
+                    "parcel2_region": _na(formatted_row.get("parcel2_region", "")),
                 }
             )
 
@@ -2573,11 +2864,23 @@ class ExportCoordinatesDialog(QDialog):
             for r in bids_rows:
                 writer.writerow(r)
 
-        units = "voxel" if coord_system == "VOX" else "mm"
+        units = "mm" if coord_system in ("LPS", "RAS") else "n/a"
 
         if is_mni:
+            # Reference the transform files actually shipped in this dataset,
+            # using paths relative to the dataset root. Never embed absolute
+            # local file paths (they leak the local filesystem and are not
+            # portable for a published dataset).
+            def _rel_if_present(state_attr, rel_path):
+                p = getattr(self.state, state_attr, None)
+                try:
+                    return rel_path if (p and Path(p).exists()) else ""
+                except Exception:
+                    return ""
+
+            deriv_rel = f"derivatives/neuxelec/{sub}/anat"
             coordsystem = {
-                "IntendedFor": f"{sub}/anat/{sub}_T1w.nii.gz",
+                "IntendedFor": f"{sub}/anat/{sub}_space-{space_label}_T1w.nii.gz",
                 "iEEGCoordinateSystem": "MNI152NLin2009cAsym",
                 "iEEGCoordinateSystemDescription": (
                     "MNI coordinates obtained by applying the NeuXelec T1-to-MNI transform "
@@ -2596,12 +2899,19 @@ class ExportCoordinatesDialog(QDialog):
                 "MNIExportAvailable": True,
                 "MNITransformSoftware": "ANTs",
                 "MNITransformType": "Affine + SyN warp",
-                "T1ToMNIAffineTransform": getattr(self.state, "t1_to_mni_affine_path", ""),
-                "T1ToMNIWarpTransform": getattr(self.state, "t1_to_mni_warp_path", ""),
-                "T1ToMNIInverseWarpTransform": getattr(
-                    self.state, "t1_to_mni_inverse_warp_path", ""
+                "T1ToMNIAffineTransform": _rel_if_present(
+                    "t1_to_mni_affine_path",
+                    f"{deriv_rel}/{sub}_from-T1w_to-{space_label}_xfm.mat",
                 ),
-                "MNITemplate": getattr(self.state, "mni_template_path", ""),
+                "T1ToMNIWarpTransform": _rel_if_present(
+                    "t1_to_mni_warp_path",
+                    f"{deriv_rel}/{sub}_from-T1w_to-{space_label}_warp.nii.gz",
+                ),
+                "T1ToMNIInverseWarpTransform": _rel_if_present(
+                    "t1_to_mni_inverse_warp_path",
+                    f"{deriv_rel}/{sub}_from-{space_label}_to-T1w_inversewarp.nii.gz",
+                ),
+                "MNITemplate": f"{sub}/anat/{sub}_space-{space_label}_T1w.nii.gz",
                 "MNISpaceName": getattr(self.state, "mni_space_name", "MNI152NLin2009cAsym"),
                 "iEEGCoordinateProcessingDescription": (
                     "SEEG contacts were reconstructed from post-implantation CT coregistered "
