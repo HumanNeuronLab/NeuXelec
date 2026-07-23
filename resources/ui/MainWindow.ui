@@ -2966,14 +2966,14 @@ QLabel {
                  <widget class="QLabel" name="logo_HUG">
                   <property name="minimumSize">
                    <size>
-                    <width>92</width>
-                    <height>36</height>
+                    <width>132</width>
+                    <height>34</height>
                    </size>
                   </property>
                   <property name="maximumSize">
                    <size>
-                    <width>92</width>
-                    <height>36</height>
+                    <width>132</width>
+                    <height>34</height>
                    </size>
                   </property>
                   <property name="text">
@@ -2983,7 +2983,7 @@ QLabel {
                    <pixmap>resources/images/logo_HUG.png</pixmap>
                   </property>
                   <property name="scaledContents">
-                   <bool>true</bool>
+                   <bool>false</bool>
                   </property>
                   <property name="alignment">
                    <set>Qt::AlignmentFlag::AlignCenter</set>
@@ -2994,14 +2994,14 @@ QLabel {
                  <widget class="QLabel" name="logo_UNIGE">
                   <property name="minimumSize">
                    <size>
-                    <width>150</width>
-                    <height>36</height>
+                    <width>117</width>
+                    <height>34</height>
                    </size>
                   </property>
                   <property name="maximumSize">
                    <size>
-                    <width>150</width>
-                    <height>36</height>
+                    <width>117</width>
+                    <height>34</height>
                    </size>
                   </property>
                   <property name="text">
@@ -3011,7 +3011,7 @@ QLabel {
                    <pixmap>resources/images/logo_UNIGE.png</pixmap>
                   </property>
                   <property name="scaledContents">
-                   <bool>true</bool>
+                   <bool>false</bool>
                   </property>
                   <property name="alignment">
                    <set>Qt::AlignmentFlag::AlignCenter</set>

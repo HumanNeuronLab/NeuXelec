@@ -124,6 +124,9 @@ class NeuxelecWindow(QWidget):
         # "Save project" force-save button under the Patient ID card.
         self._setup_save_project_button()
 
+        # Crisp, correctly-proportioned HUG / UNIGE logos (vector).
+        self._setup_institution_logos()
+
     def _make_padded_logo_pixmap(
         self,
         logo: QPixmap,
@@ -214,6 +217,72 @@ class NeuxelecWindow(QWidget):
                 drag_widget.installEventFilter(self)
 
         self._sync_maximize_button()
+
+    # ------------------------------------------------------------------
+    # Institution logos (HUG / UNIGE)
+    # ------------------------------------------------------------------
+    def _svg_pixmap_keep_ratio(self, svg_path, box: QSize) -> QPixmap | None:
+        """Render an SVG into `box` keeping its aspect ratio, at device DPI.
+
+        The logo is centred inside the box and never stretched, which is what
+        QLabel.scaledContents would otherwise do.
+        """
+        try:
+            from PySide6.QtCore import QRectF
+            from PySide6.QtGui import QColor
+            from PySide6.QtSvg import QSvgRenderer
+
+            renderer = QSvgRenderer(str(svg_path))
+            if not renderer.isValid():
+                return None
+
+            native = renderer.defaultSize()
+            if native.width() <= 0 or native.height() <= 0:
+                return None
+
+            ratio = native.width() / native.height()
+            w = box.width()
+            h = int(round(w / ratio))
+            if h > box.height():
+                h = box.height()
+                w = int(round(h * ratio))
+
+            dpr = float(self.devicePixelRatioF() or 1.0)
+            pm = QPixmap(int(box.width() * dpr), int(box.height() * dpr))
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(QColor(0, 0, 0, 0))
+
+            painter = QPainter(pm)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            x = (box.width() - w) / 2.0
+            y = (box.height() - h) / 2.0
+            renderer.render(painter, QRectF(x * dpr, y * dpr, w * dpr, h * dpr))
+            painter.end()
+            return pm
+        except Exception:
+            return None
+
+    def _setup_institution_logos(self) -> None:
+        """Draw the HUG / UNIGE logos from SVG so they stay sharp and undistorted."""
+        for name, svg in (
+            ("logo_HUG", "resources/images/logo_HUG.svg"),
+            ("logo_UNIGE", "resources/images/logo_UNIGE.svg"),
+        ):
+            try:
+                label = self.ui.findChild(QLabel, name)
+                if label is None:
+                    continue
+                path = resource_path(svg)
+                if not Path(path).exists():
+                    continue  # keep the .ui PNG fallback
+                label.setScaledContents(False)
+                pm = self._svg_pixmap_keep_ratio(path, label.size())
+                if pm is not None:
+                    label.setPixmap(pm)
+                    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            except Exception:
+                continue
 
     # ------------------------------------------------------------------
     # "Save project" force-save button

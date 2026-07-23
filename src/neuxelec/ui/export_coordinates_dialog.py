@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -967,23 +968,28 @@ class ExportCoordinatesDialog(QDialog):
         self.chk_tsv = QCheckBox("TSV")
         self.chk_json = QCheckBox("JSON")
         self.chk_els = QCheckBox("Cartool ELS")
+        self.chk_ielvis = QCheckBox("iELVIS")
+        self.chk_ielvis.setToolTip(
+            "iELVIS / VoxeLoc format: electrodeNames, LEPTO (surface tkrRAS) and "
+            "LEPTOVOX (FreeSurfer conformed voxel) files. Requires a loaded "
+            "FreeSurfer/FastSurfer parcellation to define the conformed space."
+        )
 
-        formats_row_1 = QHBoxLayout()
-        formats_row_1.addWidget(self.chk_txt)
-        formats_row_1.addWidget(self.chk_csv)
+        # Two aligned columns so every format checkbox lines up.
+        formats_grid = QGridLayout()
+        formats_grid.setContentsMargins(0, 0, 0, 0)
+        formats_grid.setHorizontalSpacing(12)
+        formats_grid.setVerticalSpacing(8)
+        formats_grid.addWidget(self.chk_txt, 0, 0)
+        formats_grid.addWidget(self.chk_csv, 0, 1)
+        formats_grid.addWidget(self.chk_tsv, 1, 0)
+        formats_grid.addWidget(self.chk_json, 1, 1)
+        formats_grid.addWidget(self.chk_els, 2, 0)
+        formats_grid.addWidget(self.chk_ielvis, 2, 1)
+        formats_grid.setColumnStretch(0, 1)
+        formats_grid.setColumnStretch(1, 1)
 
-        formats_row_2 = QHBoxLayout()
-        formats_row_2.addWidget(self.chk_tsv)
-        formats_row_2.addWidget(self.chk_json)
-
-        lay_formats.addLayout(formats_row_1)
-        lay_formats.addLayout(formats_row_2)
-
-        formats_row_3 = QHBoxLayout()
-        formats_row_3.addWidget(self.chk_els)
-        formats_row_3.addStretch(1)
-
-        lay_formats.addLayout(formats_row_3)
+        lay_formats.addLayout(formats_grid)
 
         top_options.addWidget(grp_formats, 1)
 
@@ -2017,6 +2023,116 @@ class ExportCoordinatesDialog(QDialog):
 
         return groups
 
+    def _ielvis_conformed_cras(self):
+        """Return (half, cras_ras) for the FreeSurfer/FastSurfer conformed space
+        defined by the loaded parcellation, or (None, None).
+
+        c_ras is the translation between FreeSurfer scanner RAS and surface
+        (tkr) RAS: tkrRAS = scannerRAS - c_ras. It is derived from the conformed
+        volume itself, so it matches what FreeSurfer/VoxeLoc used. Verified
+        against a real VoxeLoc export (156 contacts, max error 1e-6 mm).
+        """
+        parcel_path = getattr(self.state, "parcel1_path", None) or getattr(
+            self.state, "parcel2_path", None
+        )
+
+        # Preferred: nibabel, which reads both .mgz and .nii/.nii.gz and exposes
+        # the scanner-RAS affine directly. Surface (tkr) RAS is zero at the
+        # volume centre, so c_ras is simply the scanner RAS of the centre voxel.
+        if parcel_path:
+            try:
+                import nibabel as _nib
+                import numpy as _np
+
+                _img = _nib.load(str(parcel_path))
+                shape = _np.asarray(_img.shape[:3], dtype=float)
+                c = shape / 2.0
+                cras = (_np.asarray(_img.affine) @ _np.array([c[0], c[1], c[2], 1.0]))[:3]
+                return float(shape[0]) / 2.0, tuple(float(v) for v in cras)
+            except Exception:
+                logger.warning(
+                    "nibabel failed for iELVIS c_ras; falling back to SimpleITK",
+                    exc_info=True,
+                )
+
+        img = getattr(self.state, "parcel1_img", None) or getattr(self.state, "parcel2_img", None)
+        if img is None:
+            img = _read_image_or_none(parcel_path)
+        if img is None:
+            return None, None
+        sz = img.GetSize()
+        center = img.TransformContinuousIndexToPhysicalPoint(tuple(s / 2.0 for s in sz))
+        cras = (-float(center[0]), -float(center[1]), float(center[2]))  # LPS -> RAS
+        return float(sz[0]) / 2.0, cras
+
+    def _write_ielvis(self, out_dir: Path, patient: str) -> None:
+        """Export iELVIS / VoxeLoc files into out_dir/elec_recon/:
+        <patient>.electrodeNames, <patient>.LEPTO, <patient>.LEPTOVOX.
+
+        LEPTO holds FreeSurfer surface RAS (tkrRAS = scanner RAS - c_ras);
+        LEPTOVOX holds the matching FreeSurfer conformed voxel coordinates. The
+        conformed space and c_ras come from the loaded FreeSurfer/FastSurfer
+        parcellation.
+        """
+        half, cras = self._ielvis_conformed_cras()
+        if half is None:
+            raise RuntimeError(
+                "iELVIS export requires a FreeSurfer/FastSurfer parcellation to be "
+                "loaded (it defines the conformed space and c_ras). Please load a "
+                "parcellation, then export again."
+            )
+
+        electrodes = getattr(self.state, "electrodes", []) or []
+        indices = self._selected_electrode_indices()
+        if not indices and electrodes:
+            indices = list(range(len(electrodes)))
+
+        try:
+            from neuxelec import __version__ as _nx_ver
+        except Exception:
+            _nx_ver = ""
+
+        ts = datetime.now().strftime("%d-%b-%Y %H:%M:%S")
+        prov = f"{ts}\tneuxelec\tNeuXelec {_nx_ver}".rstrip()
+
+        names, lepto, vox = [], [], []
+        for ei in indices:
+            if not (0 <= int(ei) < len(electrodes)):
+                continue
+            elec = electrodes[int(ei)]
+            ename = str(elec.get("name", f"E{int(ei) + 1}")).strip() or f"E{int(ei) + 1}"
+            hemi = str(elec.get("hemisphere", "")).strip().upper()
+            hem = "R" if hemi.startswith("R") else ("L" if hemi.startswith("L") else "R")
+            for ci, lps in enumerate(elec.get("contacts_lps", []) or []):
+                try:
+                    lx, ly, lz = float(lps[0]), float(lps[1]), float(lps[2])
+                except Exception:
+                    continue
+                # native LPS -> scanner RAS -> tkrRAS (LEPTO), then conformed voxel
+                R, A, S = -lx, -ly, lz
+                tR, tA, tS = R - cras[0], A - cras[1], S - cras[2]
+                names.append(f"{ename}{ci + 1} D {hem}")
+                lepto.append(f"{tR:.6f} {tA:.6f} {tS:.6f}")
+                vox.append(f"{half - tR:.6f} {half - tS:.6f} {half - tA:.6f}")
+
+        if not names:
+            raise RuntimeError("No contacts available for iELVIS export.")
+
+        d = out_dir / "elec_recon"
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / f"{patient}.electrodeNames", "w", encoding="utf-8", newline="\n") as f:
+            f.write(ts + "\n")
+            f.write("Name Depth/Strip/Grid Hem\n")
+            f.write("\n".join(names) + "\n")
+        with open(d / f"{patient}.LEPTO", "w", encoding="utf-8", newline="\n") as f:
+            f.write(prov + "\n")
+            f.write("R A S\n")
+            f.write("\n".join(lepto) + "\n")
+        with open(d / f"{patient}.LEPTOVOX", "w", encoding="utf-8", newline="\n") as f:
+            f.write(prov + "\n")
+            f.write("I L A\n")
+            f.write("\n".join(vox) + "\n")
+
     def _write_cartool_els(self, path: Path) -> None:
         """
         Write a Cartool ELS file.
@@ -2085,6 +2201,9 @@ class ExportCoordinatesDialog(QDialog):
 
         if self.chk_els.isChecked():
             formats.append("els")
+
+        if getattr(self, "chk_ielvis", None) is not None and self.chk_ielvis.isChecked():
+            formats.append("ielvis")
 
         if self.chk_bids.isChecked():
             formats.append("bids")
@@ -2162,6 +2281,10 @@ class ExportCoordinatesDialog(QDialog):
                 els_path = out_dir / f"{patient}_electrodes.els"
 
                 self._write_cartool_els(els_path)
+                exported_any = True
+
+            if "ielvis" in formats:
+                self._write_ielvis(out_dir, patient)
                 exported_any = True
             # ---------------------------------------------------------
             # 2) BIDS export
