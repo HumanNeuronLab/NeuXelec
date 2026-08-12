@@ -35,7 +35,7 @@ from ..ui.overlay_viewer import OverlayViewer
 from ..ui.page_loading_overlay import PageLoadingOverlay
 from ..ui.pial_coreg_dialog import PialCoregDialog
 from ..utils.format_convert import convert_to_nifti_if_needed
-from ..utils.t1_conform import ask_user_to_conform_t1_if_needed
+from ..utils.image_ingest import ingest_image_with_prompt
 
 Modality = Literal["T2", "CT", "PET", "ictalSPECT", "interictalSPECT"]
 
@@ -49,7 +49,7 @@ class FilesPage:
     Design choice (requested):
       - Coregistration is ALWAYS pairwise: T1 (fixed) + exactly ONE moving modality.
       - No preview when clicking "Perform" (fully automatic).
-      - Visual check + optional manual refinement happens in "Check coregistration".
+      - Visual check + optional manual refinement happens in "Review coregistration".
     """
 
     def __init__(
@@ -1339,37 +1339,40 @@ class FilesPage:
 
     def _import_imaging_file(self, role: str, source_path: str, path: str) -> None:
         role = str(role)
-        if role == "T1":
-            try:
-                final_path, final_img, conform_info = ask_user_to_conform_t1_if_needed(
-                    path,
-                    parent=self._dialog_parent(),
-                )
-            except Exception as e:
-                NeuXelecMessageDialog.critical(
-                    self._dialog_parent(),
-                    "T1 resolution check failed",
-                    f"The T1 resolution could not be checked.\n\nDetails:\n{e}",
-                )
+
+        # Every imaging modality is sanitized on load (per-modality intensity
+        # cleaning, e.g. CT Hounsfield clamping, plus 1 mm isotropic for the T1
+        # reference). Voxel orientation is left untouched so the viewers keep
+        # their existing left/right handling. Parcellations/surfaces are handled
+        # separately and are not normalized here.
+        _imaging_roles = {"T1", "T2", "CT", "PET", "ictalSPECT", "interictalSPECT"}
+        norm_info: dict = {}
+        norm_img = None
+        if role in _imaging_roles:
+            final_path, norm_img, norm_info = self._normalize_on_load(
+                role, path, make_isotropic=(role == "T1")
+            )
+            if final_path is None:
                 return
+            path = final_path
 
+        if role == "T1":
             self.state.t1_source_path = source_path
-            self.state.t1_path = final_path
-            self.state.t1_sitk = final_img
+            self.state.t1_path = path
+            self.state.t1_sitk = norm_img
 
-            self.state.t1_was_conformed = bool(conform_info.get("was_conformed", False))
-
+            self.state.t1_was_conformed = bool(norm_info.get("was_modified", False))
             self.state.t1_conformed_path = (
-                str(conform_info.get("final_path"))
-                if bool(conform_info.get("was_conformed", False))
+                str(norm_info.get("final_path"))
+                if norm_info.get("was_modified")
                 else None
             )
-            self.state.t1_original_spacing = conform_info.get("original_spacing", None)
-            self.state.t1_conformed_spacing = conform_info.get("final_spacing", None)
+            self.state.t1_original_spacing = norm_info.get("original_spacing", None)
+            self.state.t1_conformed_spacing = norm_info.get("final_spacing", None)
             if self.le_t1:
-                self.le_t1.setText(final_path)
+                self.le_t1.setText(path)
                 self.le_t1.setCursorPosition(0)
-                self.le_t1.setToolTip(final_path)
+                self.le_t1.setToolTip(path)
             if self.chk_t1 is not None:
                 self.chk_t1.setEnabled(True)
             self._force_t1_checked()
@@ -1377,7 +1380,7 @@ class FilesPage:
             vp = self._view3d()
             if vp is not None:
                 try:
-                    vp.set_t1(self.state.t1_sitk, t1_path=final_path)
+                    vp.set_t1(self.state.t1_sitk, t1_path=path)
                 except Exception:
                     pass
             op = getattr(self.state, "oblique_page", None)
@@ -1882,6 +1885,37 @@ class FilesPage:
     # ------------------------
     # Loaders
     # ------------------------
+    def _normalize_on_load(
+        self,
+        modality: str,
+        path: str,
+        *,
+        make_isotropic: bool = False,
+    ):
+        """Sanitize a freshly picked image on load.
+
+        Cleans intensities per modality (e.g. CT Hounsfield clamping) and, for
+        the T1 reference, resamples to 1 mm isotropic. Voxel orientation is left
+        untouched. If anything is modified the user is asked where to save the
+        cleaned copy, which then becomes the file NeuXelec uses.
+
+        Returns (final_path, sitk_image, info) or (None, None, None) on failure.
+        """
+        try:
+            return ingest_image_with_prompt(
+                path,
+                modality,
+                parent=self._dialog_parent(),
+                make_isotropic=make_isotropic,
+            )
+        except Exception as e:
+            NeuXelecMessageDialog.critical(
+                self._dialog_parent(),
+                f"Load {modality} failed",
+                f"The {modality} could not be read or normalized.\n\nDetails:\n{e}",
+            )
+            return None, None, None
+
     def load_t1(self):
         picked = self._pick_path_or_convert("Select MRI 1 (fixed)")
         if not picked:
@@ -1889,17 +1923,10 @@ class FilesPage:
 
         source_path, path = picked
 
-        try:
-            final_path, final_img, conform_info = ask_user_to_conform_t1_if_needed(
-                path,
-                parent=self._dialog_parent(),
-            )
-        except Exception as e:
-            NeuXelecMessageDialog.critical(
-                self._dialog_parent(),
-                "MRI 1 resolution check failed",
-                ("The MRI 1 resolution could not be checked.\n\n" f"Details:\n{e}"),
-            )
+        final_path, final_img, info = self._normalize_on_load(
+            "T1", path, make_isotropic=True
+        )
+        if final_path is None:
             return
 
         self.state.t1_source_path = source_path
@@ -1907,20 +1934,12 @@ class FilesPage:
         self.state.t1_sitk = final_img
         self._ask_mri_filename_label("T1", source_path=source_path)
 
-        self.state.t1_was_conformed = bool(conform_info.get("was_conformed", False))
+        self.state.t1_was_conformed = bool(info.get("was_modified", False))
         self.state.t1_conformed_path = (
-            str(conform_info.get("final_path"))
-            if bool(conform_info.get("was_conformed", False))
-            else None
+            str(info.get("final_path")) if info.get("was_modified") else None
         )
-        self.state.t1_original_spacing = conform_info.get(
-            "original_spacing",
-            None,
-        )
-        self.state.t1_conformed_spacing = conform_info.get(
-            "final_spacing",
-            None,
-        )
+        self.state.t1_original_spacing = info.get("original_spacing", None)
+        self.state.t1_conformed_spacing = info.get("final_spacing", None)
 
         if self.le_t1:
             self.le_t1.setText(final_path)
@@ -1963,6 +1982,10 @@ class FilesPage:
         if not picked:
             return
         source_path, path = picked
+        final_path, _img, _info = self._normalize_on_load("T2", path)
+        if final_path is None:
+            return
+        path = final_path
         self.state.t2_source_path = source_path
         self.state.t2_path = path
         self._ask_mri_filename_label("T2", source_path=source_path)
@@ -1991,6 +2014,10 @@ class FilesPage:
         if not picked:
             return
         source_path, path = picked
+        final_path, _img, _info = self._normalize_on_load("CT", path)
+        if final_path is None:
+            return
+        path = final_path
         self.state.ct_source_path = source_path
         self.state.ct_path = path
 
@@ -2032,6 +2059,10 @@ class FilesPage:
         if not picked:
             return
         source_path, path = picked
+        final_path, _img, _info = self._normalize_on_load("PET", path)
+        if final_path is None:
+            return
+        path = final_path
         self.state.pet_source_path = source_path
         self.state.pet_path = path
         if self.le_pet:
@@ -2047,6 +2078,10 @@ class FilesPage:
         if not picked:
             return
         source_path, path = picked
+        final_path, _img, _info = self._normalize_on_load("ictalSPECT", path)
+        if final_path is None:
+            return
+        path = final_path
         self.state.ictal_spect_source_path = source_path
         self.state.ictal_spect_path = path
         if self.le_ictal:
@@ -2062,6 +2097,10 @@ class FilesPage:
         if not picked:
             return
         source_path, path = picked
+        final_path, _img, _info = self._normalize_on_load("interictalSPECT", path)
+        if final_path is None:
+            return
+        path = final_path
         self.state.interictal_spect_source_path = source_path
         self.state.interictal_spect_path = path
         if self.le_interictal:
@@ -2082,6 +2121,10 @@ class FilesPage:
             return
 
         source_path, path = picked
+        final_path, _img, _info = self._normalize_on_load("SISCOM", path)
+        if final_path is None:
+            return
+        path = final_path
         self.state.siscom_path = path
 
         if self.le_siscom:
@@ -3657,7 +3700,7 @@ class FilesPage:
         NeuXelecMessageDialog.information(
             self._dialog_parent(),
             "Coregistration",
-            f"{self._display_modality_name(modality)} → MRI 1 done. Click 'Check coregistration'.",
+            f"{self._display_modality_name(modality)} → MRI 1 done. Click 'Review coregistration'.",
         )
 
     def _on_coreg_fail(self, modality: str, msg: str):
@@ -3717,7 +3760,7 @@ class FilesPage:
 
         if self.state.t1_sitk is None:
             NeuXelecMessageDialog.warning(
-                self._dialog_parent(), "Check coregistration", "No T1 available."
+                self._dialog_parent(), "Review coregistration", "No T1 available."
             )
             return
 
@@ -3725,7 +3768,7 @@ class FilesPage:
         if modality is None:
             NeuXelecMessageDialog.warning(
                 self._dialog_parent(),
-                "Check coregistration",
+                "Review coregistration",
                 "Please select exactly one modality to check.",
             )
             return
@@ -3738,7 +3781,7 @@ class FilesPage:
             if not moving_path:
                 NeuXelecMessageDialog.warning(
                     self._dialog_parent(),
-                    "Check coregistration",
+                    "Review coregistration",
                     "No image loaded for this modality.",
                 )
                 return
@@ -3755,7 +3798,7 @@ class FilesPage:
                 moving_name = f"{modality} (not coregistered)"
             except Exception as e:
                 NeuXelecMessageDialog.critical(
-                    self._dialog_parent(), "Check coregistration", f"Failed to load image:\n{e}"
+                    self._dialog_parent(), "Review coregistration", f"Failed to load image:\n{e}"
                 )
                 return
 

@@ -1843,7 +1843,7 @@ class OverlayViewer(QDialog):
         self.moving_img = moving_in_t1
         self.moving_name = moving_name
 
-        self.setWindowTitle(f"Check coregistration: MRI 1 + {self.moving_name}")
+        self.setWindowTitle(f"Review coregistration: MRI 1 + {self.moving_name}")
 
         # Frameless rounded NeuXelec window.
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint)
@@ -1944,7 +1944,7 @@ class OverlayViewer(QDialog):
         content_layout.setContentsMargins(8, 6, 8, 8)
         content_layout.setSpacing(10)
 
-        self.lbl_title = QLabel("CHECK COREGISTRATION")
+        self.lbl_title = QLabel("REVIEW COREGISTRATION")
         self.lbl_title.setObjectName("dialogTitle")
         self.lbl_title.setAlignment(Qt.AlignCenter)
         content_layout.addWidget(self.lbl_title)
