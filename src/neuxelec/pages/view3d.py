@@ -534,6 +534,7 @@ class View3DPage(
         self._surface_projection_actors = {}  # elec_id -> {"cross": actor, "label": actor}
         # Page-specific label visibility (must NOT be shared with other pages)
         self._page_contact_labels_visible = {}  # elec_id -> [bool, bool, ...]
+        self._page_electrode_label_visible = {}  # elec_id -> bool (single electrode-name label)
         self._page_electrode_visible = {}  # elec_id -> bool
         self._page_contacts_visible = {}  # elec_id -> [bool, bool, ...]
         # Contact label temporarily displayed by "Show coronal/axial/sagittal slice".
@@ -831,6 +832,24 @@ class View3DPage(
 
                     label_pts.append(label_pos)
                     label_txt.append(f"{elec.get('name', 'E')}{ci + 1}")
+
+                # Single electrode-name label anchored on the deepest visible
+                # contact (offset opposite the contact labels to avoid overlap).
+                if self.is_electrode_label_visible(elec_id):
+                    for ci, p in enumerate(contacts_lps):
+                        if not bool(contacts_visible[ci]):
+                            continue
+                        ras = np.array(
+                            [float(p[0]), float(p[1]), float(p[2])], dtype=np.float32
+                        )
+                        ras[0] *= -1.0
+                        ras[1] *= -1.0
+                        elec_label_pos = ras.copy()
+                        elec_label_pos[0] -= 3.0
+                        elec_label_pos[2] -= 3.0
+                        label_pts.append(elec_label_pos)
+                        label_txt.append(str(elec.get("name", "E")))
+                        break
 
                 if label_pts:
                     label_actor = self.plotter.add_point_labels(
@@ -4202,6 +4221,16 @@ class View3DPage(
         if not bool(getattr(self, "_suspend_electrode_refresh", False)):
             self._render_single_electrode(int(elec_id))
 
+    def is_electrode_label_visible(self, elec_id: int) -> bool:
+        """Whether the single electrode-name label is shown for this electrode."""
+        return bool(self._page_electrode_label_visible.get(int(elec_id), False))
+
+    def set_electrode_label_visible(self, elec_id: int, visible: bool) -> None:
+        """Show/hide a single label with the electrode name (deepest contact)."""
+        self._page_electrode_label_visible[int(elec_id)] = bool(visible)
+        if not bool(getattr(self, "_suspend_electrode_refresh", False)):
+            self._render_single_electrode(int(elec_id))
+
     def _mni_mode_is_active(self) -> bool:
         try:
             return bool(self.chk_mni_atlas is not None and self.chk_mni_atlas.isChecked())
@@ -4492,6 +4521,23 @@ class View3DPage(
 
                         label_pts.append(label_pos)
                         label_txt.append(f"{elec.get('name', 'E')}{ci + 1}")
+
+                    # Single electrode-name label on the deepest visible contact.
+                    if self.is_electrode_label_visible(elec_id):
+                        for ci, p in enumerate(contacts_lps):
+                            if not bool(contacts_visible[ci]):
+                                continue
+                            ras = np.array(
+                                [float(p[0]), float(p[1]), float(p[2])], dtype=np.float32
+                            )
+                            ras[0] *= -1.0
+                            ras[1] *= -1.0
+                            elec_label_pos = ras.copy()
+                            elec_label_pos[0] -= 3.0
+                            elec_label_pos[2] -= 3.0
+                            label_pts.append(elec_label_pos)
+                            label_txt.append(str(elec.get("name", "E")))
+                            break
 
                     if label_pts:
                         pts_np = np.asarray(label_pts, dtype=np.float32)

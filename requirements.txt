@@ -16,3 +16,4 @@ scipy==1.17.1
 matplotlib==3.10.8
 openpyxl>=3.1          # XLSX export (MNI parcellation table)
 Pillow>=10.0           # image handling / icon generation
+imageio==2.37.2        # rotating 3D GIF export (PyVista open_gif)

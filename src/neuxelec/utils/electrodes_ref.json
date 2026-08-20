@@ -1,68 +1,68 @@
 {
-  "D08-05AM": {
+  "DIXI-D08-05AM": {
     "n": 5,
     "d": 3.5,
     "skip": [],
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "D08-08AM": {
+  "DIXI-D08-08AM": {
     "n": 8,
     "d": 3.5,
     "skip": [],
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "D08-10AM": {
+  "DIXI-D08-10AM": {
     "n": 10,
     "d": 3.5,
     "skip": [],
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "D08-12AM": {
+  "DIXI-D08-12AM": {
     "n": 12,
     "d": 3.5,
     "skip": [],
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "D08-15AM": {
+  "DIXI-D08-15AM": {
     "n": 15,
     "d": 3.5,
     "skip": [],
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "D08-18AM": {
+  "DIXI-D08-18AM": {
     "n": 18,
     "d": 3.5,
     "skip": [],
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "MM08-09A33D08": {
+  "DIXI-MM08-09A33D08": {
     "n": 9,
     "d": 3.9,
     "skip": [],
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "MM08-09A40D08": {
+  "DIXI-MM08-09A40D08": {
     "n": 9,
     "d": 4.8,
     "skip": [],
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "MM08-09A51D08": {
+  "DIXI-MM08-09A51D08": {
     "n": 9,
     "d": 6.1,
     "skip": [],
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "MM08-06B33D12": {
+  "DIXI-MM08-06B33D12": {
     "n": 6,
     "d": 4.0,
     "skip": [
@@ -73,7 +73,7 @@
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "MM08-06B40D12": {
+  "DIXI-MM08-06B40D12": {
     "n": 6,
     "d": 4.0,
     "skip": [
@@ -86,7 +86,7 @@
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "MM08-06B51D12": {
+  "DIXI-MM08-06B51D12": {
     "n": 6,
     "d": 4.0,
     "skip": [
@@ -101,7 +101,7 @@
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "D08-15PIX": {
+  "DIXI-D08-15PIX": {
     "n": 15,
     "d": 2.0,
     "skip": [],
@@ -115,7 +115,7 @@
     "spacing_profile_mm": [],
     "manufacturer": "DIXI"
   },
-  "D08-18PIX": {
+  "DIXI-D08-18PIX": {
     "n": 18,
     "d": 2.0,
     "skip": [],

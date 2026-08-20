@@ -40,6 +40,7 @@ for package_name in (
     "nibabel",
     "SimpleITK",
     "openpyxl",
+    "imageio",
 ):
     pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(package_name)
     datas += pkg_datas

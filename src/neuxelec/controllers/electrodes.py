@@ -624,6 +624,14 @@ class ElectrodesController(QObject):
                     pass
                 return
 
+            if action == "toggle_electrode_label":
+                try:
+                    cur = bool(op.is_electrode_label_visible(int(elec_id)))
+                    op.set_electrode_label_visible(int(elec_id), not cur)
+                except Exception:
+                    pass
+                return
+
             if action == "toggle_label":
                 try:
                     elec = self.state.electrodes[int(elec_id)]
@@ -669,6 +677,14 @@ class ElectrodesController(QObject):
                     vals = vp._get_local_contact_labels_visible(int(elec_id), n)
                     new_state = not any(vals)
                     vp.set_labels_visible(int(elec_id), new_state)
+                except Exception:
+                    pass
+                return
+
+            if action == "toggle_electrode_label":
+                try:
+                    cur = bool(vp.is_electrode_label_visible(int(elec_id)))
+                    vp.set_electrode_label_visible(int(elec_id), not cur)
                 except Exception:
                     pass
                 return
@@ -2633,17 +2649,23 @@ class ElectrodesController(QObject):
             contacts_lps = elec.get("contacts_lps", []) or []
 
             labels_on = False
+            electrode_label_on = False
+            page_widget = None
             if current_page == "pageObliqueSlices":
-                op = getattr(self.state, "oblique_page", None)
-                if op is not None and hasattr(op, "_get_local_contact_labels_visible"):
-                    vals = op._get_local_contact_labels_visible(elec_id, len(contacts_lps))
-                    labels_on = any(vals)
-
+                page_widget = getattr(self.state, "oblique_page", None)
             elif current_page == "page3DView":
-                vp = getattr(self.state, "view3d_page", None)
-                if vp is not None and hasattr(vp, "_get_local_contact_labels_visible"):
-                    vals = vp._get_local_contact_labels_visible(elec_id, len(contacts_lps))
-                    labels_on = any(vals)
+                page_widget = getattr(self.state, "view3d_page", None)
+
+            if page_widget is not None and hasattr(
+                page_widget, "_get_local_contact_labels_visible"
+            ):
+                vals = page_widget._get_local_contact_labels_visible(elec_id, len(contacts_lps))
+                labels_on = any(vals)
+            if page_widget is not None and hasattr(page_widget, "is_electrode_label_visible"):
+                try:
+                    electrode_label_on = bool(page_widget.is_electrode_label_visible(elec_id))
+                except Exception:
+                    electrode_label_on = False
 
             vp = getattr(self.state, "view3d_page", None)
             projection_on = False
@@ -2658,6 +2680,7 @@ class ElectrodesController(QObject):
                 kind="electrode",
                 current_page=current_page,
                 labels_on=labels_on,
+                electrode_label_on=electrode_label_on,
                 projection_on=projection_on,
                 selection_count=len(selected_elec_ids),
                 editable=editable,
@@ -2666,6 +2689,10 @@ class ElectrodesController(QObject):
 
             if choice == "toggle_labels":
                 self._dispatch_local_visual_update("toggle_labels", elec_id)
+                return
+
+            if choice == "toggle_electrode_label":
+                self._dispatch_local_visual_update("toggle_electrode_label", elec_id)
                 return
 
             if choice == "toggle_projection":

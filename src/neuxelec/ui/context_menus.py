@@ -381,6 +381,7 @@ def exec_electrode_tree_menu(
     kind: str,
     current_page: str,
     labels_on: bool = False,
+    electrode_label_on: bool = False,
     label_on: bool = False,
     projection_on: bool = False,
     selection_count: int = 1,
@@ -390,6 +391,7 @@ def exec_electrode_tree_menu(
 
     if kind == "electrode":
         act_toggle_labels = None
+        act_toggle_electrode_label = None
         act_toggle_projection = None
         act_rename_elec = None
         act_color_elec = None
@@ -397,7 +399,12 @@ def exec_electrode_tree_menu(
 
         # Labels on Oblique Slice and 3D View
         if current_page in ("pageObliqueSlices", "page3DView"):
-            act_toggle_labels = menu.addAction("Remove labels" if labels_on else "Add labels")
+            act_toggle_labels = menu.addAction(
+                "Remove contact labels" if labels_on else "Add contact labels"
+            )
+            act_toggle_electrode_label = menu.addAction(
+                "Remove electrode label" if electrode_label_on else "Add electrode label"
+            )
 
         # Projection ONLY on 3D View
         if current_page == "page3DView":
@@ -431,6 +438,8 @@ def exec_electrode_tree_menu(
 
         if act_toggle_labels is not None and action == act_toggle_labels:
             return "toggle_labels"
+        if act_toggle_electrode_label is not None and action == act_toggle_electrode_label:
+            return "toggle_electrode_label"
         if act_toggle_projection is not None and action == act_toggle_projection:
             return "toggle_projection"
         if act_rename_elec is not None and action == act_rename_elec:

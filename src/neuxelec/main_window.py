@@ -1001,6 +1001,13 @@ class NeuxelecWindow(QWidget):
     def _restore_electrodes(self) -> None:
         self.reco_page._electrodes = self.state.electrodes
 
+        # Upgrade legacy electrode references (e.g. 'D08-12AM' -> 'DIXI-D08-12AM')
+        # loaded from older projects. Defensive: never blocks project loading.
+        try:
+            self.reco_page.migrate_electrode_refs()
+        except Exception:
+            pass
+
         # Restore MNI electrode sets (generated or loaded) into the 3D view:
         # repopulate the MNI list and re-render the MNI scene from the state that
         # was just loaded from the project JSON, including their saved colours.

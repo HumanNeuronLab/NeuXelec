@@ -3,6 +3,7 @@ from __future__ import annotations
 import colorsys
 import json
 import math
+import os
 import random
 from pathlib import Path
 
@@ -183,6 +184,57 @@ def _resource_electrodes_ref_path() -> Path:
 
 def _resource_electrodes_ref_json_path() -> Path:
     return _resource_electrodes_ref_path().with_suffix(".json")
+
+
+def _user_electrodes_ref_path() -> Path:
+    """Writable per-user electrode references file.
+
+    Lives in %LOCALAPPDATA%/NeuXelec (like the log file) so it is writable in the
+    installed app (the bundled references are read-only) and survives updates.
+    """
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+    return Path(base) / "NeuXelec" / "user_electrodes_ref.json"
+
+
+def _load_user_electrode_refs() -> dict:
+    """Load the user's custom electrode references (empty if none)."""
+    p = _user_electrodes_ref_path()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        print("[Electrode references] Could not read user references file:", e)
+        return {}
+    refs = {}
+    if isinstance(data, dict):
+        for name, raw in data.items():
+            name = str(name or "").strip()
+            if name:
+                refs[name] = _normalize_ref_info(raw)
+    return refs
+
+
+def _save_user_electrode_ref(name: str, n_contacts: int, spacing_mm: float) -> None:
+    """Persist one custom reference to the writable user file."""
+    p = _user_electrodes_ref_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    if p.exists():
+        try:
+            loaded = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            existing = {}
+    existing[str(name).strip()] = {
+        "n": int(n_contacts),
+        "d": float(spacing_mm),
+        "skip": [],
+        "spacing_profile_mm": [],
+        "manufacturer": "Custom",
+    }
+    p.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _sanitize_spacing_profile(profile) -> list[float]:
@@ -389,6 +441,12 @@ def _parse_electrode_refs(txt_path: Path):
         refs.update(_parse_electrode_refs_json(txt_path.with_suffix(".json")))
     except Exception as e:
         print("[Electrode references] JSON loading failed:", e)
+
+    # User-defined references (writable file, loaded on every launch).
+    try:
+        refs.update(_load_user_electrode_refs())
+    except Exception as e:
+        print("[Electrode references] user references loading failed:", e)
 
     refs.setdefault(
         "Other",
@@ -1300,6 +1358,40 @@ class ReconstructionPage:
 
         return str(ref_name or "").strip().lower() == "other"
 
+    def _ordered_ref_names(self) -> list[str]:
+        """Reference names sorted alphabetically, with 'Other' always last."""
+        rest = sorted(
+            (n for n in self._refs if not self._is_other_ref(n)), key=str.lower
+        )
+        others = [n for n in self._refs if self._is_other_ref(n)]
+        return rest + others
+
+    def migrate_electrode_refs(self) -> None:
+        """Upgrade legacy electrode references to the prefixed scheme.
+
+        The bundled DIXI references gained a 'DIXI-' prefix (e.g. 'D08-12AM' ->
+        'DIXI-D08-12AM'). Electrodes reconstructed before that change stored the
+        un-prefixed name, which would otherwise no longer match a reference
+        (blank in the combo, mixed exports). This maps each such electrode to the
+        new name ONLY when a matching prefixed reference exists. Defensive:
+        already-valid, custom or unknown references are left untouched.
+        """
+        try:
+            electrodes = getattr(self.state, "electrodes", None) or []
+            refs = getattr(self, "_refs", None) or {}
+        except Exception:
+            return
+        for elec in electrodes:
+            try:
+                ref = str(elec.get("ref", "")).strip()
+                if not ref or ref in refs:
+                    continue
+                prefixed = f"DIXI-{ref}"
+                if prefixed in refs:
+                    elec["ref"] = prefixed
+            except Exception:
+                continue
+
     def _init_ref_combo(self):
         if self.combo_ref is None:
             return
@@ -1311,7 +1403,7 @@ class ReconstructionPage:
         self.combo_ref.addItem(placeholder)
 
         if self._refs:
-            self.combo_ref.addItems(sorted(self._refs.keys()))
+            self.combo_ref.addItems(self._ordered_ref_names())
 
         self.combo_ref.setCurrentIndex(0)
         self.combo_ref.blockSignals(False)
@@ -1346,22 +1438,10 @@ class ReconstructionPage:
 
         # ---------------------------------------------------------
         # Other:
-        # fields become editable.
+        # open a dialog to create and permanently save a custom reference.
         # ---------------------------------------------------------
         if self._is_other_ref(ref_name):
-            if self.edit_nb_contacts is not None:
-                self.edit_nb_contacts.clear()
-                self.edit_nb_contacts.setEnabled(True)
-                self.edit_nb_contacts.setReadOnly(False)
-                self.edit_nb_contacts.setPlaceholderText("Number of contacts")
-
-            if self.edit_interdist is not None:
-                self.edit_interdist.clear()
-                self.edit_interdist.setEnabled(True)
-                self.edit_interdist.setReadOnly(False)
-                self.edit_interdist.setPlaceholderText("Distance in mm")
-
-            self._update_estimate_enabled()
+            self._prompt_new_electrode_ref()
             return
 
         # ---------------------------------------------------------
@@ -1397,6 +1477,48 @@ class ReconstructionPage:
                 self.edit_interdist.setToolTip("")
 
         self._update_estimate_enabled()
+
+    def _reset_ref_combo_to_placeholder(self) -> None:
+        if self.combo_ref is None:
+            return
+        self.combo_ref.blockSignals(True)
+        self.combo_ref.setCurrentIndex(0)
+        self.combo_ref.blockSignals(False)
+        self._on_ref_changed(self.combo_ref.currentText())
+
+    def _prompt_new_electrode_ref(self) -> None:
+        """Ask for a custom reference, save it to the user file, and select it."""
+        from ..ui.add_electrode_ref_dialog import AddElectrodeRefDialog
+
+        parent = self.combo_ref.window() if self.combo_ref is not None else None
+        dlg = AddElectrodeRefDialog(parent=parent, existing_names=list(self._refs.keys()))
+        if not dlg.exec():
+            # cancelled -> revert to the placeholder, do not keep "Other" selected
+            self._reset_ref_combo_to_placeholder()
+            return
+
+        name, n_contacts, spacing = dlg.values()
+
+        self._refs[name] = _normalize_ref_info(
+            {"n": int(n_contacts), "d": float(spacing), "skip": [], "spacing_profile_mm": []}
+        )
+        try:
+            _save_user_electrode_ref(name, int(n_contacts), float(spacing))
+        except Exception as e:
+            print("[Electrode references] could not save user reference:", e)
+
+        # Rebuild the combo items (sorted) and select the new reference, which
+        # fills the number-of-contacts / spacing fields like any known reference.
+        if self.combo_ref is not None:
+            placeholder = getattr(self, "_ref_placeholder", "Select electrode reference")
+            self.combo_ref.blockSignals(True)
+            self.combo_ref.clear()
+            self.combo_ref.addItem(placeholder)
+            self.combo_ref.addItems(self._ordered_ref_names())
+            idx = self.combo_ref.findText(name)
+            self.combo_ref.setCurrentIndex(idx if idx >= 0 else 0)
+            self.combo_ref.blockSignals(False)
+            self._on_ref_changed(self.combo_ref.currentText())
 
     def _ct_blocked_for_reconstruction(self) -> bool:
         """

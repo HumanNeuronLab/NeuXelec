@@ -136,6 +136,11 @@ class FilesPage:
             "RHPial": self.ui.findChild(QLabel, "status_FilesCoreg_RHPial"),
             "BrainMask": self.ui.findChild(QLabel, "status_FilesCoreg_BrainMask"),
         }
+        # White modality-name labels in the cockpit (used for path tooltips).
+        self._status_names: dict[str, QLabel] = {
+            key: self.ui.findChild(QLabel, f"label_FilesCoreg_{key}")
+            for key in self._status_pills
+        }
 
         # --- Load buttons ---
         self.btn_load_t1 = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_loadT1")
@@ -4868,9 +4873,31 @@ class FilesPage:
 
         widget.update()
 
+    def _cockpit_path_for(self, key: str) -> str | None:
+        """Full path of the file backing a cockpit row, or None if not loaded."""
+        attr = {
+            "T1": "t1_path",
+            "T2": "t2_path",
+            "CT": "ct_path",
+            "PET": "pet_path",
+            "ictalSPECT": "ictal_spect_path",
+            "interictalSPECT": "interictal_spect_path",
+            "SISCOM": "siscom_path",
+            "Parcel1": "parcel1_path",
+            "Parcel2": "parcel2_path",
+            "LHPial": "lh_pial_path",
+            "RHPial": "rh_pial_path",
+            "BrainMask": "brainmask_path",
+        }.get(key)
+        if not attr:
+            return None
+        val = getattr(self.state, attr, None)
+        return str(val) if val else None
+
     def _set_status_item(self, key: str, loaded: bool, text: str, state: str = "missing") -> None:
         pill = getattr(self, "_status_pills", {}).get(key)
         label = getattr(self, "_status_texts", {}).get(key)
+        name_lbl = getattr(self, "_status_names", {}).get(key)
 
         if pill is not None:
             pill.setText("●")
@@ -4879,6 +4906,14 @@ class FilesPage:
         if label is not None:
             label.setText(text)
             self._set_dynamic_property(label, "status", state)
+
+        # Tooltip with the full file path on hover (name label + pill + status),
+        # so hovering anywhere on the cockpit row reveals where the file lives.
+        path = self._cockpit_path_for(key)
+        tooltip = path if path else "No file loaded"
+        for widget in (name_lbl, pill, label):
+            if widget is not None:
+                widget.setToolTip(tooltip)
 
     def _sync_files_status_overview(self) -> None:
         """Update compact status pills in the redesigned Files/Coreg page.

@@ -228,7 +228,8 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             badge.setText("No electrode")
             badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             badge.setStyleSheet(
-                "QLabel { background-color: black; color: white; padding: 3px 8px; border-radius: 4px; }"
+                "QLabel { background-color: black; color: white; padding: 4px 12px; "
+                "border-radius: 5px; font-size: 16px; font-weight: 700; }"
             )
             badge.adjustSize()
             badge.raise_()
@@ -486,6 +487,7 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         self._last_displayed_electrode_slot2 = None
         # Page-specific label visibility (must NOT be shared with other pages)
         self._page_contact_labels_visible = {}  # elec_id -> [bool, bool, ...]
+        self._page_electrode_label_visible = {}  # elec_id -> bool (single electrode-name label)
         self._page_electrode_visible = {}  # elec_id -> bool
         self._page_contacts_visible = {}  # elec_id -> [bool, bool, ...]
 
@@ -2314,6 +2316,20 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
 
         self._schedule_refresh(slices=True, brain=True)
 
+    def _apply_badge_style(self, badge: QLabel | None, color=None) -> None:
+        """Style the slice name badge: electrode-coloured text, larger font."""
+        if badge is None:
+            return
+        if isinstance(color, (list, tuple)) and len(color) >= 3:
+            text_color = f"rgb({int(color[0])}, {int(color[1])}, {int(color[2])})"
+        else:
+            text_color = "white"
+        badge.setStyleSheet(
+            "QLabel { background-color: black; color: %s; padding: 4px 12px; "
+            "border-radius: 5px; font-size: 16px; font-weight: 700; }" % text_color
+        )
+        badge.adjustSize()
+
     def _render_slice(
         self,
         image_label: QLabel | None,
@@ -2327,7 +2343,7 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
 
         if elec_name is None:
             badge.setText("No electrode")
-            badge.adjustSize()
+            self._apply_badge_style(badge, None)
             image_label.setText("No slice")
             image_label.setPixmap(QPixmap())
             self._relayout_labels()
@@ -2342,9 +2358,9 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             return
 
         badge.setText(elec_name)
-        badge.adjustSize()
 
         elec = self._get_electrode_by_name(elec_name)
+        self._apply_badge_style(badge, elec.get("color") if elec is not None else None)
         if elec is None:
             image_label.setText("Electrode not found")
             image_label.setPixmap(QPixmap())
@@ -5972,6 +5988,15 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             vals[int(contact_idx)] = bool(visible)
         self._schedule_refresh(slices=True, brain=False)
 
+    def is_electrode_label_visible(self, elec_id: int) -> bool:
+        """Whether the single electrode-name label is shown for this electrode."""
+        return bool(self._page_electrode_label_visible.get(int(elec_id), False))
+
+    def set_electrode_label_visible(self, elec_id: int, visible: bool) -> None:
+        """Show/hide a single label with the electrode name (deepest contact)."""
+        self._page_electrode_label_visible[int(elec_id)] = bool(visible)
+        self._schedule_refresh(slices=True, brain=False)
+
     def _project_contacts_for_cached_slice(
         self,
         elec: dict,
@@ -6012,8 +6037,19 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             contact_labels_visible = self._get_local_contact_labels_visible(
                 elec_id, contacts.shape[0]
             )
+            electrode_label_on = self.is_electrode_label_visible(elec_id)
         else:
             contact_labels_visible = [False] * contacts.shape[0]
+            electrode_label_on = False
+
+        # The single electrode-name label is anchored on the deepest visible
+        # contact (index 0 is the tip).
+        elec_label_idx = -1
+        if electrode_label_on:
+            for _ci in range(contacts.shape[0]):
+                if bool(contacts_visible[_ci]):
+                    elec_label_idx = _ci
+                    break
 
         rel = contacts - center[None, :]
         s_proj = rel @ u
@@ -6031,7 +6067,9 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             if 0 <= row < H and 0 <= col < W:
                 contact_rows.append(int(row))
                 contact_cols.append(int(col))
-                if bool(contact_labels_visible[ci]):
+                if electrode_label_on and ci == elec_label_idx:
+                    contact_names.append(elec_name)
+                elif bool(contact_labels_visible[ci]):
                     contact_names.append(f"{elec_name}{ci + 1}")
                 else:
                     contact_names.append("")
