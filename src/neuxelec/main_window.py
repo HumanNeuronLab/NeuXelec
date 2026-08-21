@@ -32,6 +32,42 @@ from .utils.resources import resource_path
 from .utils.ui_loader import load_ui
 
 
+class _ResizeGrip(QWidget):
+    """Invisible edge/corner grip that starts a native window resize.
+
+    The main window is frameless (no native resize borders), so these thin
+    transparent strips along the edges and corners let the user grab and resize
+    it, mirroring the title bar's startSystemMove().
+    """
+
+    DEBUG_VISIBLE = False  # set True to colour the grips for positional debugging
+
+    def __init__(self, parent, edges, cursor, debug_color=None):
+        super().__init__(parent)
+        self._edges = edges
+        self.setCursor(cursor)
+        if self.DEBUG_VISIBLE and debug_color:
+            self.setStyleSheet(f"background-color: {debug_color};")
+        else:
+            # Transparent (invisible) but still hit-testable — unlike
+            # WA_TranslucentBackground, which made some grips ignore clicks.
+            self.setStyleSheet("background: transparent;")
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            win = self.window()
+            if win is not None and not (win.isMaximized() or win.isFullScreen()):
+                handle = win.windowHandle()
+                if handle is not None:
+                    try:
+                        handle.startSystemResize(self._edges)
+                        event.accept()
+                        return
+                    except Exception:
+                        pass
+        super().mousePressEvent(event)
+
+
 class NeuxelecWindow(QWidget):
     """Top-level window wrapper around the Qt Designer UI."""
 
@@ -217,6 +253,54 @@ class NeuxelecWindow(QWidget):
                 drag_widget.installEventFilter(self)
 
         self._sync_maximize_button()
+        self._install_resize_grips()
+
+    def _install_resize_grips(self, margin: int = 6) -> None:
+        """Create the invisible edge/corner grips for frameless resizing."""
+        E = Qt.Edge
+        C = Qt.CursorShape
+        self._resize_margin = int(margin)
+        specs = [
+            (E.LeftEdge, C.SizeHorCursor, "rgba(0,180,255,140)"),
+            (E.RightEdge, C.SizeHorCursor, "rgba(255,60,60,140)"),
+            (E.TopEdge, C.SizeVerCursor, "rgba(0,255,120,140)"),
+            (E.BottomEdge, C.SizeVerCursor, "rgba(255,220,0,140)"),
+            (E.LeftEdge | E.TopEdge, C.SizeFDiagCursor, "rgba(255,0,255,180)"),
+            (E.RightEdge | E.BottomEdge, C.SizeFDiagCursor, "rgba(255,0,255,180)"),
+            (E.RightEdge | E.TopEdge, C.SizeBDiagCursor, "rgba(255,255,255,200)"),
+            (E.LeftEdge | E.BottomEdge, C.SizeBDiagCursor, "rgba(255,255,255,200)"),
+        ]
+        self._resize_grips = []
+        for edges, cursor, color in specs:
+            grip = _ResizeGrip(self, edges, cursor, debug_color=color)
+            grip.show()
+            grip.raise_()
+            self._resize_grips.append((grip, int(edges.value)))
+        self._layout_resize_grips()
+
+    def _layout_resize_grips(self) -> None:
+        """Keep the resize grips pinned to the window edges/corners on resize."""
+        grips = getattr(self, "_resize_grips", None)
+        if not grips:
+            return
+        m = int(getattr(self, "_resize_margin", 6))
+        w, h = self.width(), self.height()
+        E = Qt.Edge
+        rects = {
+            int(E.LeftEdge.value): (0, m, m, max(0, h - 2 * m)),
+            int(E.RightEdge.value): (w - m, m, m, max(0, h - 2 * m)),
+            int(E.TopEdge.value): (m, 0, max(0, w - 2 * m), m),
+            int(E.BottomEdge.value): (m, h - m, max(0, w - 2 * m), m),
+            int((E.LeftEdge | E.TopEdge).value): (0, 0, m, m),
+            int((E.RightEdge | E.BottomEdge).value): (w - m, h - m, m, m),
+            int((E.RightEdge | E.TopEdge).value): (w - m, 0, m, m),
+            int((E.LeftEdge | E.BottomEdge).value): (0, h - m, m, m),
+        }
+        for grip, key in grips:
+            r = rects.get(key)
+            if r is not None:
+                grip.setGeometry(*r)
+                grip.raise_()
 
     # ------------------------------------------------------------------
     # Institution logos (HUG / UNIGE)
@@ -1177,6 +1261,7 @@ class NeuxelecWindow(QWidget):
         super().resizeEvent(event)
         if self.ui is not None:
             self.ui.setGeometry(self.rect())
+        self._layout_resize_grips()
         try:
             self.reco_page.render_all()
         except Exception:
