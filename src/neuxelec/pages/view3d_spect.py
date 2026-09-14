@@ -23,6 +23,7 @@ try:
 except Exception:  # pragma: no cover
     _PV_OK = False
 
+from ..utils.fmri_visualization import FMRI_DEFAULT_CMAP
 from ..utils.pet_visualization import (
     blend_pet_on_rgba,
     compute_pet_reference,
@@ -91,6 +92,7 @@ class View3DSpectMixin:
         used = [
             getattr(self, "_siscom_colormap_name", "hot"),
             getattr(self, "_pet_colormap_name", "hot"),
+            FMRI_DEFAULT_CMAP,
         ]
         self._spect_colormap = {}
         for ly in SPECT_LAYERS:
@@ -282,6 +284,8 @@ class View3DSpectMixin:
         mask_np = self._get_slice_cache_mask_np(ref_img)
         if mask_np is None:
             mask_np = np.ones(arr.shape, dtype=bool)
+        # Same cortex-only restriction as PET / SISCOM / fMRI.
+        mask_np = self._apply_cortex_to_slice_mask(mask_np, ref_img)
         valid = np.isfinite(arr) & (arr > 0) & mask_np
         vals = arr[valid]
         if vals.size == 0:

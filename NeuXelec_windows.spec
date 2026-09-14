@@ -28,7 +28,14 @@ if not tools_dir.exists():
 datas.append((str(tools_dir), "tools"))
 
 # Explicitly collect scientific/3D packages with dynamic modules and data files.
-hiddenimports = []
+# neuxelec.help is only imported from inside methods (User guide, guided tour),
+# so it is listed here to be certain it reaches the bundle.
+hiddenimports = [
+    "neuxelec.help",
+    "neuxelec.help.content",
+    "neuxelec.help.tour",
+    "neuxelec.help.user_guide_dialog",
+]
 binaries = []
 for package_name in (
     "pyvista",

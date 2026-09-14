@@ -14,6 +14,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import logging
+
+from . import __version__
 from .controllers.electrodes import ElectrodesController
 from .controllers.menu import connect_menu_navigation_by_page_name
 from .pages.files_page import FilesPage
@@ -30,6 +33,8 @@ from .state import AppState, Volume
 from .ui.neuxelec_message_dialog import NeuXelecMessageDialog
 from .utils.resources import resource_path
 from .utils.ui_loader import load_ui
+
+logger = logging.getLogger(__name__)
 
 
 class _ResizeGrip(QWidget):
@@ -49,7 +54,7 @@ class _ResizeGrip(QWidget):
         if self.DEBUG_VISIBLE and debug_color:
             self.setStyleSheet(f"background-color: {debug_color};")
         else:
-            # Transparent (invisible) but still hit-testable — unlike
+            # Transparent (invisible) but still hit-testable, unlike
             # WA_TranslucentBackground, which made some grips ignore clicks.
             self.setStyleSheet("background: transparent;")
 
@@ -159,6 +164,9 @@ class NeuxelecWindow(QWidget):
 
         # "Save project" force-save button under the Patient ID card.
         self._setup_save_project_button()
+
+        # "User guide" button, F1, and the tour shown on the first launch.
+        self._setup_user_guide()
 
         # Crisp, correctly-proportioned HUG / UNIGE logos (vector).
         self._setup_institution_logos()
@@ -371,6 +379,103 @@ class NeuxelecWindow(QWidget):
     # ------------------------------------------------------------------
     # "Save project" force-save button
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # User guide and guided tour
+    # ------------------------------------------------------------------
+    def _settings_file(self):
+        """Small per-user settings file, next to the log directory."""
+        from .logging_config import get_log_directory
+
+        return get_log_directory().parent / "settings.json"
+
+    def _read_settings(self) -> dict:
+        import json
+
+        try:
+            return json.loads(self._settings_file().read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _write_settings(self, data: dict) -> None:
+        import json
+
+        try:
+            path = self._settings_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            logger.debug("Could not write the settings file", exc_info=True)
+
+    def _setup_user_guide(self) -> None:
+        from PySide6.QtGui import QKeySequence, QShortcut
+
+        self._user_guide_dialog = None
+        self._tour_overlay = None
+
+        btn = self.ui.findChild(QPushButton, "btn_menu_userGuide")
+        if btn is not None:
+            btn.clicked.connect(lambda: self.open_user_guide())
+
+        # F1 opens the guide from anywhere in the application.
+        shortcut = QShortcut(QKeySequence(Qt.Key_F1), self)
+        shortcut.setContext(Qt.ApplicationShortcut)
+        shortcut.activated.connect(lambda: self.open_user_guide())
+        self._user_guide_shortcut = shortcut
+
+    def open_user_guide(self, section_id: str | None = None) -> None:
+        """Show the manual, optionally opened on a given section."""
+        from .help.user_guide_dialog import UserGuideDialog
+
+        dlg = getattr(self, "_user_guide_dialog", None)
+        if dlg is None:
+            dlg = UserGuideDialog(self, on_replay_tour=self.start_guided_tour)
+            self._user_guide_dialog = dlg
+        if section_id:
+            dlg.show_section(section_id)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def start_guided_tour(self) -> None:
+        """Run the spotlight tour over the interface."""
+        from .help.tour import run_tour
+
+        existing = getattr(self, "_tour_overlay", None)
+        if existing is not None:
+            try:
+                existing.stop()
+            except Exception:
+                pass
+        self._tour_overlay = run_tour(self, switch_page=self.set_current_page_by_name)
+        settings = self._read_settings()
+        settings["tour_seen_version"] = __version__
+        self._write_settings(settings)
+
+    def maybe_start_first_run_tour(self) -> None:
+        """Start the tour once per installed version, or when forced.
+
+        Set NEUXELEC_TOUR=1 to replay it at launch while developing.
+        """
+        import os
+
+        if getattr(self, "_tour_checked", False):
+            return
+        self._tour_checked = True
+
+        forced = str(os.environ.get("NEUXELEC_TOUR", "")).strip() in ("1", "true", "yes")
+        seen = self._read_settings().get("tour_seen_version")
+        if not forced and seen == __version__:
+            return
+        # Let the window finish laying out before punching the spotlight.
+        QTimer.singleShot(700, self.start_guided_tour)
+
+    def showEvent(self, event):  # noqa: N802 (Qt naming)
+        super().showEvent(event)
+        try:
+            self.maybe_start_first_run_tour()
+        except Exception:
+            logger.debug("Guided tour could not start", exc_info=True)
+
     def _setup_save_project_button(self) -> None:
         """Wire the force-save button and keep its rose 'saved' outline in sync.
 
@@ -456,6 +561,47 @@ class NeuxelecWindow(QWidget):
                 return
             self.state.project_path = fn
             path = fn
+
+        # A validated coregistration that was never written to disk cannot be
+        # restored from the project file (the project only stores its path).
+        # Warn here, not only when leaving the project, and offer to write the
+        # images right away.
+        try:
+            unsaved = get_unsaved_validated_modalities(self.state)
+        except Exception:
+            unsaved = []
+
+        if unsaved:
+            choice = NeuXelecMessageDialog.choice(
+                self,
+                "Unsaved coregistered files",
+                (
+                    "These validated files have not been saved on disk:\n\n"
+                    "\u2022 "
+                    + "\n\u2022 ".join(unsaved)
+                    + "\n\nThey cannot be restored from the project file."
+                ),
+                choices=[
+                    ("save_images", "Save the images now", True),
+                    ("project_only", "Save the project only", False),
+                ],
+                cancel_text="Cancel",
+            )
+
+            if choice is None:
+                return
+
+            if choice == "save_images":
+                files_page = getattr(self, "files_page", None)
+                if files_page is not None and hasattr(files_page, "save_all_coreg_validated"):
+                    try:
+                        files_page.save_all_coreg_validated()
+                    except Exception as e:
+                        NeuXelecMessageDialog.warning(
+                            self,
+                            "Save images",
+                            f"The images could not be saved.\n\nDetails:\n{e}",
+                        )
 
         try:
             save_project_json(self.state, path)
@@ -788,6 +934,31 @@ class NeuxelecWindow(QWidget):
                 except Exception:
                     pass
 
+        except Exception:
+            pass
+
+        # -------------------------
+        # fMRI (functional activation map)
+        # -------------------------
+        try:
+            if getattr(self.state, "fmri_coreg_path", None):
+                img = sitk.ReadImage(self.state.fmri_coreg_path)
+                self.state.fmri_coreg_in_t1 = img
+                self.state.fmri_in_t1 = img
+                self.state.fmri_validated = bool(
+                    getattr(self.state, "fmri_validated", False)
+                    or self.state.fmri_coreg_path
+                )
+            else:
+                self.state.fmri_coreg_in_t1 = None
+                self.state.fmri_in_t1 = None
+            try:
+                if getattr(self, "view3d_page", None) is not None and hasattr(
+                    self.view3d_page, "_refresh_fmri_3d_controls"
+                ):
+                    self.view3d_page._refresh_fmri_3d_controls()
+            except Exception:
+                pass
         except Exception:
             pass
 

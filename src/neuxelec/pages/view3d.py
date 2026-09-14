@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import nibabel as nib
@@ -11,9 +12,12 @@ from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QSlider,
@@ -41,6 +45,12 @@ from neuxelec.ui.neuxelec_message_dialog import (
 )
 from neuxelec.ui.page_loading_overlay import PageLoadingOverlay
 from neuxelec.ui.pyvista_quick_tools import PyVistaQuickTools
+from neuxelec.utils.cortex_mask import build_cortex_mask, cortex_label_ids
+from neuxelec.utils.fmri_visualization import (
+    FMRI_DEFAULT_CMAP,
+    auto_fmri_levels,
+    filter_small_clusters,
+)
 from neuxelec.utils.mni_electrodes_io import load_bids_mni_electrodes_tsv
 
 from .view3d_camera import View3DCameraMixin
@@ -100,6 +110,9 @@ def _top_level_window():
             pass
 
     return None
+
+
+logger = logging.getLogger(__name__)
 
 
 class _CrosshairMarkerDragFilter(QObject):
@@ -277,6 +290,34 @@ class View3DPage(
         self._pet_color = (1.0, 0.55, 0.0)  # orange
         self._pet_colormap_name = "jet"
         self._siscom_colormap_name = "hot"
+
+        # fMRI / functional activation-map overlay (Stage 1: driven from the
+        # MRI2 slot, shown as a thresholded coloured overlay like SISCOM).
+        self._fmri_actor = None
+        self._fmri_cmap_name = FMRI_DEFAULT_CMAP
+        # Set once the user picks a colormap (right-click "Color fMRI"): the
+        # automatic levels must then stop overriding it.
+        self._fmri_cmap_user_set = False
+        self._fmri_threshold: float | None = None  # None = auto
+        self._fmri_vmax: float | None = None        # None = auto
+        self._fmri_opacity = 0.85
+        self._fmri_diverging = False
+        self._fmri_controls_dialog = None
+        self._fmri_surface_shown = False  # blob (iso-surface) visible
+        self._keep_fmri_blob_through_slices = False
+        self._fmri_pial_shown = False  # activation painted on the pial surface
+        self._fmri_pial_actors: list = []
+
+        # Theoretical planning electrodes (NeuroInspire) plotted in 3D as white
+        # trajectory tubes. Toggled from the 3D-view right-click menu.
+        self._plan_traj_actors: list = []
+        self._plan_traj_visible = False
+
+        # Restrict every functional overlay (PET / SISCOM / fMRI) to the cortical
+        # ribbon of a loaded parcellation. Toggled from the right-click menu.
+        self._functional_cortex_only = False
+        self._cortex_mask_cache = None
+        self._cortex_mask_cache_key = None
         self.sld_pet_min: QSlider | None = None
         self.sb_pet_min: QSpinBox | None = None
         self.sld_pet_max: QSlider | None = None
@@ -297,6 +338,7 @@ class View3DPage(
         self._coronal_plane_actor = None
         self._pet_scalar_bar_actor = None
         self._siscom_scalar_bar_actor = None
+        self._fmri_scalar_bar_actor = None
         self._siscom_fixed_zmax = None
         self._show_color_scales = True
 
@@ -401,6 +443,9 @@ class View3DPage(
         self._axial_siscom_actor = None
         self._sagittal_pet_actor = None
         self._sagittal_siscom_actor = None
+        self._axial_fmri_actor = None
+        self._coronal_fmri_actor = None
+        self._sagittal_fmri_actor = None
 
         # New CT controls
         self.chk_ct: QCheckBox | None = None
@@ -499,6 +544,8 @@ class View3DPage(
         self._slice_base_rgba_cache = None  # T1/T2 + active parcellation
         self._slice_pet_rgba_cache = None  # PET transparent overlay
         self._slice_siscom_rgba_cache = None  # SISCOM transparent overlay
+        self._slice_fmri_rgba_cache = None  # fMRI transparent overlay
+        self._slice_fmri_cache_ready = False
 
         self._slice_base_cache_ready = False
         self._slice_pet_cache_ready = False
@@ -1431,6 +1478,38 @@ class View3DPage(
             if float(self.dsb_siscom_z.value()) < 1.5:
                 self.dsb_siscom_z.setValue(2.0)
         self.sld_siscom_opacity = self.ui.findChild(QSlider, "sld_3d_siscomOpacity")
+
+        # fMRI 3D controls (parity with PET/SISCOM).
+        self.chk_fmri_3d = self.ui.findChild(QCheckBox, "chk_3d_showfMRI")
+        self.dsb_fmri_thr = self.ui.findChild(QDoubleSpinBox, "dsb_3d_fmriThr")
+        if self.dsb_fmri_thr is not None:
+            self.dsb_fmri_thr.setMinimum(0.0)
+            self.dsb_fmri_thr.setMaximum(1e6)
+            self.dsb_fmri_thr.setDecimals(2)
+            self.dsb_fmri_thr.setSingleStep(0.1)
+        self.sld_fmri_opacity = self.ui.findChild(QSlider, "sld_3d_fmriOpacity")
+        if self.sld_fmri_opacity is not None:
+            self.sld_fmri_opacity.setMinimum(0)
+            self.sld_fmri_opacity.setMaximum(100)
+            self.sld_fmri_opacity.setValue(int(self._fmri_opacity * 100))
+        # Extent threshold (minimum cluster size, mm3), shared with the Oblique page.
+        self.sb_fmri_min_cluster = self.ui.findChild(QSpinBox, "sb_3d_fmriMinCluster")
+        if self.sb_fmri_min_cluster is not None:
+            self.sb_fmri_min_cluster.setRange(0, 5000)
+            self.sb_fmri_min_cluster.setSingleStep(50)
+            self.sb_fmri_min_cluster.setSpecialValueText("Off")
+            # Re-render only once the user is done typing (not on every digit).
+            self.sb_fmri_min_cluster.setKeyboardTracking(False)
+            self.sb_fmri_min_cluster.setValue(int(round(self._fmri_min_cluster_mm3())))
+        if self.chk_fmri_3d is not None:
+            self.chk_fmri_3d.setEnabled(False)
+            self.chk_fmri_3d.toggled.connect(self._on_fmri_3d_toggled)
+        if self.dsb_fmri_thr is not None:
+            self.dsb_fmri_thr.valueChanged.connect(self._on_fmri_thr_changed)
+        if self.sld_fmri_opacity is not None:
+            self.sld_fmri_opacity.valueChanged.connect(self._on_fmri_opacity_changed)
+        if self.sb_fmri_min_cluster is not None:
+            self.sb_fmri_min_cluster.valueChanged.connect(self._on_fmri_min_cluster_changed)
 
         self.chk_parcel1 = self.ui.findChild(QCheckBox, "checkBox_3dView_Parcell1")
         self.chk_parcel2 = self.ui.findChild(QCheckBox, "checkBox_3dView_Parcell2")
@@ -3246,6 +3325,7 @@ class View3DPage(
         base: bool = True,
         pet: bool = True,
         siscom: bool = True,
+        fmri: bool = True,
     ) -> None:
         """
         Invalidate full-volume RGBA caches used by 3D slice planes.
@@ -3266,6 +3346,10 @@ class View3DPage(
         if siscom:
             self._slice_siscom_rgba_cache = None
             self._slice_siscom_cache_ready = False
+
+        if fmri:
+            self._slice_fmri_rgba_cache = None
+            self._slice_fmri_cache_ready = False
 
         # SPECT overlay caches share the same reference grid / brain mask, so
         # invalidate them alongside the others (no-op until the card is set up).
@@ -3604,6 +3688,7 @@ class View3DPage(
         mask_np = self._get_slice_cache_mask_np(ref_img)
         if mask_np is None:
             mask_np = np.ones(pet_np.shape, dtype=bool)
+        mask_np = self._apply_cortex_to_slice_mask(mask_np, ref_img)
 
         pet_valid = np.isfinite(pet_np) & (pet_np > 0) & mask_np
         pet_vals = pet_np[pet_valid]
@@ -3665,6 +3750,7 @@ class View3DPage(
         mask_np = self._get_slice_cache_mask_np(ref_img)
         if mask_np is None:
             mask_np = np.ones(sis_np.shape, dtype=bool)
+        mask_np = self._apply_cortex_to_slice_mask(mask_np, ref_img)
 
         zthr = float(self.dsb_siscom_z.value()) if self.dsb_siscom_z is not None else 2.0
 
@@ -3984,6 +4070,7 @@ class View3DPage(
 
             siscom_masked_img = sitk.GetImageFromArray(siscom_masked_np)
             siscom_masked_img.CopyInformation(siscom_img)
+            siscom_masked_img = self._apply_cortex_to_image(siscom_masked_img)
 
             mesh = self._threshold_image_to_polydata(
                 siscom_masked_img,
@@ -4054,6 +4141,712 @@ class View3DPage(
             self._render()
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # fMRI / functional activation-map overlay (Stage 1)
+    # ------------------------------------------------------------------
+    def _fmri_source_image(self) -> sitk.Image | None:
+        """The functional map to display, in T1 space.
+
+        Stage 1 reads it from the MRI2 slot (coregistered first). This is where
+        a dedicated fMRI modality would plug in later.
+        """
+        for attr in (
+            "fmri_coreg_in_t1",
+            "fmri_in_t1",
+            "t2_coreg_in_t1",
+            "t2_in_t1",
+        ):
+            img = getattr(self.state, attr, None)
+            if img is not None:
+                return img
+        # No fallback on MRI 2: the fMRI is its own modality (validated coreg only).
+        return None
+
+    def _ensure_fmri_auto_levels(self, img: sitk.Image) -> None:
+        """Fill threshold / vmax / cmap / diverging from the data if still unset."""
+        if self._fmri_threshold is not None and self._fmri_vmax is not None:
+            return
+        arr = sitk.GetArrayFromImage(img)
+        lv = auto_fmri_levels(arr, kind=getattr(self.state, "fmri_kind", None))
+        if self._fmri_threshold is None:
+            self._fmri_threshold = lv["threshold"]
+        if self._fmri_vmax is None:
+            self._fmri_vmax = lv["vmax"]
+        self._fmri_diverging = lv["diverging"]
+        if not getattr(self, "_fmri_cmap_user_set", False):
+            self._fmri_cmap_name = lv["cmap"]
+
+    def _fmri_min_cluster_mm3(self) -> float:
+        try:
+            return float(getattr(self.state, "fmri_min_cluster_mm3", 0.0) or 0.0)
+        except Exception:
+            return 0.0
+
+    def _fmri_display_image(self) -> sitk.Image | None:
+        """The map actually rendered: the source map, or the source map with
+        the clusters smaller than the shared minimum size removed (extent
+        threshold). Cached per source / threshold / size."""
+        img = self._fmri_source_image()
+        if img is None:
+            return None
+        mm3 = self._fmri_min_cluster_mm3()
+        if mm3 <= 0.0:
+            return img
+        try:
+            self._ensure_fmri_auto_levels(img)
+        except Exception:
+            pass
+        thr = float(self._fmri_threshold or 0.0)
+        key = (id(img), round(thr, 6), round(mm3, 3))
+        cache = getattr(self, "_fmri_display_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        try:
+            vox = float(np.prod(img.GetSpacing()))
+            min_vox = max(1, int(round(mm3 / max(vox, 1e-6))))
+            arr = filter_small_clusters(sitk.GetArrayFromImage(img), thr, min_vox)
+            out = sitk.GetImageFromArray(arr)
+            out.CopyInformation(img)
+        except Exception:
+            out = img
+        self._fmri_display_cache = (key, out)
+        return out
+
+    def _sync_fmri_min_cluster_widget(self) -> None:
+        """Show the shared minimum cluster size in the card spinbox without
+        re-triggering it (project load, change made from the Oblique page)."""
+        sb = getattr(self, "sb_fmri_min_cluster", None)
+        if sb is None:
+            return
+        value = int(round(self._fmri_min_cluster_mm3()))
+        if sb.value() == value:
+            return
+        sb.blockSignals(True)
+        try:
+            sb.setValue(value)
+        finally:
+            sb.blockSignals(False)
+
+    def _apply_fmri_display_change(self) -> None:
+        """Shared fMRI display setting changed (from this page or the Oblique
+        Slice page): re-render every fMRI representation."""
+        self._fmri_display_cache = None
+        self._sync_fmri_min_cluster_widget()
+        if self._fmri_plane_on():
+            self._refresh_fmri_only()
+        elif self._fmri_actor is not None:
+            self._render_fmri_overlay()
+        if getattr(self, "_fmri_pial_shown", False):
+            try:
+                self._render_fmri_pial_projection()
+            except Exception:
+                pass
+        self._render()
+
+    def _on_fmri_min_cluster_changed(self, value) -> None:
+        """Card spinbox edited: minimum cluster size (extent threshold), shared
+        with the Oblique Slice page."""
+        try:
+            value = float(value)
+        except Exception:
+            return
+        if abs(value - self._fmri_min_cluster_mm3()) < 1e-6:
+            return
+        self.state.fmri_min_cluster_mm3 = value
+        self._apply_fmri_display_change()
+        op = getattr(self.state, "oblique_page", None)
+        if op is not None and hasattr(op, "_on_fmri_display_changed"):
+            try:
+                op._on_fmri_display_changed()
+            except Exception:
+                pass
+
+    def _hide_fmri_overlay(self) -> None:
+        if self._fmri_actor is not None and self.plotter is not None:
+            try:
+                self.plotter.remove_actor(self._fmri_actor, reset_camera=False)
+            except Exception:
+                pass
+        self._fmri_actor = None
+
+    def _render_fmri_overlay(self) -> None:
+        """Show the functional map as a thresholded coloured surface overlay.
+
+        Mirrors the SISCOM overlay: threshold the map, marching-cubes to a
+        surface, colour by the (signed) value with the chosen colormap.
+        """
+        if not _PV_OK or self.plotter is None:
+            return
+        img = self._fmri_display_image()
+        if img is None:
+            self._hide_fmri_overlay()
+            self._render()
+            return
+        try:
+            self._ensure_fmri_auto_levels(img)
+            thr = float(self._fmri_threshold or 0.0)
+            vmax = float(self._fmri_vmax or (thr + 1.0))
+            if vmax <= thr:
+                vmax = thr + 1.0
+
+            # Optionally keep only cortical activation.
+            img = self._apply_cortex_to_image(img)
+            arr = sitk.GetArrayFromImage(img).astype(np.float32, copy=False)
+
+            if self._fmri_diverging:
+                # Threshold on magnitude, colour by signed value.
+                mag_img = sitk.GetImageFromArray(np.abs(arr))
+                mag_img.CopyInformation(img)
+                mesh = self._threshold_image_to_polydata(mag_img, absolute_threshold=thr)
+                clim = [-vmax, vmax]
+            else:
+                mesh = self._threshold_image_to_polydata(img, absolute_threshold=thr)
+                clim = [thr, vmax]
+
+            if mesh is None or mesh.n_points == 0:
+                self._hide_fmri_overlay()
+                self._render()
+                return
+
+            try:
+                vals = self._sample_sitk_values_at_ras_points(
+                    img, np.asarray(mesh.points, dtype=np.float32)
+                )
+            except Exception:
+                vals = None
+            if vals is None or vals.size == 0:
+                vals = np.full((mesh.n_points,), (thr + vmax) / 2.0, dtype=np.float32)
+            vals = np.nan_to_num(vals, nan=thr, posinf=vmax, neginf=-vmax)
+            mesh["fMRI"] = vals.astype(np.float32)
+
+            self._hide_fmri_overlay()
+            self._fmri_actor = self.plotter.add_mesh(
+                mesh,
+                scalars="fMRI",
+                cmap=self._fmri_cmap_name,
+                clim=[float(clim[0]), float(clim[1])],
+                opacity=float(self._fmri_opacity),
+                smooth_shading=True,
+                show_scalar_bar=False,
+            )
+            self._apply_actor_clipping()
+            self._render()
+        except Exception:
+            logger.warning("fMRI overlay failed", exc_info=True)
+            self._hide_fmri_overlay()
+            self._render()
+
+    def _open_fmri_controls(self) -> None:
+        """Small floating panel to load/tune the functional-map overlay."""
+        img = self._fmri_source_image()
+        if img is None:
+            NeuXelecMessageDialog.information(
+                self._dialog_parent(),
+                "No functional map",
+                "Load a functional MRI in the MRI2 slot (and coregister it to the "
+                "T1) first, then reopen this panel.",
+            )
+            return
+        self._ensure_fmri_auto_levels(img)
+
+        dlg = QDialog(self._dialog_parent())
+        dlg.setWindowTitle("Functional MRI overlay")
+        lay = QVBoxLayout(dlg)
+
+        chk_show = QCheckBox("Show functional overlay")
+        chk_show.setChecked(self._fmri_actor is not None)
+        lay.addWidget(chk_show)
+
+        vmax = float(self._fmri_vmax or 1.0)
+
+        def _row(label_text):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label_text))
+            return row
+
+        # Threshold slider (0..vmax, mapped through 0..1000).
+        row_t = _row("Threshold")
+        sld_thr = QSlider(Qt.Orientation.Horizontal)
+        sld_thr.setRange(0, 1000)
+        sld_thr.setValue(int(np.clip((self._fmri_threshold or 0.0) / vmax, 0, 1) * 1000))
+        lbl_thr = QLabel(f"{self._fmri_threshold:.2f}")
+        row_t.addWidget(sld_thr)
+        row_t.addWidget(lbl_thr)
+        lay.addLayout(row_t)
+
+        # Opacity slider (0..100).
+        row_o = _row("Opacity")
+        sld_op = QSlider(Qt.Orientation.Horizontal)
+        sld_op.setRange(0, 100)
+        sld_op.setValue(int(self._fmri_opacity * 100))
+        row_o.addWidget(sld_op)
+        lay.addLayout(row_o)
+
+        # Colormap.
+        row_c = _row("Colormap")
+        cmb = QComboBox()
+        cmb.addItems(["hot", "jet", "turbo", "viridis", "coolwarm", "RdBu_r"])
+        if self._fmri_cmap_name in [cmb.itemText(i) for i in range(cmb.count())]:
+            cmb.setCurrentText(self._fmri_cmap_name)
+        row_c.addWidget(cmb)
+        lay.addLayout(row_c)
+
+        chk_div = QCheckBox("Two-sided (+/-) diverging")
+        chk_div.setChecked(self._fmri_diverging)
+        lay.addWidget(chk_div)
+
+        def _apply():
+            self._fmri_threshold = (sld_thr.value() / 1000.0) * vmax
+            lbl_thr.setText(f"{self._fmri_threshold:.2f}")
+            self._fmri_opacity = sld_op.value() / 100.0
+            self._fmri_cmap_name = cmb.currentText()
+            self._fmri_diverging = chk_div.isChecked()
+            if chk_show.isChecked():
+                self._render_fmri_overlay()
+            else:
+                self._hide_fmri_overlay()
+                self._render()
+
+        sld_thr.valueChanged.connect(lambda _=0: _apply())
+        sld_op.valueChanged.connect(lambda _=0: _apply())
+        cmb.currentIndexChanged.connect(lambda _=0: _apply())
+        chk_div.toggled.connect(lambda _=0: _apply())
+        chk_show.toggled.connect(lambda _=0: _apply())
+
+        # Show immediately.
+        if chk_show.isChecked():
+            self._render_fmri_overlay()
+
+        self._fmri_controls_dialog = dlg
+        dlg.show()
+
+    # ------------------------------------------------------------------
+    # Theoretical planning electrodes (NeuroInspire plan) in 3D
+    # ------------------------------------------------------------------
+    def _has_plan_trajectories(self) -> bool:
+        plan = getattr(self.state, "plan", None)
+        return bool((plan or {}).get("trajectories_t1"))
+
+    def _plan_trajectories_3d(self):
+        """Yield (name, target_lps, entry_lps) for each planned trajectory."""
+        plan = getattr(self.state, "plan", None)
+        out = []
+        for tr in (plan or {}).get("trajectories_t1") or []:
+            e = tr.get("entry_t1_lps")
+            t = tr.get("target_t1_lps")
+            if e and t:
+                out.append((str(tr.get("name", "")).strip(), t, e))
+        return out
+
+    def _remove_plan_trajectories(self) -> None:
+        if self.plotter is None:
+            return
+        for act in getattr(self, "_plan_traj_actors", []) or []:
+            try:
+                self.plotter.remove_actor(act, reset_camera=False)
+            except Exception:
+                pass
+        self._plan_traj_actors = []
+
+    def _plot_plan_trajectories(self) -> None:
+        """Draw each planned trajectory as a white tube (target -> entry)."""
+        if not _PV_OK or self.plotter is None:
+            return
+        self._remove_plan_trajectories()
+        actors: list = []
+        for name, t_lps, e_lps in self._plan_trajectories_3d():
+            try:
+                ras = _lps_to_ras_points(np.array([t_lps, e_lps], dtype=np.float64))
+                a0 = ras[0]
+                a1 = ras[1]
+                tube = pv.Line(a0, a1).tube(radius=0.6)
+                actors.append(
+                    self.plotter.add_mesh(
+                        tube,
+                        color="white",
+                        opacity=0.9,
+                        smooth_shading=True,
+                        show_scalar_bar=False,
+                    )
+                )
+                if name:
+                    actors.append(
+                        self.plotter.add_point_labels(
+                            [a1],
+                            [name],
+                            font_size=12,
+                            text_color="white",
+                            show_points=False,  # no point glyph, only the text
+                            shape=None,
+                            always_visible=True,
+                        )
+                    )
+            except Exception:
+                logger.warning("Plotting planned trajectory %s failed", name, exc_info=True)
+        self._plan_traj_actors = actors
+        self._render()
+
+    def _toggle_plan_trajectories(self) -> None:
+        self._plan_traj_visible = not bool(getattr(self, "_plan_traj_visible", False))
+        if self._plan_traj_visible:
+            self._plot_plan_trajectories()
+        else:
+            self._remove_plan_trajectories()
+            self._render()
+
+    # ------------------------------------------------------------------
+    # fMRI 3D controls (parity with PET/SISCOM)
+    # ------------------------------------------------------------------
+    def _refresh_fmri_3d_controls(self) -> None:
+        ok = self._fmri_source_image() is not None
+        # Project load: reflect the shared minimum cluster size in the card.
+        try:
+            self._sync_fmri_min_cluster_widget()
+        except Exception:
+            pass
+        if getattr(self, "chk_fmri_3d", None) is not None:
+            self.chk_fmri_3d.setEnabled(ok)
+            if not ok:
+                self._set_checked(self.chk_fmri_3d, False)
+
+    def _hide_fmri_plane_overlays(self) -> None:
+        for plane in ("axial", "coronal", "sagittal"):
+            self._remove_actor(f"{plane}_fmri")
+
+    def _on_fmri_3d_toggled(self, checked: bool) -> None:
+        if checked:
+            self._show_color_scales = True
+            img = self._fmri_source_image()
+            if img is not None:
+                self._ensure_fmri_auto_levels(img)
+                if getattr(self, "dsb_fmri_thr", None) is not None:
+                    self.dsb_fmri_thr.blockSignals(True)
+                    self.dsb_fmri_thr.setMaximum(max(1.0, float(self._fmri_vmax or 1.0) * 2.0))
+                    self.dsb_fmri_thr.setValue(float(self._fmri_threshold or 0.0))
+                    self.dsb_fmri_thr.blockSignals(False)
+            # Blob shown by default (same as SISCOM); right-click can hide it.
+            self._fmri_surface_shown = True
+            self._refresh_fmri_only()
+        else:
+            self._hide_fmri_plane_overlays()
+            self._hide_fmri_overlay()
+            self._hide_fmri_pial_projection()
+            self._fmri_surface_shown = False
+            self._fmri_pial_shown = False
+            try:
+                self._remove_fmri_scalar_bar()
+            except Exception:
+                pass
+            self._render()
+
+    def _on_fmri_thr_changed(self, val) -> None:
+        self._fmri_threshold = float(val)
+        if self._fmri_plane_on():
+            self._refresh_fmri_only()
+        if self._fmri_actor is not None:
+            self._render_fmri_overlay()
+        if getattr(self, "_fmri_pial_shown", False):
+            self._render_fmri_pial_projection()
+        # The colour bar spans [threshold, max]: keep it in sync.
+        try:
+            self._update_fmri_scalar_bar()
+        except Exception:
+            pass
+
+    def _on_fmri_opacity_changed(self, val) -> None:
+        self._fmri_opacity = float(val) / 100.0
+        self._update_visible_fmri_overlay_opacity_only()
+        if self._fmri_actor is not None:
+            try:
+                self._fmri_actor.GetProperty().SetOpacity(self._fmri_opacity)
+            except Exception:
+                pass
+        for act in getattr(self, "_fmri_pial_actors", []) or []:
+            try:
+                act.GetProperty().SetOpacity(self._fmri_opacity)
+            except Exception:
+                pass
+        self._render()
+
+    def _toggle_fmri_blob(self) -> None:
+        """Optional 3D iso-surface blob of the activation (same idea as SISCOM)."""
+        self._fmri_surface_shown = not bool(getattr(self, "_fmri_surface_shown", False))
+        if self._fmri_surface_shown:
+            self._render_fmri_overlay()
+        else:
+            self._hide_fmri_overlay()
+            self._render()
+
+    def _toggle_keep_fmri_blob_through_slices(self) -> None:
+        self._keep_fmri_blob_through_slices = not bool(
+            getattr(self, "_keep_fmri_blob_through_slices", False)
+        )
+        try:
+            self._apply_actor_clipping()
+            self._render()
+        except Exception:
+            pass
+
+    def _hide_fmri_pial_projection(self) -> None:
+        if self.plotter is not None:
+            for act in getattr(self, "_fmri_pial_actors", []) or []:
+                try:
+                    self.plotter.remove_actor(act, reset_camera=False)
+                except Exception:
+                    pass
+        self._fmri_pial_actors = []
+
+    def _render_fmri_pial_projection(self) -> None:
+        """Paint the fMRI activation onto the pial surface(s) (cortical ribbon)."""
+        if not _PV_OK or self.plotter is None:
+            return
+        img = self._fmri_display_image()
+        if img is None:
+            return
+        self._hide_fmri_pial_projection()
+        self._ensure_fmri_auto_levels(img)
+        thr = float(self._fmri_threshold or 0.0)
+        vmax = float(self._fmri_vmax or (thr + 1.0))
+        if vmax <= thr:
+            vmax = thr + 1.0
+        diverging = bool(self._fmri_diverging)
+        actors = []
+        for poly in (getattr(self, "_lh_pial_poly", None), getattr(self, "_rh_pial_poly", None)):
+            if poly is None or poly.n_points == 0:
+                continue
+            try:
+                vals = self._sample_sitk_values_at_ras_points(
+                    img, np.asarray(poly.points, dtype=np.float32)
+                )
+            except Exception:
+                vals = None
+            if vals is None or vals.size != poly.n_points:
+                continue
+            vals = np.nan_to_num(vals, nan=0.0, posinf=vmax, neginf=-vmax).astype(np.float32)
+            mesh = poly.copy()
+            mesh["fMRI"] = vals
+            if diverging:
+                clim = [-vmax, vmax]
+                mesh["fMRI_thr"] = np.abs(vals).astype(np.float32)
+            else:
+                clim = [thr, vmax]
+                mesh["fMRI_thr"] = vals
+            try:
+                # Keep only the supra-threshold cortical patches.
+                sub = mesh.threshold(value=float(thr), scalars="fMRI_thr")
+            except Exception:
+                sub = None
+            if sub is None or sub.n_points == 0:
+                continue
+            act = self.plotter.add_mesh(
+                sub,
+                scalars="fMRI",
+                cmap=self._fmri_cmap_name,
+                clim=[float(clim[0]), float(clim[1])],
+                opacity=float(self._fmri_opacity),
+                smooth_shading=True,
+                show_scalar_bar=False,
+            )
+            actors.append(act)
+        self._fmri_pial_actors = actors
+        self._apply_actor_clipping()
+        self._render()
+
+    def _toggle_fmri_pial_projection(self) -> None:
+        img = self._fmri_source_image()
+        if img is None:
+            return
+        if not (
+            getattr(self, "_lh_pial_poly", None) is not None
+            or getattr(self, "_rh_pial_poly", None) is not None
+        ):
+            NeuXelecMessageDialog.information(
+                self._dialog_parent(),
+                "No pial surface",
+                "Load the pial surfaces (lh/rh) to project the fMRI onto the cortex.",
+            )
+            return
+        self._fmri_pial_shown = not bool(getattr(self, "_fmri_pial_shown", False))
+        if self._fmri_pial_shown:
+            self._render_fmri_pial_projection()
+        else:
+            self._hide_fmri_pial_projection()
+            self._render()
+
+    def _choose_fmri_colormap(self) -> None:
+        options = ["hot", "jet", "turbo", "viridis", "coolwarm", "RdBu_r"]
+        try:
+            idx = options.index(self._fmri_cmap_name)
+        except ValueError:
+            idx = 0
+        # Same call as _choose_pet_colormap (View3DPage is not a QWidget, so the
+        # dialog parent must come from _dialog_parent()).
+        cmap = NeuXelecSelectionDialog.select_item(
+            self._dialog_parent(),
+            "fMRI colormap",
+            "Choose the color scale used for the fMRI overlay:",
+            options=options,
+            current_index=idx,
+            accept_text="Apply",
+            reject_text="Cancel",
+        )
+        if cmap:
+            self._fmri_cmap_name = str(cmap)
+            self._fmri_cmap_user_set = True
+            # Same as Color SISCOM: the bar is rebuilt with the new colormap.
+            try:
+                self._remove_fmri_scalar_bar()
+            except Exception:
+                pass
+            if self._fmri_plane_on():
+                self._refresh_fmri_only()
+            if self._fmri_actor is not None:
+                self._render_fmri_overlay()
+            if getattr(self, "_fmri_pial_shown", False):
+                self._render_fmri_pial_projection()
+            try:
+                self._update_fmri_scalar_bar()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Cortex-only masking of the functional overlays (PET / SISCOM / fMRI)
+    # ------------------------------------------------------------------
+    def _has_parcellation(self) -> bool:
+        return getattr(self, "_parcel1_img", None) is not None
+
+    def _cortex_only_active(self) -> bool:
+        return bool(getattr(self.state, "functional_cortex_only", False)) and self._has_parcellation()
+
+    def _cortex_mask_np_on(self, ref_img: sitk.Image | None):
+        """Boolean cortical mask (z, y, x) resampled onto ``ref_img``'s grid.
+
+        Cached per reference grid. Returns None if no parcellation / no cortex.
+        """
+        parc = getattr(self, "_parcel1_img", None)
+        if ref_img is None or parc is None:
+            return None
+        key = (id(ref_img), tuple(ref_img.GetSize()))
+        if self._cortex_mask_cache_key == key and self._cortex_mask_cache is not None:
+            return self._cortex_mask_cache
+        try:
+            parc_on_ref = sitk.Resample(
+                parc, ref_img, sitk.Transform(3, sitk.sitkIdentity),
+                sitk.sitkNearestNeighbor, 0, parc.GetPixelID(),
+            )
+            arr = sitk.GetArrayFromImage(parc_on_ref)
+            mask = build_cortex_mask(arr, getattr(self, "_parcel1_lut", {}) or {})
+        except Exception:
+            logger.warning("Cortex mask build failed", exc_info=True)
+            mask = None
+        self._cortex_mask_cache = mask
+        self._cortex_mask_cache_key = key
+        return mask
+
+    def _apply_cortex_to_slice_mask(self, mask_np, ref_img):
+        """Intersect a slice-cache mask with the cortex mask when cortex-only is on."""
+        if not self._cortex_only_active():
+            return mask_np
+        cortex = self._cortex_mask_np_on(ref_img)
+        if cortex is None or mask_np is None or cortex.shape != mask_np.shape:
+            return mask_np
+        return mask_np & cortex
+
+    def _apply_cortex_to_image(self, img: sitk.Image) -> sitk.Image:
+        """Zero an overlay volume outside the cortex (for the blob overlays)."""
+        if not self._cortex_only_active() or img is None:
+            return img
+        try:
+            parc = self._parcel1_img
+            parc_on = sitk.Resample(
+                parc, img, sitk.Transform(3, sitk.sitkIdentity),
+                sitk.sitkNearestNeighbor, 0, parc.GetPixelID(),
+            )
+            cortex = build_cortex_mask(
+                sitk.GetArrayFromImage(parc_on), getattr(self, "_parcel1_lut", {}) or {}
+            )
+            if cortex is None:
+                return img
+            arr = sitk.GetArrayFromImage(img)
+            arr = np.where(cortex, arr, 0)
+            out = sitk.GetImageFromArray(arr.astype(sitk.GetArrayFromImage(img).dtype))
+            out.CopyInformation(img)
+            return out
+        except Exception:
+            logger.warning("Cortex mask (image) failed", exc_info=True)
+            return img
+
+    def _cortex_labels_available(self) -> bool:
+        """True when parcellation 1 names cortical regions.
+
+        The cortex restriction is name-based (FreeSurfer-style ``ctx-*`` /
+        ``*cerebral-cortex*``), so an atlas whose LUT is missing or whose region
+        names follow another convention cannot drive it.
+        """
+        try:
+            return bool(cortex_label_ids(getattr(self, "_parcel1_lut", {}) or {}))
+        except Exception:
+            return False
+
+    def _toggle_functional_cortex_only(self) -> None:
+        turning_on = not bool(getattr(self.state, "functional_cortex_only", False))
+        if turning_on and not self._cortex_labels_available():
+            NeuXelecMessageDialog.information(
+                self._dialog_parent(),
+                "Cortex only",
+                "Parcellation 1 does not name any cortical region.\n\n"
+                "The cortex restriction recognises FreeSurfer-style names "
+                "(ctx-lh-..., ctx_rh_..., Left/Right-Cerebral-Cortex). Load a "
+                "FreeSurfer / FastSurfer parcellation, or its lookup table, to "
+                "use it.",
+            )
+            return
+
+        self.state.functional_cortex_only = turning_on
+        self._apply_functional_cortex_only_change()
+        # Keep the Oblique Slice page in sync (same flag, same toggle from either page).
+        op = getattr(self.state, "oblique_page", None)
+        if op is not None and hasattr(op, "_on_functional_cortex_only_changed"):
+            try:
+                op._on_functional_cortex_only_changed()
+            except Exception:
+                pass
+
+    def _apply_functional_cortex_only_change(self) -> None:
+        """Re-render every functional overlay after the shared cortex-only flag
+        changed (from this page or from the Oblique Slice page)."""
+        # Functional caches must be rebuilt with/without the cortex restriction.
+        self._slice_pet_rgba_cache = None
+        self._slice_siscom_rgba_cache = None
+        self._slice_fmri_rgba_cache = None
+        # SPECT (ictal / interictal) keep their own caches in the SPECT mixin.
+        try:
+            self._spect_invalidate_caches()
+        except Exception:
+            pass
+        try:
+            self._render_visible_pet_overlays_only()
+        except Exception:
+            pass
+        try:
+            self._render_siscom()
+        except Exception:
+            pass
+        try:
+            self._render_visible_fmri_overlays_only()
+        except Exception:
+            pass
+        try:
+            self._render_visible_spect_overlays_only()
+        except Exception:
+            pass
+        if getattr(self, "_fmri_actor", None) is not None:
+            try:
+                self._render_fmri_overlay()
+            except Exception:
+                pass
+        self._render()
 
     def _get_active_surface_polydata(self):
         if not _PV_OK:
@@ -4587,6 +5380,15 @@ class View3DPage(
             except Exception:
                 pass
             self._axial_siscom_actor = None
+
+        for _plane in ("axial", "coronal", "sagittal"):
+            _attr = f"_{_plane}_fmri_actor"
+            if which == f"{_plane}_fmri" and getattr(self, _attr, None) is not None:
+                try:
+                    self.plotter.remove_actor(getattr(self, _attr), reset_camera=False)
+                except Exception:
+                    pass
+                setattr(self, _attr, None)
 
         if which == "sagittal_pet" and getattr(self, "_sagittal_pet_actor", None) is not None:
             try:
@@ -6568,6 +7370,18 @@ class View3DPage(
         else:
             actors.append(self._siscom_actor)
 
+        # fMRI blob: same behaviour as the SISCOM blob.
+        if bool(getattr(self, "_keep_fmri_blob_through_slices", False)):
+            try:
+                if getattr(self, "_fmri_actor", None) is not None:
+                    m = self._fmri_actor.GetMapper()
+                    if m is not None:
+                        m.RemoveAllClippingPlanes()
+            except Exception:
+                pass
+        else:
+            actors.append(getattr(self, "_fmri_actor", None))
+
         keep_electrodes = bool(getattr(self, "_keep_electrodes_visible_through_slices", False))
 
         # Native electrodes:
@@ -7130,6 +7944,10 @@ class View3DPage(
             except Exception:
                 pass
             try:
+                self._remove_fmri_scalar_bar()
+            except Exception:
+                pass
+            try:
                 self._update_spect_scalar_bars()
             except Exception:
                 pass
@@ -7142,6 +7960,10 @@ class View3DPage(
             pass
         try:
             self._update_siscom_scalar_bar()
+        except Exception:
+            pass
+        try:
+            self._update_fmri_scalar_bar()
         except Exception:
             pass
         try:
@@ -7367,7 +8189,9 @@ class View3DPage(
                 show_rh=getattr(self, "_show_rh_pial", True),
                 color_scale_visible=bool(getattr(self, "_show_color_scales", True)),
                 show_pial_options=bool(pial_checked),
-                show_color_scale_option=bool(pet_or_siscom_checked or self._any_spect_on()),
+                show_color_scale_option=bool(
+                    pet_or_siscom_checked or self._any_spect_on() or self._fmri_plane_on()
+                ),
                 show_mni_load_option=bool(mni_checked),
                 show_mni_t1_option=False,
                 mni_t1_visible=bool(getattr(self, "_mni_t1_slices_visible", False)),
@@ -7388,6 +8212,16 @@ class View3DPage(
                 has_hidden_markers=bool(has_hidden_markers),
                 show_ictal_color=True,
                 show_interictal_color=True,
+                show_plan_option=self._has_plan_trajectories(),
+                plan_visible=bool(getattr(self, "_plan_traj_visible", False)),
+                show_cortex_only_option=self._has_parcellation(),
+                cortex_only=bool(getattr(self.state, "functional_cortex_only", False)),
+                # Same rule as "Color PET": always offered in native mode.
+                show_fmri_color=True,
+                show_fmri_surface=self._fmri_source_image() is not None,
+                fmri_blob_on=bool(getattr(self, "_fmri_surface_shown", False)),
+                fmri_pial_on=bool(getattr(self, "_fmri_pial_shown", False)),
+                fmri_keep_on=bool(getattr(self, "_keep_fmri_blob_through_slices", False)),
             )
             if choice == "marker_list":
                 self._open_marker_list_dialog()
@@ -7419,6 +8253,18 @@ class View3DPage(
             elif choice == "siscom":
                 self._choose_siscom_colormap()
 
+            elif choice == "fmri_color":
+                self._choose_fmri_colormap()
+
+            elif choice == "toggle_fmri_blob":
+                self._toggle_fmri_blob()
+
+            elif choice == "toggle_fmri_keep":
+                self._toggle_keep_fmri_blob_through_slices()
+
+            elif choice == "toggle_fmri_pial":
+                self._toggle_fmri_pial_projection()
+
             elif choice == "ictal_color":
                 self._choose_spect_colormap("ictal")
 
@@ -7430,6 +8276,12 @@ class View3DPage(
 
             elif choice == "render_brain":
                 self._open_brain_render_dialog()
+
+            elif choice == "toggle_plan":
+                self._toggle_plan_trajectories()
+
+            elif choice == "toggle_cortex_only":
+                self._toggle_functional_cortex_only()
 
             elif choice == "load_mni_electrodes":
                 self.open_mni_electrodes_files()
@@ -8340,6 +9192,132 @@ class View3DPage(
         self._siscom_scalar_bar_actor = None
         self._remove_siscom_scalar_bar_name()
 
+    # ---- fMRI colour bar (same mechanism as SISCOM: invisible dummy mesh) ----
+    def _remove_fmri_scalar_bar_name(self) -> None:
+        if self.plotter is None:
+            return
+
+        try:
+            keys = list(getattr(self.plotter, "scalar_bars", {}).keys())
+        except Exception:
+            keys = []
+
+        # PyVista keys scalar bars by TITLE, hence the prefix match.
+        for key in keys:
+            try:
+                k = str(key)
+                if k.startswith("fMRI"):
+                    self.plotter.remove_scalar_bar(k)
+            except Exception:
+                pass
+
+        try:
+            self.plotter.remove_scalar_bar("fmri_scalar_bar_dummy")
+        except Exception:
+            pass
+
+    def _remove_fmri_scalar_bar(self) -> None:
+        if self.plotter is None:
+            return
+
+        try:
+            if getattr(self, "_fmri_scalar_bar_actor", None) is not None:
+                self.plotter.remove_actor(self._fmri_scalar_bar_actor, reset_camera=False)
+        except Exception:
+            pass
+
+        self._fmri_scalar_bar_actor = None
+        self._remove_fmri_scalar_bar_name()
+
+    def _get_fmri_display_range(self):
+        """(lo, hi) of the fMRI colour bar: [threshold, max] for a one-sided map,
+        [-max, +max] for a two-sided (activation + deactivation) map."""
+        thr = float(self._fmri_threshold or 0.0)
+        vmax = float(self._fmri_vmax or (thr + 1.0))
+        if not np.isfinite(vmax) or vmax <= thr:
+            vmax = thr + 1.0
+        if bool(getattr(self, "_fmri_diverging", False)):
+            return -vmax, vmax
+        return thr, vmax
+
+    def _update_fmri_scalar_bar(self) -> None:
+        if not _PV_OK or self.plotter is None:
+            return
+        if not bool(getattr(self, "_show_color_scales", True)):
+            self._remove_fmri_scalar_bar()
+            self._render()
+            return
+        img = self._fmri_source_image()
+        if not self._fmri_plane_on() or img is None:
+            self._remove_fmri_scalar_bar()
+            self._render()
+            return
+
+        try:
+            self._ensure_fmri_auto_levels(img)
+            lo, hi = self._get_fmri_display_range()
+
+            sb = None
+            try:
+                for key, val in getattr(self.plotter, "scalar_bars", {}).items():
+                    if str(key).startswith("fMRI"):
+                        sb = val
+                        break
+            except Exception:
+                sb = None
+
+            if getattr(self, "_fmri_scalar_bar_actor", None) is None or sb is None:
+                self._remove_fmri_scalar_bar()
+
+                dummy = pv.PolyData(np.array([[0.0, 0.0, 0.0]], dtype=np.float32))
+                dummy["fMRI_activation"] = np.array([lo], dtype=np.float32)
+
+                # Slot left of the SPECT bars (0.70 / 0.77), PET (0.84), SISCOM (0.91).
+                self._fmri_scalar_bar_actor = self.plotter.add_mesh(
+                    dummy,
+                    scalars="fMRI_activation",
+                    cmap=self._fmri_cmap_name,
+                    clim=[float(lo), float(hi)],
+                    opacity=0.0,
+                    show_scalar_bar=True,
+                    scalar_bar_args={
+                        "title": "fMRI activation",
+                        "vertical": True,
+                        "position_x": 0.63,
+                        "position_y": 0.12,
+                        "width": 0.055,
+                        "height": 0.76,
+                        "fmt": "%.2f",
+                        "title_font_size": 12,
+                        "label_font_size": 10,
+                        "color": "white",
+                        "n_labels": 5,
+                    },
+                    name="fmri_scalar_bar_dummy",
+                )
+            else:
+                try:
+                    mapper = self._fmri_scalar_bar_actor.GetMapper()
+                    if mapper is not None:
+                        mapper.SetScalarRange(float(lo), float(hi))
+                except Exception:
+                    pass
+
+                try:
+                    sb.SetTitle("fMRI activation")
+                except Exception:
+                    pass
+
+                try:
+                    sb.SetNumberOfLabels(5)
+                except Exception:
+                    pass
+
+        except Exception:
+            pass
+
+        self._render()
+
     def _get_siscom_display_range(self):
         zmin = float(self.dsb_siscom_z.value()) if self.dsb_siscom_z is not None else 2.0
 
@@ -9024,6 +10002,7 @@ class View3DPage(
                 if (
                     actor_name.endswith("_pet")
                     or actor_name.endswith("_siscom")
+                    or actor_name.endswith("_fmri")
                     or actor_name.endswith("_ictal")
                     or actor_name.endswith("_interictal")
                 ):
@@ -9114,6 +10093,8 @@ class View3DPage(
                     )
                 elif actor_name.endswith("_siscom"):
                     actor_opacity = float(np.clip(self._get_siscom_slice_overlay_alpha(), 0.0, 1.0))
+                elif actor_name.endswith("_fmri"):
+                    actor_opacity = float(np.clip(float(self._fmri_opacity), 0.0, 1.0))
             except Exception:
                 actor_opacity = 1.0
 
@@ -9278,6 +10259,158 @@ class View3DPage(
             pass
         try:
             self._render_sagittal_siscom_overlay()
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # fMRI slice-plane overlay (mirror of PET/SISCOM)
+    # ------------------------------------------------------------------
+    def _build_slice_fmri_rgba_cache(self) -> np.ndarray | None:
+        if getattr(self, "chk_fmri_3d", None) is None or not self.chk_fmri_3d.isChecked():
+            return None
+        ref_img = self._get_3d_plane_reference_img()
+        fmri_img = self._fmri_display_image()
+        if ref_img is None or fmri_img is None:
+            return None
+        img_r = self._resample_image_for_slice_cache(
+            fmri_img, ref_img, sitk.sitkLinear, 0.0, sitk.sitkFloat32
+        )
+        if img_r is None:
+            return None
+        try:
+            arr = sitk.GetArrayFromImage(img_r).astype(np.float32)
+        except Exception:
+            return None
+        mask_np = self._get_slice_cache_mask_np(ref_img)
+        if mask_np is None:
+            mask_np = np.ones(arr.shape, dtype=bool)
+        mask_np = self._apply_cortex_to_slice_mask(mask_np, ref_img)
+
+        self._ensure_fmri_auto_levels(fmri_img)
+        thr = float(self._fmri_threshold or 0.0)
+        vmax = float(self._fmri_vmax or (thr + 1.0))
+        if vmax <= thr:
+            vmax = thr + 1.0
+
+        if bool(self._fmri_diverging):
+            valid = np.isfinite(arr) & (np.abs(arr) >= thr) & mask_np
+            norm = np.clip((arr + vmax) / (2.0 * vmax), 0.0, 1.0)
+        else:
+            valid = np.isfinite(arr) & (arr >= thr) & mask_np
+            norm = np.clip((arr - thr) / max(1e-6, vmax - thr), 0.0, 1.0)
+        if not np.any(valid):
+            return None
+
+        norm = np.where(valid, norm, 0.0).astype(np.float32)
+        rgb = pet_norm_to_colormap(norm, self._fmri_cmap_name)
+        alpha = np.where(valid, np.clip(0.55 + 0.45 * norm, 0.55, 1.0), 0.0).astype(np.float32)
+        rgba = np.zeros(arr.shape + (4,), dtype=np.uint8)
+        rgba = blend_siscom_on_rgba(rgba, rgb, alpha, alpha_scale=1.0)
+        return np.ascontiguousarray(rgba)
+
+    def _get_or_build_slice_fmri_rgba_cache(self) -> np.ndarray | None:
+        if self._slice_fmri_rgba_cache is None:
+            self._slice_fmri_rgba_cache = self._build_slice_fmri_rgba_cache()
+            self._slice_fmri_cache_ready = self._slice_fmri_rgba_cache is not None
+        return self._slice_fmri_rgba_cache
+
+    def _build_fmri_plane_rgba_highres(self, geom: dict):
+        cache = self._get_or_build_slice_fmri_rgba_cache()
+        return self._extract_rgba_slice_from_volume_cache(cache, geom)
+
+    def _fmri_plane_on(self) -> bool:
+        return bool(getattr(self, "chk_fmri_3d", None) is not None and self.chk_fmri_3d.isChecked())
+
+    def _render_coronal_fmri_overlay(self) -> None:
+        self._remove_actor("coronal_fmri")
+        if self.chk_coronal_plane is None or not self.chk_coronal_plane.isChecked():
+            return
+        if not self._fmri_plane_on():
+            return
+        geom = self._build_coronal_plane_geometry()
+        if geom is None:
+            return
+        rgba = self._build_fmri_plane_rgba_highres(geom)
+        self._render_textured_plane_actor(
+            "_coronal_fmri_actor", "coronal_fmri", "_coronal_fmri_source_mesh",
+            "coronal", geom, rgba,
+        )
+
+    def _render_axial_fmri_overlay(self) -> None:
+        self._remove_actor("axial_fmri")
+        if self.chk_axial_plane is None or not self.chk_axial_plane.isChecked():
+            return
+        if not self._fmri_plane_on():
+            return
+        geom = self._build_axial_plane_geometry()
+        if geom is None:
+            return
+        rgba = self._build_fmri_plane_rgba_highres(geom)
+        self._render_textured_plane_actor(
+            "_axial_fmri_actor", "axial_fmri", "_axial_fmri_source_mesh",
+            "axial", geom, rgba,
+        )
+
+    def _render_sagittal_fmri_overlay(self) -> None:
+        self._remove_actor("sagittal_fmri")
+        if self.chk_sagittal_plane is None or not self.chk_sagittal_plane.isChecked():
+            return
+        if not self._fmri_plane_on():
+            return
+        geom = self._build_sagittal_plane_geometry()
+        if geom is None:
+            return
+        rgba = self._build_fmri_plane_rgba_highres(geom)
+        self._render_textured_plane_actor(
+            "_sagittal_fmri_actor", "sagittal_fmri", "_sagittal_fmri_source_mesh",
+            "sagittal", geom, rgba,
+        )
+
+    def _render_visible_fmri_overlays_only(self) -> None:
+        try:
+            self._render_coronal_fmri_overlay()
+        except Exception:
+            pass
+        try:
+            self._render_axial_fmri_overlay()
+        except Exception:
+            pass
+        try:
+            self._render_sagittal_fmri_overlay()
+        except Exception:
+            pass
+
+    def _update_visible_fmri_overlay_opacity_only(self) -> None:
+        op = float(self._fmri_opacity)
+        for attr in ("_axial_fmri_actor", "_coronal_fmri_actor", "_sagittal_fmri_actor"):
+            act = getattr(self, attr, None)
+            if act is not None:
+                try:
+                    act.GetProperty().SetOpacity(op)
+                except Exception:
+                    pass
+        self._render()
+
+    def _refresh_fmri_only(self) -> None:
+        """Mirror of _refresh_siscom_only: blob (default) + slice-plane overlays."""
+        self._invalidate_slice_volume_cache(base=False, pet=False, siscom=False, fmri=True)
+        if self._fmri_plane_on() and bool(getattr(self, "_fmri_surface_shown", True)):
+            try:
+                self._render_fmri_overlay()
+            except Exception:
+                pass
+        else:
+            self._hide_fmri_overlay()
+        try:
+            self._render_visible_fmri_overlays_only()
+        except Exception:
+            pass
+        try:
+            self._update_fmri_scalar_bar()
+        except Exception:
+            pass
+        try:
+            self._render()
         except Exception:
             pass
 

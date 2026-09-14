@@ -48,6 +48,10 @@ class CoregResult:
     moving: sitk.Image
     affine_mat_path: str | None = None
     ants_work_dir: str | None = None
+    # When a companion image was moved with the transform estimated on another
+    # image (fMRI activation moved with its grey anatomy), this is the
+    # registered image itself (the anatomy in fixed space), kept for review.
+    companion_in_fixed: sitk.Image | None = None
 
 
 def _report_progress(progress_cb: Callable[[int], None] | None, value: int) -> None:
@@ -524,6 +528,125 @@ def ants_deface_mask_in_subject_space(
     return out_mask
 
 
+def subject_face_blur_region(
+    t1_path: str,
+    brain_mask_path: str | None = None,
+    out_dir: str | None = None,
+    progress_cb: Callable[[int], None] | None = None,
+    back_margin_mm: float = 25.0,
+    brain_protect_mm: float = 6.0,
+    feather_mm: float = 2.0,
+) -> str:
+    """Build a subject-space mask (float 0..1) of the whole facial region.
+
+    Unlike the hard :func:`ants_deface_mask_in_subject_space` frontal cut-out,
+    this covers every extracranial soft-tissue voxel in the front half of the
+    head - the full face (skin, eyes, nose, mouth, chin, neck front) AND the
+    ears - while leaving the occipital scalp alone. The export dialog ZEROES
+    every voxel where the mask is >= 0.5 (FreeSurfer-style removal).
+
+    Steps (all subject space, no template geometry needed for the shape):
+      1) head silhouette   = Otsu threshold of the T1, hole-filled, largest CC
+      2) protected brain   = brain mask dilated by ``brain_protect_mm``
+      3) face/ears         = head AND NOT protected-brain
+      4) drop back of head = keep only voxels anterior to a coronal plane
+                             ``back_margin_mm`` posterior to the brain CENTRE
+                             (LPS +y = posterior). 25 mm was measured on two
+                             subjects as the smallest margin that takes the
+                             whole pinna (15 mm leaves up to 0.9 cm3 of ear)
+                             while still sparing the occipital scalp.
+      5) margin            = dilate by ``feather_mm`` so the skin edge is fully
+                             inside the region (thin structures such as the
+                             nose or the lips are never lost), then a light
+                             1 mm smoothing for a clean 0.5 iso-surface
+
+    Returns the path to ``T1_face_blur.nii.gz`` (float32, 0..1).
+    """
+    import numpy as np
+
+    _report_progress(progress_cb, 0)
+
+    t1 = sitk.ReadImage(str(t1_path), sitk.sitkFloat32)
+
+    # 1) head silhouette --------------------------------------------------
+    otsu = sitk.OtsuThreshold(t1, 0, 1)  # 1 = foreground (head)
+    otsu = sitk.BinaryMorphologicalClosing(otsu, [2, 2, 2])
+    otsu = sitk.BinaryFillhole(otsu)
+    # keep the largest connected component (the head), drop stray noise
+    cc = sitk.ConnectedComponent(otsu)
+    cc = sitk.RelabelComponent(cc, sortByObjectSize=True)
+    head = sitk.Cast(cc == 1, sitk.sitkUInt8)
+
+    _report_progress(progress_cb, 40)
+
+    # 2) protected brain --------------------------------------------------
+    if brain_mask_path is None:
+        brain_mask_path = ants_generate_brainmask_t1(str(t1_path), out_dir=out_dir)
+    brain = sitk.ReadImage(str(brain_mask_path))
+    brain = sitk.Cast(brain > 0.5, sitk.sitkUInt8)
+    if brain.GetSize() != t1.GetSize():
+        brain = sitk.Resample(
+            brain, t1, sitk.Transform(3, sitk.sitkIdentity),
+            sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
+        )
+    spacing = t1.GetSpacing()
+    rad = [max(1, int(round(brain_protect_mm / s))) for s in spacing]
+    brain_dil = sitk.BinaryDilate(brain, rad)
+
+    # 3) face/ears = extracranial soft tissue ----------------------------
+    face = sitk.And(head, sitk.Not(brain_dil))
+
+    _report_progress(progress_cb, 60)
+
+    # 4) drop the back of the head (keep the front half + the ears) ----------
+    # SimpleITK physical points are always LPS, so world-y grows posteriorly.
+    # The cut is a coronal plane ``back_margin_mm`` behind the brain centre:
+    # face, temples and ears lie in front of it, the occipital scalp behind.
+    lss = sitk.LabelShapeStatisticsImageFilter()
+    lss.Execute(brain)
+    bb = lss.GetBoundingBox(1)  # (x, y, z, sx, sy, sz) in index space
+    corners = []
+    for cx in (bb[0], bb[0] + bb[3] - 1):
+        for cy in (bb[1], bb[1] + bb[4] - 1):
+            for cz in (bb[2], bb[2] + bb[5] - 1):
+                corners.append(t1.TransformIndexToPhysicalPoint((int(cx), int(cy), int(cz)))[1])
+    brain_center_y = 0.5 * (min(corners) + max(corners))
+    cutoff_y = brain_center_y + float(back_margin_mm)
+
+    face_arr = sitk.GetArrayFromImage(face)  # [z, y, x]
+    if face_arr.any():
+        zz, yy, xx = np.nonzero(face_arr)
+        # world-y for each face voxel, vectorised via the image affine
+        org = np.array(t1.GetOrigin())
+        spc = np.array(spacing)
+        dirm = np.array(t1.GetDirection()).reshape(3, 3)
+        idx = np.stack([xx, yy, zz], axis=1).astype(np.float64)  # (N, i j k)
+        world = org + (dirm @ (idx * spc).T).T
+        keep = world[:, 1] <= cutoff_y
+        drop = ~keep
+        if drop.any():
+            face_arr[zz[drop], yy[drop], xx[drop]] = 0
+    face = sitk.GetImageFromArray(face_arr)
+    face.CopyInformation(t1)
+
+    _report_progress(progress_cb, 80)
+
+    # 5) safety margin + clean edge ------------------------------------------
+    # Dilate (never erode): thin structures (nose, lips, ear rim, skin) must
+    # stay inside the >= 0.5 region. No renormalisation: the 0.5 iso-surface
+    # of a lightly smoothed binary mask IS the dilated boundary.
+    rad_f = [max(1, int(round(float(feather_mm) / s))) for s in spacing]
+    face = sitk.BinaryDilate(face, rad_f)
+    soft = sitk.SmoothingRecursiveGaussian(sitk.Cast(face, sitk.sitkFloat32), 1.0)
+    soft = sitk.Clamp(soft, sitk.sitkFloat32, 0.0, 1.0)
+
+    outd = _ants_out_dir(out_dir)
+    out_path = str(outd / "T1_face_blur.nii.gz")
+    sitk.WriteImage(soft, out_path)
+    _report_progress(progress_cb, 100)
+    return out_path
+
+
 # =============================================================================
 # ANTs coregistration
 # =============================================================================
@@ -592,21 +715,68 @@ def _ants_registration_args(
     return args
 
 
+def ants_apply_affine_to_image(
+    fixed_path: str,
+    image_path: str,
+    affine_mat_path: str,
+    out_path: str,
+    interpolation: str = "Linear",
+) -> sitk.Image:
+    """Resample ``image_path`` into the fixed grid with an ANTs affine .mat
+    (the transform estimated by ``ants_coreg_to_fixed``). Used when the image
+    that must be moved is not the one that was registered, e.g. an fMRI
+    activation map moved with the transform estimated on its grey anatomy."""
+    ants_apply = str(_ants_exe("antsApplyTransforms.exe"))
+    cmd = [
+        ants_apply,
+        "--dimensionality",
+        "3",
+        "--float",
+        "1",
+        "--input",
+        str(image_path),
+        "--reference-image",
+        str(fixed_path),
+        "--output",
+        str(out_path),
+        "--interpolation",
+        str(interpolation),
+        "--transform",
+        str(affine_mat_path),
+        "--default-value",
+        "0",
+    ]
+    _run_cmd(cmd, cwd=str(Path(out_path).parent))
+    if not Path(out_path).exists():
+        raise RuntimeError(f"antsApplyTransforms did not produce: {out_path}")
+    return sitk.ReadImage(str(out_path))
+
+
 def ants_coreg_to_fixed(
     fixed_path: str,
     moving_path: str,
     transforms_dir: str | None,
     progress_cb: Callable[[int], None] | None = None,
     moving_modality: str = "AUTO",
-) -> tuple[sitk.Transform, sitk.Image, str | None, str | None]:
+    apply_to_path: str | None = None,
+) -> tuple[sitk.Transform, sitk.Image, str | None, str | None, sitk.Image | None]:
     """
     Run ANTs registration moving->fixed and return:
       - a sitk.Transform (identity placeholder; use .mat files if needed later)
       - moving resampled into fixed space as sitk.Image
+      - the affine .mat path, the ANTs work dir
+      - the registered image in fixed space when ``apply_to_path`` was used
+        (None otherwise)
 
     Files produced in transforms_dir (or temp):
       - <prefix>0GenericAffine.mat (always)
       - <prefix>Warped.nii.gz (moving in fixed)
+
+    ``apply_to_path``: optional companion image on the SAME grid as ``moving``
+    (e.g. the activation map recovered from a colour fusion whose grey anatomy
+    is ``moving``). The registration is estimated on ``moving`` and the
+    resulting affine is applied to this image, which is then returned as the
+    "moving in fixed" image instead of the warped ``moving``.
     """
     # fail early if binaries missing:
     _ants_exe("antsRegistration.exe")
@@ -636,13 +806,26 @@ def ants_coreg_to_fixed(
     # we will parse <prefix>0GenericAffine.mat and compose LPS transform properly.
     transform = sitk.Transform(3, sitk.sitkIdentity)
 
-    _report_progress(progress_cb, 100)
-
     affine_mat_path = str(prefix) + "0GenericAffine.mat"
     if not Path(affine_mat_path).exists():
         affine_mat_path = None
 
-    return transform, moving_in_fixed, affine_mat_path, str(out_dir)
+    registered_in_fixed = None
+    if apply_to_path:
+        if affine_mat_path is None:
+            raise RuntimeError("ANTs did not produce the affine needed to move the companion image.")
+        registered_in_fixed = moving_in_fixed
+        moving_in_fixed = ants_apply_affine_to_image(
+            fixed_path=fixed_path,
+            image_path=apply_to_path,
+            affine_mat_path=affine_mat_path,
+            out_path=str(prefix) + "AppliedWarped.nii.gz",
+            interpolation="Linear",
+        )
+
+    _report_progress(progress_cb, 100)
+
+    return transform, moving_in_fixed, affine_mat_path, str(out_dir), registered_in_fixed
 
 
 # =============================================================================
@@ -660,23 +843,28 @@ def rigid_coreg_to_fixed(
     moving_modality: str = "AUTO",
     use_ants: bool = True,  # kept for compatibility; must be True in ANTs-only
     transforms_dir: str | None = None,
+    apply_to_path: str | None = None,
 ) -> CoregResult:
     """
     Coregister moving -> fixed (ANTs only).
+
+    ``apply_to_path``: see ``ants_coreg_to_fixed`` (companion image moved with
+    the transform estimated on ``moving``; it becomes ``moving_in_fixed``).
     """
     fixed = sitk.ReadImage(fixed_path)
-    moving = sitk.ReadImage(moving_path)
+    moving = sitk.ReadImage(apply_to_path or moving_path)
 
     # Preferred/only: ANTs
     if not use_ants:
         raise RuntimeError("ANTs-only build: use_ants must be True.")
 
-    t, moving_in_fixed, affine_mat_path, ants_work_dir = ants_coreg_to_fixed(
+    t, moving_in_fixed, affine_mat_path, ants_work_dir, companion = ants_coreg_to_fixed(
         fixed_path=fixed_path,
         moving_path=moving_path,
         transforms_dir=transforms_dir,
         progress_cb=progress_cb,
         moving_modality=moving_modality,
+        apply_to_path=apply_to_path,
     )
     return CoregResult(
         transform=t,
@@ -685,6 +873,7 @@ def rigid_coreg_to_fixed(
         moving=moving,
         affine_mat_path=affine_mat_path,
         ants_work_dir=ants_work_dir,
+        companion_in_fixed=companion,
     )
 
 

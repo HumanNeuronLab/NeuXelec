@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication, QMenu
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidgetAction
 
 
 def top_level_window():
@@ -125,6 +125,28 @@ def make_base_menu() -> QMenu:
     return menu
 
 
+
+def add_menu_section(menu: QMenu, text: str) -> None:
+    """Add a non-clickable section header to a NeuXelec context menu.
+
+    The long menus (3D view, oblique slice) are compartmented into short
+    labelled blocks so an action is found by its group instead of by scanning
+    the whole list. Same look as the cockpit group titles: small, uppercase,
+    muted, never selectable. ``text`` is used as given (pass it uppercase).
+    """
+    label = QLabel(str(text))
+    label.setStyleSheet(
+        "QLabel { color: #7E8294; background-color: transparent; border: none;"
+        " font-size: 9px; font-weight: 700; letter-spacing: 1.1px;"
+        " padding: 9px 12px 3px 13px; }"
+    )
+    action = QWidgetAction(menu)
+    action.setDefaultWidget(label)
+    action.setText(str(text))           # introspection only; the widget is drawn
+    action.setEnabled(False)            # never selectable, skipped by the keyboard
+    menu.addAction(action)
+
+
 def exec_3d_view_menu(
     global_pos,
     *,
@@ -151,11 +173,23 @@ def exec_3d_view_menu(
     has_hidden_markers: bool = False,
     show_ictal_color: bool = False,
     show_interictal_color: bool = False,
+    show_plan_option: bool = False,
+    plan_visible: bool = False,
+    show_cortex_only_option: bool = False,
+    cortex_only: bool = False,
+    show_fmri_color: bool = False,
+    show_fmri_surface: bool = False,
+    fmri_blob_on: bool = False,
+    fmri_pial_on: bool = False,
+    fmri_keep_on: bool = False,
 ) -> str | None:
 
     menu = make_base_menu()
 
-    act_marker_list = None
+    # ---------------------------------------------------------------- markers
+    add_menu_section(menu, "MARKERS")
+    act_marker_list = menu.addAction("Marker list")
+
     act_add_marker = None
     act_edit_marker = None
     act_hide_marker = None
@@ -163,33 +197,32 @@ def exec_3d_view_menu(
     act_delete_marker = None
     act_show_hidden_markers = None
 
-    act_marker_list = menu.addAction("Marker list")
-    menu.addSeparator()
-
     if marker_under_cursor:
         act_edit_marker = menu.addAction("Edit marker…")
         act_hide_marker = menu.addAction("Hide marker")
         act_export_marker = menu.addAction("Export marker…")
         act_delete_marker = menu.addAction("Delete marker")
-        menu.addSeparator()
 
     elif can_add_marker:
         act_add_marker = menu.addAction("Add marker…")
-        menu.addSeparator()
 
     if has_hidden_markers:
         act_show_hidden_markers = menu.addAction("Show hidden markers")
-        menu.addSeparator()
 
+    # --------------------------------------------------------- overlay colors
     act_pet = None
     act_siscom = None
     act_ct = None
     act_ictal = None
     act_interictal = None
+    act_fmri_color = None
 
     if native_actions_enabled:
+        add_menu_section(menu, "OVERLAY COLORS")
         act_pet = menu.addAction("Color PET")
         act_siscom = menu.addAction("Color SISCOM")
+        if show_fmri_color:
+            act_fmri_color = menu.addAction("Color fMRI")
         act_ct = menu.addAction("Color CT")
         # Exactly like Color PET: shown in native mode, hidden in MNI mode.
         if show_ictal_color:
@@ -197,57 +230,109 @@ def exec_3d_view_menu(
         if show_interictal_color:
             act_interictal = menu.addAction("Color Inter-ictal SPECT")
 
+    # ------------------------------------------------------------------- fMRI
+    act_fmri_blob = None
+    act_fmri_pial = None
+    act_fmri_keep = None
+
+    if show_fmri_surface:
+        add_menu_section(menu, "fMRI")
+        act_fmri_blob = menu.addAction(
+            "Hide fMRI blob" if fmri_blob_on else "Plot fMRI blob"
+        )
+        if fmri_blob_on:
+            act_fmri_keep = menu.addAction(
+                "Crop fMRI blob through slices"
+                if fmri_keep_on
+                else "Keep fMRI blob through slices"
+            )
+        act_fmri_pial = menu.addAction(
+            "Hide fMRI on surface" if fmri_pial_on else "Project fMRI on surface"
+        )
+
+    # ---------------------------------------------------------------- display
     act_toggle_color_scale = None
+    act_toggle_slice_plane_frames = None
+    act_cortex_only = None
+    act_keep_electrodes_through_slices = None
+    act_siscom_dont_crop = None
+    act_render_brain = None
+
+    if (
+        show_color_scale_option
+        or show_slice_plane_frames_option
+        or show_cortex_only_option
+        or show_keep_electrodes_through_slices_option
+        or show_siscom_crop_option
+        or native_actions_enabled
+    ):
+        add_menu_section(menu, "DISPLAY")
+
     if show_color_scale_option:
         act_toggle_color_scale = menu.addAction(
             "Remove color scale" if color_scale_visible else "Add color scale"
         )
-    act_toggle_slice_plane_frames = None
+
     if show_slice_plane_frames_option:
         act_toggle_slice_plane_frames = menu.addAction(
             "Remove frame" if slice_plane_frames_visible else "Add frame"
         )
-    act_render_brain = None
 
-    if native_actions_enabled:
-        menu.addSeparator()
-        act_render_brain = menu.addAction("Render Brain…")
-
-    act_load_mni_electrodes = None
-    if show_mni_load_option:
-        act_load_mni_electrodes = menu.addAction("Load MNI electrodes.tsv…")
-
-    act_toggle_mni_t1_slices = None
-    if show_mni_t1_option:
-        act_toggle_mni_t1_slices = menu.addAction(
-            "Remove MNI T1 slices" if mni_t1_visible else "Add MNI T1 slices"
+    if show_cortex_only_option:
+        act_cortex_only = menu.addAction(
+            "Functional overlays: whole brain"
+            if cortex_only
+            else "Functional overlays: cortex only"
         )
-    act_mni_parcellation_table = None
-    if show_mni_parcellation_table_option:
-        act_mni_parcellation_table = menu.addAction("Parcellation table…")
 
-    act_keep_electrodes_through_slices = None
     if show_keep_electrodes_through_slices_option:
-        menu.addSeparator()
         act_keep_electrodes_through_slices = menu.addAction(
             "Keep electrodes visible through slices"
         )
         act_keep_electrodes_through_slices.setCheckable(True)
         act_keep_electrodes_through_slices.setChecked(bool(keep_electrodes_through_slices))
 
-    act_siscom_dont_crop = None
     if show_siscom_crop_option:
-        if not show_keep_electrodes_through_slices_option:
-            menu.addSeparator()
         act_siscom_dont_crop = menu.addAction("Don't crop SISCOM blob through slices")
         act_siscom_dont_crop.setCheckable(True)
         act_siscom_dont_crop.setChecked(bool(siscom_dont_crop))
 
+    if native_actions_enabled:
+        act_render_brain = menu.addAction("Render Brain…")
+
+    # --------------------------------------------------------------- planning
+    act_toggle_plan = None
+    if show_plan_option:
+        add_menu_section(menu, "PLANNING")
+        act_toggle_plan = menu.addAction(
+            "Hide planning electrodes" if plan_visible else "Plot planning electrodes"
+        )
+
+    # -------------------------------------------------------------------- MNI
+    act_load_mni_electrodes = None
+    act_toggle_mni_t1_slices = None
+    act_mni_parcellation_table = None
+
+    if show_mni_load_option or show_mni_t1_option or show_mni_parcellation_table_option:
+        add_menu_section(menu, "MNI ATLAS")
+
+    if show_mni_load_option:
+        act_load_mni_electrodes = menu.addAction("Load MNI electrodes.tsv…")
+
+    if show_mni_t1_option:
+        act_toggle_mni_t1_slices = menu.addAction(
+            "Remove MNI T1 slices" if mni_t1_visible else "Add MNI T1 slices"
+        )
+
+    if show_mni_parcellation_table_option:
+        act_mni_parcellation_table = menu.addAction("Parcellation table…")
+
+    # --------------------------------------------------------------- surfaces
     act_toggle_lh = None
     act_toggle_rh = None
 
     if show_pial_options and (has_lh or has_rh):
-        menu.addSeparator()
+        add_menu_section(menu, "PIAL SURFACES")
 
         if has_lh:
             act_toggle_lh = menu.addAction("Remove LH" if show_lh else "Add LH")
@@ -287,6 +372,18 @@ def exec_3d_view_menu(
     if act_siscom is not None and action == act_siscom:
         return "siscom"
 
+    if act_fmri_color is not None and action == act_fmri_color:
+        return "fmri_color"
+
+    if act_fmri_blob is not None and action == act_fmri_blob:
+        return "toggle_fmri_blob"
+
+    if act_fmri_keep is not None and action == act_fmri_keep:
+        return "toggle_fmri_keep"
+
+    if act_fmri_pial is not None and action == act_fmri_pial:
+        return "toggle_fmri_pial"
+
     if act_ictal is not None and action == act_ictal:
         return "ictal_color"
 
@@ -298,6 +395,12 @@ def exec_3d_view_menu(
 
     if act_render_brain is not None and action == act_render_brain:
         return "render_brain"
+
+    if act_toggle_plan is not None and action == act_toggle_plan:
+        return "toggle_plan"
+
+    if act_cortex_only is not None and action == act_cortex_only:
+        return "toggle_cortex_only"
 
     if act_load_mni_electrodes is not None and action == act_load_mni_electrodes:
         return "load_mni_electrodes"
@@ -339,20 +442,37 @@ def exec_oblique_slice_menu(
     show_color_scale_option: bool = True,
     show_ictal_color: bool = False,
     show_interictal_color: bool = False,
+    show_cortex_only_option: bool = False,
+    cortex_only: bool = False,
+    show_fmri_color: bool = False,
 ) -> str | None:
     menu = make_base_menu()
 
+    add_menu_section(menu, "OVERLAY COLORS")
     act_pet = menu.addAction("Color PET")
     act_siscom = menu.addAction("Color SISCOM")
+    act_fmri_color = menu.addAction("Color fMRI") if show_fmri_color else None
     act_ictal = menu.addAction("Color Ictal SPECT") if show_ictal_color else None
     act_interictal = (
         menu.addAction("Color Inter-ictal SPECT") if show_interictal_color else None
     )
 
     act_toggle_color_scale = None
+    act_cortex_only = None
+
+    if show_color_scale_option or show_cortex_only_option:
+        add_menu_section(menu, "DISPLAY")
+
     if show_color_scale_option:
         act_toggle_color_scale = menu.addAction(
             "Remove color scale" if color_scale_visible else "Add color scale"
+        )
+
+    if show_cortex_only_option:
+        act_cortex_only = menu.addAction(
+            "Functional overlays: whole brain"
+            if cortex_only
+            else "Functional overlays: cortex only"
         )
 
     action = menu.exec(global_pos)
@@ -364,6 +484,8 @@ def exec_oblique_slice_menu(
         return "pet"
     if action == act_siscom:
         return "siscom"
+    if act_fmri_color is not None and action == act_fmri_color:
+        return "fmri_color"
     if act_ictal is not None and action == act_ictal:
         return "ictal_color"
     if act_interictal is not None and action == act_interictal:
@@ -371,6 +493,9 @@ def exec_oblique_slice_menu(
 
     if act_toggle_color_scale is not None and action == act_toggle_color_scale:
         return "toggle_color_scale"
+
+    if act_cortex_only is not None and action == act_cortex_only:
+        return "toggle_cortex_only"
 
     return None
 

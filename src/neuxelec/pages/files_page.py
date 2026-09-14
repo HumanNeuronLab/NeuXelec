@@ -34,10 +34,17 @@ from ..ui.neuxelec_message_dialog import NeuXelecMessageDialog
 from ..ui.overlay_viewer import OverlayViewer
 from ..ui.page_loading_overlay import PageLoadingOverlay
 from ..ui.pial_coreg_dialog import PialCoregDialog
+from ..utils.fmri_ingest import (
+    KIND_BOLD_4D,
+    KIND_RGB_FUSION,
+    classify_fmri_image,
+    split_rgb_fusion,
+    squeeze_to_3d,
+)
 from ..utils.format_convert import convert_to_nifti_if_needed
-from ..utils.image_ingest import ingest_image_with_prompt
+from ..utils.image_ingest import ingest_image_with_prompt, read_image_any
 
-Modality = Literal["T2", "CT", "PET", "ictalSPECT", "interictalSPECT"]
+Modality = Literal["T2", "CT", "PET", "ictalSPECT", "interictalSPECT", "fMRI"]
 
 
 from ..workers import BrainMaskWorker, CoregWorker, IsoSurfaceWorker, SISCOMWorker
@@ -80,6 +87,7 @@ class FilesPage:
         # --- UI widgets (paths) ---
         self.le_t1 = self.ui.findChild(QLineEdit, "le_FilesCoreg_loadT1")
         self.le_t2 = self.ui.findChild(QLineEdit, "le_FilesCoreg_loadT2")
+        self.le_fmri = self.ui.findChild(QLineEdit, "le_FilesCoreg_loadfMRI")
         self.le_ct = self.ui.findChild(QLineEdit, "le_FilesCoreg_loadCT")
         self.le_pet = self.ui.findChild(QLineEdit, "le_FilesCoreg_loadPET")
         self.le_ictal = self.ui.findChild(QLineEdit, "le_FilesCoreg_loadictalSPECT")
@@ -93,6 +101,7 @@ class FilesPage:
         for le in (
             self.le_t1,
             self.le_t2,
+            self.le_fmri,
             self.le_ct,
             self.le_pet,
             self.le_ictal,
@@ -111,6 +120,7 @@ class FilesPage:
         self._status_pills: dict[str, QLabel] = {
             "T1": self.ui.findChild(QLabel, "pill_FilesCoreg_T1"),
             "T2": self.ui.findChild(QLabel, "pill_FilesCoreg_T2"),
+            "fMRI": self.ui.findChild(QLabel, "pill_FilesCoreg_fMRI"),
             "CT": self.ui.findChild(QLabel, "pill_FilesCoreg_CT"),
             "PET": self.ui.findChild(QLabel, "pill_FilesCoreg_PET"),
             "ictalSPECT": self.ui.findChild(QLabel, "pill_FilesCoreg_ictalSPECT"),
@@ -121,10 +131,12 @@ class FilesPage:
             "LHPial": self.ui.findChild(QLabel, "pill_FilesCoreg_LHPial"),
             "RHPial": self.ui.findChild(QLabel, "pill_FilesCoreg_RHPial"),
             "BrainMask": self.ui.findChild(QLabel, "pill_FilesCoreg_BrainMask"),
+            "Planning": self.ui.findChild(QLabel, "pill_FilesCoreg_Planning"),
         }
         self._status_texts: dict[str, QLabel] = {
             "T1": self.ui.findChild(QLabel, "status_FilesCoreg_T1"),
             "T2": self.ui.findChild(QLabel, "status_FilesCoreg_T2"),
+            "fMRI": self.ui.findChild(QLabel, "status_FilesCoreg_fMRI"),
             "CT": self.ui.findChild(QLabel, "status_FilesCoreg_CT"),
             "PET": self.ui.findChild(QLabel, "status_FilesCoreg_PET"),
             "ictalSPECT": self.ui.findChild(QLabel, "status_FilesCoreg_ictalSPECT"),
@@ -135,6 +147,7 @@ class FilesPage:
             "LHPial": self.ui.findChild(QLabel, "status_FilesCoreg_LHPial"),
             "RHPial": self.ui.findChild(QLabel, "status_FilesCoreg_RHPial"),
             "BrainMask": self.ui.findChild(QLabel, "status_FilesCoreg_BrainMask"),
+            "Planning": self.ui.findChild(QLabel, "status_FilesCoreg_Planning"),
         }
         # White modality-name labels in the cockpit (used for path tooltips).
         self._status_names: dict[str, QLabel] = {
@@ -145,6 +158,7 @@ class FilesPage:
         # --- Load buttons ---
         self.btn_load_t1 = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_loadT1")
         self.btn_load_t2 = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_loadT2")
+        self.btn_load_fmri = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_loadfMRI")
         self.btn_load_ct = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_loadCT")
         self.btn_load_pet = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_loadPET")
         self.btn_load_ictal = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_loadictalSPECT")
@@ -165,6 +179,7 @@ class FilesPage:
             QAbstractButton, "btn_FilesCoreg_loadParcellations"
         )
         self.btn_load_surfaces = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_loadSurfaces")
+        self.btn_load_planning = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_loadPlanning")
 
         if self.btn_load_imaging:
             self.btn_load_imaging.clicked.connect(self.load_imaging_bundle)
@@ -172,11 +187,15 @@ class FilesPage:
             self.btn_load_parcellations.clicked.connect(self.load_parcellation_bundle)
         if self.btn_load_surfaces:
             self.btn_load_surfaces.clicked.connect(self.load_surfaces_bundle)
+        if self.btn_load_planning:
+            self.btn_load_planning.clicked.connect(self.load_planning_bundle)
 
         if self.btn_load_t1:
             self.btn_load_t1.clicked.connect(self.load_t1)
         if self.btn_load_t2:
             self.btn_load_t2.clicked.connect(self.load_t2)
+        if self.btn_load_fmri:
+            self.btn_load_fmri.clicked.connect(self.load_fmri)
         if self.btn_load_ct:
             self.btn_load_ct.clicked.connect(self.load_ct)
         if self.btn_load_pet:
@@ -200,6 +219,7 @@ class FilesPage:
         # --- Checkboxes ---
         self.chk_t1 = self.ui.findChild(QCheckBox, "chk_FilesCoreg_T1")
         self.chk_t2 = self.ui.findChild(QCheckBox, "chk_FilesCoreg_T2")
+        self.chk_fmri = self.ui.findChild(QCheckBox, "chk_FilesCoreg_fMRI")
         self.chk_ct = self.ui.findChild(QCheckBox, "chk_FilesCoreg_CT")
         self.chk_pet = self.ui.findChild(QCheckBox, "chk_FilesCoreg_PET")
         self.chk_ictal = self.ui.findChild(QCheckBox, "chk_FilesCoreg_ictalSPECT")
@@ -208,11 +228,11 @@ class FilesPage:
         self._moving_modality_group = QButtonGroup(self.ui)
         self._moving_modality_group.setExclusive(True)
 
-        for cb in (self.chk_t2, self.chk_ct, self.chk_pet, self.chk_ictal, self.chk_interictal):
+        for cb in (self.chk_t2, self.chk_fmri, self.chk_ct, self.chk_pet, self.chk_ictal, self.chk_interictal):
             if cb is not None:
                 self._moving_modality_group.addButton(cb)
 
-        for cb in (self.chk_t2, self.chk_ct, self.chk_pet, self.chk_ictal, self.chk_interictal):
+        for cb in (self.chk_t2, self.chk_fmri, self.chk_ct, self.chk_pet, self.chk_ictal, self.chk_interictal):
             if cb is not None:
                 cb.toggled.connect(self._update_buttons)
 
@@ -328,6 +348,7 @@ class FilesPage:
 
         # --- Save buttons ---
         self.btn_save_t2 = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_saveT2")
+        self.btn_save_fmri = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_savefMRI")
         self.btn_save_ct = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_saveCT")
         self.btn_save_pet = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_savePET")
         self.btn_save_ictal = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_saveIctalSPECT")
@@ -338,6 +359,8 @@ class FilesPage:
 
         if self.btn_save_t2:
             self.btn_save_t2.clicked.connect(lambda: self.save_coreg("T2"))
+        if self.btn_save_fmri:
+            self.btn_save_fmri.clicked.connect(lambda: self.save_coreg("fMRI"))
         if self.btn_save_ct:
             self.btn_save_ct.clicked.connect(lambda: self.save_coreg("CT"))
         if self.btn_save_pet:
@@ -444,6 +467,7 @@ class FilesPage:
             "ictalSPECT": "Ictal SPECT",
             "interictalSPECT": "Interictal SPECT",
             "SISCOM": "SISCOM",
+            "fMRI": "fMRI",
         }
 
         return names.get(str(modality), str(modality))
@@ -937,6 +961,7 @@ class FilesPage:
         names = {
             "T1": self._default_filename(self._mri1_filename_label(), ".nii"),
             "T2": self._default_filename(self._mri2_filename_label(), ".nii"),
+            "fMRI": self._default_filename("fMRI", ".nii"),
             "CT": self._default_filename("CT", ".nii"),
             "PET": self._default_filename("PET", ".nii"),
             "ictalSPECT": self._default_filename("ictalSPECT", ".nii"),
@@ -1013,6 +1038,14 @@ class FilesPage:
             return "ictalSPECT"
         if "pet" in name:
             return "PET"
+        # Functional MRI: activation / statistical maps and scanner colour
+        # fusions. Tested before CT because "activation" contains "ct".
+        if any(
+            k in name
+            for k in ("fmri", "irmf", "bold", "fused", "fusion", "activation", "tmap", "t_map",
+                      "zstat", "spmt", "functional")
+        ):
+            return "fMRI"
         if (
             "ct" in name
             or "scanner" in name
@@ -1076,6 +1109,7 @@ class FilesPage:
             ("ictalSPECT", "Ictal SPECT"),
             ("interictalSPECT", "Interictal SPECT"),
             ("SISCOM", "SISCOM already in MRI 1 space"),
+            ("fMRI", "fMRI (activation map)"),
             ("IGNORE", "Ignore"),
         ]
         suggestions = {p: self._guess_imaging_role(p) for p in paths}
@@ -1342,6 +1376,134 @@ class FilesPage:
 
         self._update_buttons()
 
+
+    # ------------------------------------------------------------------
+    # Implantation plan (NeuroInspire .nip)
+    # ------------------------------------------------------------------
+    def _prepare_planning_mri(self, path: str) -> str:
+        """Return a NIfTI path usable by the coregistration engine for the planning
+        MRI (DICOM folders are converted next to the project transforms)."""
+        import tempfile
+        from pathlib import Path as _Path
+
+        import SimpleITK as sitk
+
+        p = _Path(path)
+        if p.is_file():
+            return str(p)
+        files = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(str(p))
+        if not files:
+            raise RuntimeError(f"No DICOM series found in:\n{p}")
+        reader = sitk.ImageSeriesReader()
+        reader.SetFileNames(files)
+        img = reader.Execute()
+        out_dir = getattr(self.state, "transforms_dir", None) or tempfile.mkdtemp(prefix="neuxelec_plan_")
+        _Path(out_dir).mkdir(parents=True, exist_ok=True)
+        out = str(_Path(out_dir) / "planning_mri.nii.gz")
+        sitk.WriteImage(img, out)
+        return out
+
+    def load_planning_bundle(self) -> None:
+        """Import a NeuroInspire .nip implantation plan and express it in MRI 1 space."""
+        from pathlib import Path as _Path
+
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import QApplication, QFileDialog
+
+        from ..ui.load_plan_dialog import LoadPlanDialog
+        from ..ui.neuxelec_message_dialog import NeuXelecMessageDialog
+        from ..utils.nip_reader import read_nip
+        from ..utils.plan_import import build_trajectories_t1, series_uid_from_source, summarize_plan
+
+        parent = self._dialog_parent()
+        start = getattr(self.state, "last_browse_dir", "") or ""
+        path, _ = QFileDialog.getOpenFileName(
+            parent, "Load implantation plan", start, "NeuroInspire plan (*.nip);;All files (*.*)"
+        )
+        if not path:
+            return
+        try:
+            self.state.last_browse_dir = str(_Path(path).parent)
+        except Exception:
+            pass
+
+        QApplication.setOverrideCursor(_Qt.WaitCursor)
+        try:
+            plan = read_nip(path)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            NeuXelecMessageDialog.critical(
+                parent, "Plan import failed", f"Could not read the plan:\n{path}\n\nDetails:\n{e}"
+            )
+            return
+        QApplication.restoreOverrideCursor()
+
+        if not getattr(self.state, "t1_path", None):
+            NeuXelecMessageDialog.warning(
+                parent,
+                "MRI 1 required",
+                "Load MRI 1 first: the plan coordinates are expressed in MRI 1 space.",
+            )
+            return
+
+        mri1_uid = series_uid_from_source(getattr(self.state, "t1_source_path", None))
+        mri1_label = str(getattr(self.state, "mri1_filename_label", None) or "MRI 1")
+        dlg = LoadPlanDialog(plan, parent=parent, mri1_uid=mri1_uid, mri1_label=mri1_label, start_dir=start)
+        if not dlg.exec():
+            return
+        choice = dlg.values()
+
+        try:
+            if choice["mode"] == "identity":
+                trajs = build_trajectories_t1(plan, "identity")
+                transform = {"mode": "identity"}
+            else:
+                mri_path = choice["planning_mri_path"]
+                QApplication.setOverrideCursor(_Qt.WaitCursor)
+                try:
+                    from ..coregistration import rigid_coreg_to_fixed
+
+                    moving_path = self._prepare_planning_mri(mri_path)
+                    res = rigid_coreg_to_fixed(
+                        self.state.t1_path,
+                        moving_path,
+                        moving_modality="MR",
+                        transforms_dir=getattr(self.state, "transforms_dir", None),
+                    )
+                finally:
+                    QApplication.restoreOverrideCursor()
+                if not getattr(res, "affine_mat_path", None):
+                    raise RuntimeError("The registration did not produce an affine transform file.")
+                trajs = build_trajectories_t1(plan, "affine", affine_mat_path=res.affine_mat_path)
+                transform = {
+                    "mode": "affine",
+                    "affine_mat_path": str(res.affine_mat_path),
+                    "planning_mri_path": str(mri_path),
+                }
+        except Exception as e:
+            NeuXelecMessageDialog.critical(
+                parent,
+                "Plan import failed",
+                f"Could not bring the plan into MRI 1 space.\n\nDetails:\n{e}",
+            )
+            return
+
+        plan = dict(plan)
+        plan["trajectories_t1"] = trajs
+        plan["transform"] = transform
+        plan["mri1_series_uid"] = mri1_uid
+        self.state.plan = plan
+        try:
+            self._sync_files_status_overview()
+        except Exception:
+            pass
+        NeuXelecMessageDialog.information(
+            parent,
+            "Implantation plan imported",
+            f"{summarize_plan(plan)}\n\n{len(trajs)} trajectories are now expressed in MRI 1 space.\n"
+            "Open Reconstruction and use Automatic detection to reconstruct them on the CT.",
+        )
+
     def _import_imaging_file(self, role: str, source_path: str, path: str) -> None:
         role = str(role)
 
@@ -1397,6 +1559,21 @@ class FilesPage:
                         op.refresh_available_modalities(refresh=False)
                 except Exception:
                     pass
+            return
+
+        if role == "fMRI":
+            path = self._prepare_fmri_input(path)
+            if path is None:
+                return
+            self.state.fmri_source_path = source_path
+            self.state.fmri_path = path
+            if self.le_fmri:
+                self.le_fmri.setText(path)
+                self.le_fmri.setCursorPosition(0)
+                self.le_fmri.setToolTip(path)
+            if self.chk_fmri is not None:
+                self.chk_fmri.setEnabled(True)
+            self._invalidate_modality("fMRI")
             return
 
         if role == "T2":
@@ -2014,6 +2191,151 @@ class FilesPage:
             except Exception:
                 pass
 
+    def _prepare_fmri_input(self, path: str) -> str | None:
+        """Classify an fMRI input and make it usable (see utils.fmri_ingest).
+
+        * statistical map  -> used as is;
+        * scanner colour fusion (RGB) -> the activation is recovered from the
+          colour and saved next to the file as '<stem>_activation.nii.gz'; the
+          grey anatomy is saved as '<stem>_anatomy.nii.gz' and used as the
+          moving image for the registration to the T1;
+        * 4D BOLD time series -> refused (needs a first-level analysis).
+
+        Returns the path of the map NeuXelec will use, or None to abort.
+        """
+        try:
+            img = read_image_any(path)
+            info = classify_fmri_image(img)
+        except Exception as e:
+            NeuXelecMessageDialog.critical(
+                self._dialog_parent(),
+                "Load fMRI failed",
+                f"The fMRI could not be read.\n\nDetails:\n{e}",
+            )
+            return None
+
+        kind = info["kind"]
+        self.state.fmri_kind = kind
+        self.state.fmri_reg_path = None
+
+        p = Path(path)
+        name = p.name
+        for ext in (".nii.gz", ".nii"):
+            if name.lower().endswith(ext):
+                name = name[: -len(ext)]
+                break
+
+        # (x, y, z, 1) volumes (DICOM series reader, some analysis tools): the
+        # registration works in 3D, so use a 3D copy of a single-volume map.
+        img3 = squeeze_to_3d(img)
+        if img3 is not img:
+            img = img3
+            if kind not in (KIND_RGB_FUSION, KIND_BOLD_4D):
+                path3 = str(p.with_name(f"{name}_3d.nii.gz"))
+                try:
+                    sitk.WriteImage(img, path3)
+                    path = path3
+                except Exception as e:
+                    NeuXelecMessageDialog.critical(
+                        self._dialog_parent(),
+                        "Load fMRI failed",
+                        f"The 3D copy of the map could not be saved next to the file.\n\n{e}",
+                    )
+                    return None
+
+        if kind == KIND_BOLD_4D:
+            NeuXelecMessageDialog.warning(
+                self._dialog_parent(),
+                "fMRI: time series, not an activation map",
+                "This file is a BOLD time series (4D).\n\n"
+                "NeuXelec displays activation maps only: a statistical map (t / z) "
+                "computed by the scanner software, SPM, FSL or another fMRI analysis "
+                "tool. Please load such a map, or a scanner colour fusion.",
+            )
+            self.state.fmri_kind = None
+            return None
+
+        if kind == KIND_RGB_FUSION:
+            try:
+                act_img, anat_img, st = split_rgb_fusion(img)
+            except Exception as e:
+                NeuXelecMessageDialog.critical(
+                    self._dialog_parent(),
+                    "fMRI colour fusion",
+                    f"The activation could not be recovered from the colour fusion.\n\n{e}",
+                )
+                return None
+            if int(st.get("n_coloured", 0)) == 0:
+                NeuXelecMessageDialog.warning(
+                    self._dialog_parent(),
+                    "fMRI colour fusion",
+                    "This RGB volume contains no coloured voxels: no activation overlay "
+                    "was found in it.",
+                )
+                return None
+
+            act_path = str(p.with_name(f"{name}_activation.nii.gz"))
+            anat_path = str(p.with_name(f"{name}_anatomy.nii.gz"))
+            try:
+                sitk.WriteImage(act_img, act_path)
+                sitk.WriteImage(anat_img, anat_path)
+            except Exception as e:
+                NeuXelecMessageDialog.critical(
+                    self._dialog_parent(),
+                    "fMRI colour fusion",
+                    f"The recovered activation could not be saved next to the file.\n\n{e}",
+                )
+                return None
+
+            self.state.fmri_reg_path = anat_path
+            vol = float(st.get("voxel_volume_mm3", 1.0))
+            n = int(st["n_coloured"])
+            NeuXelecMessageDialog.information(
+                self._dialog_parent(),
+                "fMRI: scanner colour fusion detected",
+                "The activation was recovered from the colour overlay "
+                f"({n} coloured voxels, about {n * vol / 1000.0:.1f} cm3, "
+                f"{int(st.get('n_clusters', 0))} clusters).\n\n"
+                "Its values are RELATIVE (position on the colour ramp): the statistical "
+                "threshold was applied by the scanner before export and cannot be changed "
+                "here.\n\n"
+                "Saved next to the file:\n"
+                f"  {Path(act_path).name}  (activation, used by NeuXelec)\n"
+                f"  {Path(anat_path).name}  (grey anatomy, used for the registration)",
+            )
+            path = act_path
+
+        if info.get("mni_like"):
+            NeuXelecMessageDialog.warning(
+                self._dialog_parent(),
+                "fMRI: template grid",
+                "This map has the grid of an MNI template. If it is in MNI space it will "
+                "not align with the patient's T1: NeuXelec expects a map in the "
+                "patient's native space.",
+            )
+        return path
+
+    def load_fmri(self):
+        picked = self._pick_path_or_convert("Select functional MRI (activation map)")
+        if not picked:
+            return
+        source_path, path = picked
+        final_path, _img, _info = self._normalize_on_load("fMRI", path)
+        if final_path is None:
+            return
+        path = self._prepare_fmri_input(final_path)
+        if path is None:
+            return
+        self.state.fmri_source_path = source_path
+        self.state.fmri_path = path
+        if self.le_fmri:
+            self.le_fmri.setText(path)
+            self.le_fmri.setCursorPosition(0)
+        if self.chk_fmri is not None:
+            self.chk_fmri.setEnabled(True)
+        self._invalidate_modality("fMRI")
+        self._update_buttons()
+
     def load_ct(self):
         picked = self._pick_path_or_convert("Select CT")
         if not picked:
@@ -2483,24 +2805,29 @@ class FilesPage:
         after a newly selected T1 has already been loaded.
         """
         self.state.t2_coreg_in_t1 = None
+        self.state.fmri_coreg_in_t1 = None
+        self.state.fmri_anat_in_t1 = None
         self.state.ct_coreg_in_t1 = None
         self.state.pet_coreg_in_t1 = None
         self.state.ictal_spect_coreg_in_t1 = None
         self.state.interictal_spect_coreg_in_t1 = None
 
         self.state.t2_in_t1 = None
+        self.state.fmri_in_t1 = None
         self.state.ct_in_t1 = None
         self.state.pet_in_t1 = None
         self.state.ictal_spect_in_t1 = None
         self.state.interictal_spect_in_t1 = None
 
         self.state.t2_coreg_path = None
+        self.state.fmri_coreg_path = None
         self.state.ct_coreg_path = None
         self.state.pet_coreg_path = None
         self.state.ictal_spect_coreg_path = None
         self.state.interictal_spect_coreg_path = None
 
         self.state.t2_validated = False
+        self.state.fmri_validated = False
         self.state.ct_validated = False
         self.state.ct_ready_for_reconstruction = False
         self.state.pet_validated = False
@@ -2550,6 +2877,20 @@ class FilesPage:
         a newly selected raw image.
         """
         vp = self._view3d()
+
+        if modality == "fMRI":
+            self.state.fmri_coreg_in_t1 = None
+            self.state.fmri_in_t1 = None
+            self.state.fmri_anat_in_t1 = None
+            self.state.fmri_coreg_path = None
+            self.state.fmri_validated = False
+            if vp is not None:
+                try:
+                    vp._hide_fmri_overlay()
+                    vp._render()
+                except Exception:
+                    pass
+            return
 
         if modality == "T2":
             self.state.t2_coreg_in_t1 = None
@@ -2639,6 +2980,8 @@ class FilesPage:
         selected: list[Modality] = []
         if self.chk_t2 is not None and self.chk_t2.isChecked():
             selected.append("T2")
+        if getattr(self, "chk_fmri", None) is not None and self.chk_fmri.isChecked():
+            selected.append("fMRI")
         if self.chk_ct is not None and self.chk_ct.isChecked():
             selected.append("CT")
         if self.chk_pet is not None and self.chk_pet.isChecked():
@@ -2652,6 +2995,7 @@ class FilesPage:
     def _moving_path_for(self, modality: Modality) -> str | None:
         return {
             "T2": getattr(self.state, "t2_path", None),
+            "fMRI": getattr(self.state, "fmri_path", None),
             "CT": getattr(self.state, "ct_path", None),
             "PET": getattr(self.state, "pet_path", None),
             "ictalSPECT": getattr(self.state, "ictal_spect_path", None),
@@ -3590,6 +3934,16 @@ class FilesPage:
 
         self._set_busy(True)
 
+        # fMRI recovered from a scanner colour fusion: the registration is
+        # estimated on the grey anatomy of the fusion (fmri_reg_path) and the
+        # transform is applied to the activation map (fmri_path).
+        apply_to_path = None
+        if modality == "fMRI":
+            reg_path = getattr(self.state, "fmri_reg_path", None)
+            if reg_path and Path(str(reg_path)).exists():
+                apply_to_path = moving_path
+                moving_path = str(reg_path)
+
         # Important: let ANTs work in a temporary directory
         # so the warped image is not user-saved automatically
         self.worker = CoregWorker(
@@ -3597,6 +3951,7 @@ class FilesPage:
             fixed_path=fixed_path,
             moving_path=moving_path,
             transforms_dir=None,
+            apply_to_path=apply_to_path,
         )
         self.worker.progress.connect(self._on_progress)
         self.worker.finished_ok.connect(self._on_coreg_ok)
@@ -3682,6 +4037,11 @@ class FilesPage:
         if modality == "T2":
             self.state.t2_coreg_in_t1 = res.moving_in_fixed
             self.state.t2_validated = False
+        elif modality == "fMRI":
+            self.state.fmri_coreg_in_t1 = res.moving_in_fixed
+            # Colour fusion: the registered grey anatomy, for the review screen.
+            self.state.fmri_anat_in_t1 = getattr(res, "companion_in_fixed", None)
+            self.state.fmri_validated = False
         elif modality == "CT":
             self.state.ct_coreg_in_t1 = res.moving_in_fixed
             self.state.ct_validated = False
@@ -3726,6 +4086,7 @@ class FilesPage:
     def _coreg_image_for(self, modality: Modality) -> sitk.Image | None:
         return {
             "T2": getattr(self.state, "t2_coreg_in_t1", None),
+            "fMRI": getattr(self.state, "fmri_coreg_in_t1", None),
             "CT": getattr(self.state, "ct_coreg_in_t1", None),
             "PET": getattr(self.state, "pet_coreg_in_t1", None),
             "ictalSPECT": getattr(self.state, "ictal_spect_coreg_in_t1", None),
@@ -3807,17 +4168,40 @@ class FilesPage:
                 )
                 return
 
+        # fMRI recovered from a scanner colour fusion: the alignment is judged on
+        # the registered grey anatomy (red/green blend) with the activation
+        # drawn on top in yellow; both follow the manual refinement.
+        overlay_img = None
+        if modality == "fMRI":
+            anat = getattr(self.state, "fmri_anat_in_t1", None)
+            if (
+                anat is not None
+                and self._coreg_image_for("fMRI") is not None
+                and tuple(anat.GetSize()) == tuple(self.state.t1_sitk.GetSize())
+            ):
+                overlay_img = moving_img
+                moving_img = anat
+                moving_name = "fMRI anatomy"
+
         dlg = OverlayViewer(
             fixed_t1=self.state.t1_sitk,
             moving_in_t1=moving_img,
             moving_name=moving_name,
             parent=self._dialog_parent(),
+            overlay_in_t1=overlay_img,
+            overlay_name="fMRI activation",
         )
 
         result = dlg.exec()
 
         if result == QDialog.Accepted:
-            refined_img = dlg.corrected_moving_image()
+            if overlay_img is not None:
+                # The activation is what NeuXelec keeps; the refined anatomy is
+                # kept too so a second review starts from the corrected state.
+                refined_img = dlg.corrected_overlay_image()
+                self.state.fmri_anat_in_t1 = dlg.corrected_moving_image()
+            else:
+                refined_img = dlg.corrected_moving_image()
 
             if modality == "CT":
                 self.state.ct_coreg_in_t1 = refined_img
@@ -3941,6 +4325,54 @@ class FilesPage:
                 # Enable 3D checkbox (pet) only after validation
                 self._enable_3d_checkbox("chk_3d_showPET", True)
 
+            elif modality == "fMRI":
+                fmri_img_to_store = refined_img
+
+                apply_brainmask = NeuXelecMessageDialog.question(
+                    self._dialog_parent(),
+                    "Apply brain mask",
+                    "Do you want to apply the brain mask to the validated fMRI?",
+                    accept_text="Yes",
+                    reject_text="No",
+                )
+
+                if apply_brainmask:
+                    brainmask = getattr(self.state, "brainmask_sitk", None)
+                    if brainmask is None:
+                        NeuXelecMessageDialog.information(
+                            None,
+                            "Brain mask required",
+                            "No brain mask is currently available.\n\n"
+                            "Please generate or load a brain mask first, then validate "
+                            "the fMRI coregistration again.",
+                        )
+                        return
+                    try:
+                        fmri_img_to_store = self._apply_brainmask_to_image(refined_img)
+                    except Exception as e:
+                        NeuXelecMessageDialog.warning(
+                            None,
+                            "Brain mask",
+                            f"Failed to apply brain mask to fMRI:\n{e}\n\n"
+                            "The validated fMRI will be kept without brain masking.",
+                        )
+                        fmri_img_to_store = refined_img
+
+                self.state.fmri_coreg_in_t1 = fmri_img_to_store
+                self.state.fmri_validated = True
+                self.state.fmri_in_t1 = fmri_img_to_store
+
+                # Enable the 3D "Show fMRI" control and refresh the overlay.
+                vp = self._view3d()
+                if vp is not None:
+                    try:
+                        if hasattr(vp, "_refresh_fmri_3d_controls"):
+                            vp._refresh_fmri_3d_controls()
+                        if hasattr(vp, "_fmri_plane_on") and vp._fmri_plane_on():
+                            vp._refresh_fmri_only()
+                    except Exception:
+                        pass
+
             elif modality == "ictalSPECT":
                 # Keep the coregistered image; only replace it if the viewer
                 # returned a (manually refined) image, otherwise it would be
@@ -3975,6 +4407,7 @@ class FilesPage:
     def save_coreg(self, modality: Modality):
         validated = {
             "T2": bool(getattr(self.state, "t2_validated", False)),
+            "fMRI": bool(getattr(self.state, "fmri_validated", False)),
             "CT": bool(getattr(self.state, "ct_validated", False)),
             "PET": bool(getattr(self.state, "pet_validated", False)),
             "ictalSPECT": bool(getattr(self.state, "ictal_spect_validated", False)),
@@ -4066,6 +4499,8 @@ class FilesPage:
         # IMPORTANT: store saved coreg path in state
         if modality == "T2":
             self.state.t2_coreg_path = out_path
+        elif modality == "fMRI":
+            self.state.fmri_coreg_path = out_path
         elif modality == "CT":
             self.state.ct_coreg_path = out_path
         elif modality == "PET":
@@ -4104,6 +4539,12 @@ class FilesPage:
                 self._default_filename(
                     f"{self._mri2_filename_label()}_to_{fixed_label}", ".nii.gz"
                 ),
+            ),
+            (
+                "fMRI",
+                "fmri_validated",
+                "fmri_coreg_path",
+                self._default_filename(f"fMRI_to_{fixed_label}", ".nii.gz"),
             ),
             (
                 "CT",
@@ -4258,6 +4699,7 @@ class FilesPage:
 
         for b in (
             self.btn_save_t2,
+            getattr(self, "btn_save_fmri", None),
             self.btn_save_ct,
             self.btn_save_pet,
             self.btn_save_ictal,
@@ -4384,6 +4826,18 @@ class FilesPage:
                 )
                 self.le_t2.setText(str(txt))
                 self.le_t2.setCursorPosition(0)
+        except Exception:
+            pass
+
+        try:
+            if getattr(self, "le_fmri", None) is not None:
+                txt = (
+                    getattr(self.state, "fmri_coreg_path", None)
+                    or getattr(self.state, "fmri_path", None)
+                    or ""
+                )
+                self.le_fmri.setText(str(txt))
+                self.le_fmri.setCursorPosition(0)
         except Exception:
             pass
 
@@ -4625,6 +5079,10 @@ class FilesPage:
         # ---------- enable checkboxes based on loaded files ----------
         try:
             self._enable_checkbox(self.chk_t2, bool(getattr(self.state, "t2_path", None)))
+            self._enable_checkbox(
+                getattr(self, "chk_fmri", None),
+                bool(getattr(self.state, "fmri_path", None)),
+            )
             self._enable_checkbox(self.chk_ct, bool(getattr(self.state, "ct_path", None)))
             self._enable_checkbox(self.chk_pet, bool(getattr(self.state, "pet_path", None)))
             self._enable_checkbox(
@@ -4727,6 +5185,9 @@ class FilesPage:
                 self.chk_t1.setChecked(False)
 
         self._enable_checkbox(self.chk_t2, bool(getattr(self.state, "t2_path", None)))
+        self._enable_checkbox(
+            getattr(self, "chk_fmri", None), bool(getattr(self.state, "fmri_path", None))
+        )
         self._enable_checkbox(self.chk_ct, bool(getattr(self.state, "ct_path", None)))
         self._enable_checkbox(self.chk_pet, bool(getattr(self.state, "pet_path", None)))
         self._enable_checkbox(self.chk_ictal, bool(getattr(self.state, "ictal_spect_path", None)))
@@ -4746,6 +5207,8 @@ class FilesPage:
 
         if self.btn_save_t2 is not None:
             self.btn_save_t2.setEnabled(bool(getattr(self.state, "t2_validated", False)))
+        if getattr(self, "btn_save_fmri", None) is not None:
+            self.btn_save_fmri.setEnabled(bool(getattr(self.state, "fmri_validated", False)))
         if self.btn_save_ct is not None:
             self.btn_save_ct.setEnabled(bool(getattr(self.state, "ct_validated", False)))
         if self.btn_save_pet is not None:
@@ -4878,6 +5341,7 @@ class FilesPage:
         attr = {
             "T1": "t1_path",
             "T2": "t2_path",
+            "fMRI": "fmri_path",
             "CT": "ct_path",
             "PET": "pet_path",
             "ictalSPECT": "ictal_spect_path",
@@ -4948,6 +5412,25 @@ class FilesPage:
                 "validated"
                 if bool(getattr(self.state, "t2_validated", False))
                 else ("loaded" if bool(getattr(self.state, "t2_path", None)) else "missing")
+            ),
+        )
+
+        self._set_status_item(
+            "fMRI",
+            bool(getattr(self.state, "fmri_path", None)),
+            (
+                "Coregistered"
+                if bool(getattr(self.state, "fmri_validated", False))
+                else (
+                    "Needs coregistration"
+                    if bool(getattr(self.state, "fmri_path", None))
+                    else "Missing"
+                )
+            ),
+            (
+                "validated"
+                if bool(getattr(self.state, "fmri_validated", False))
+                else ("loaded" if bool(getattr(self.state, "fmri_path", None)) else "missing")
             ),
         )
 
@@ -5108,6 +5591,30 @@ class FilesPage:
             "validated" if brainmask_available else "missing",
         )
 
+        # Implantation plan (NeuroInspire .nip) imported through Load Planning.
+        plan = getattr(self.state, "plan", None)
+        plan_loaded = bool(isinstance(plan, dict) and plan.get("trajectories"))
+        plan_ready = bool(plan_loaded and plan.get("trajectories_t1"))
+        self._set_status_item(
+            "Planning",
+            plan_loaded,
+            "Ready" if plan_ready else ("Loaded" if plan_loaded else "Missing"),
+            "validated" if plan_ready else ("loaded" if plan_loaded else "missing"),
+        )
+        if plan_loaded:
+            try:
+                from ..utils.plan_import import summarize_plan
+                tip = f"{summarize_plan(plan)}\n{plan.get('source_path', '')}"
+            except Exception:
+                tip = str(plan.get("source_path", ""))
+            for w in (
+                getattr(self, "_status_names", {}).get("Planning"),
+                getattr(self, "_status_pills", {}).get("Planning"),
+                getattr(self, "_status_texts", {}).get("Planning"),
+            ):
+                if w is not None:
+                    w.setToolTip(tip)
+
     def _sync_files_workflow_visual_states(self) -> None:
         """
         Update the visual feedback of Files / Coregistration without changing
@@ -5123,6 +5630,11 @@ class FilesPage:
                 getattr(self, "btn_load_t2", None),
                 getattr(self.state, "t2_path", None),
                 getattr(self, "le_t2", None),
+            ),
+            (
+                getattr(self, "btn_load_fmri", None),
+                getattr(self.state, "fmri_path", None),
+                getattr(self, "le_fmri", None),
             ),
             (
                 getattr(self, "btn_load_ct", None),
@@ -5195,6 +5707,7 @@ class FilesPage:
             bool(
                 getattr(self.state, "t1_path", None)
                 or getattr(self.state, "t2_path", None)
+                or getattr(self.state, "fmri_path", None)
                 or getattr(self.state, "ct_path", None)
                 or getattr(self.state, "pet_path", None)
                 or getattr(self.state, "ictal_spect_path", None)
@@ -5228,6 +5741,10 @@ class FilesPage:
                 bool(getattr(self.state, "t2_coreg_path", None)),
             ),
             (
+                getattr(self, "btn_save_fmri", None),
+                bool(getattr(self.state, "fmri_coreg_path", None)),
+            ),
+            (
                 getattr(self, "btn_save_ct", None),
                 bool(getattr(self.state, "ct_coreg_path", None)),
             ),
@@ -5255,6 +5772,7 @@ class FilesPage:
                 getattr(self, "btn_save_all", None),
                 bool(
                     getattr(self.state, "t2_coreg_path", None)
+                    or getattr(self.state, "fmri_coreg_path", None)
                     or getattr(self.state, "ct_coreg_path", None)
                     or getattr(self.state, "pet_coreg_path", None)
                     or getattr(self.state, "ictal_spect_coreg_path", None)
@@ -5275,6 +5793,7 @@ class FilesPage:
 
         validated_by_modality = {
             "T2": bool(getattr(self.state, "t2_validated", False)),
+            "fMRI": bool(getattr(self.state, "fmri_validated", False)),
             "CT": bool(getattr(self.state, "ct_validated", False)),
             "PET": bool(getattr(self.state, "pet_validated", False)),
             "ictalSPECT": bool(getattr(self.state, "ictal_spect_validated", False)),
@@ -5436,6 +5955,7 @@ class FilesPage:
     def _preferred_save_start_path(self, modality: Modality) -> str:
         nifti_path = {
             "T2": getattr(self.state, "t2_path", None),
+            "fMRI": getattr(self.state, "fmri_path", None),
             "CT": getattr(self.state, "ct_path", None),
             "PET": getattr(self.state, "pet_path", None),
             "ictalSPECT": getattr(self.state, "ictal_spect_path", None),

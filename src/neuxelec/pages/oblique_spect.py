@@ -13,6 +13,7 @@ import numpy as np
 import SimpleITK as sitk
 from scipy.ndimage import map_coordinates
 
+from ..utils.fmri_visualization import FMRI_DEFAULT_CMAP
 from ..utils.pet_visualization import (
     blend_pet_on_rgb,
     compute_pet_reference,
@@ -62,6 +63,7 @@ class ObliqueSpectMixin:
         used = [
             getattr(self, "_siscom_colormap_name", "hot"),
             getattr(self, "_pet_colormap_name", "hot"),
+            FMRI_DEFAULT_CMAP,
         ]
         self._ospect_colormap = {}
         for ly in SPECT_LAYERS:
@@ -290,9 +292,10 @@ class ObliqueSpectMixin:
 
     # -------------------------------------------------------------- sampling
     def _ospect_sample_on_plane(self, img, center, u, w_axis,
-                                s_min, s_max, t_min, t_max, H, W):
+                                s_min, s_max, t_min, t_max, H, W, order: int = 1):
         """Sample ``img`` on the oblique plane defined by the given geometry.
-        Same math as the page's internal _sample_image, in physical LPS space."""
+        Same math as the page's internal _sample_image, in physical LPS space.
+        ``order=0`` (nearest) must be used for label volumes (parcellations)."""
         try:
             s_vals = np.linspace(s_min, s_max, int(H), dtype=np.float64)
             t_vals = np.linspace(t_min, t_max, int(W), dtype=np.float64)
@@ -322,7 +325,9 @@ class ObliqueSpectMixin:
             arr = np.full((int(H) * int(W),), np.nan, dtype=np.float32)
             if np.any(inside):
                 coords = np.vstack([z[inside], y[inside], x[inside]])
-                sampled = map_coordinates(vol, coords, order=1, mode="constant", cval=np.nan)
+                sampled = map_coordinates(
+                    vol, coords, order=int(order), mode="constant", cval=np.nan
+                )
                 arr[inside] = sampled.astype(np.float32)
             return arr.reshape(int(H), int(W))
         except Exception:
@@ -335,6 +340,23 @@ class ObliqueSpectMixin:
         if not getattr(self, "_ospect_ready", False) or rgb is None:
             return rgb
         out = rgb
+
+        # Cortex-only restriction (shared toggle, same as PET / SISCOM / fMRI):
+        # sample parcellation 1 on this very plane with NEAREST interpolation
+        # (labels must never be blended) and keep only cortical voxels.
+        cortex2d = None
+        try:
+            if getattr(self, "_cortex_only_active", None) and self._cortex_only_active():
+                parc = getattr(self, "_parcel1_img", None)
+                if parc is not None:
+                    parc_arr = self._ospect_sample_on_plane(
+                        parc, center, u, w_axis, s_min, s_max, t_min, t_max, H, W, order=0
+                    )
+                    if parc_arr is not None:
+                        cortex2d = self._cortex_mask_2d(parc_arr)
+        except Exception:
+            cortex2d = None
+
         for layer in SPECT_LAYERS:
             try:
                 if not self._ospect_is_on(layer):
@@ -345,6 +367,8 @@ class ObliqueSpectMixin:
                 )
                 if arr is None:
                     continue
+                if cortex2d is not None:
+                    arr = np.where(cortex2d, arr, np.nan)
                 finite = arr[np.isfinite(arr)]
                 finite = finite[finite > 0]
                 if finite.size == 0:

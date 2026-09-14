@@ -90,6 +90,10 @@ def _read_mgh_as_sitk(p: Path) -> sitk.Image:
     data = np.asanyarray(n.dataobj)
     if data.ndim == 4:
         data = data[..., 0]
+    # FreeSurfer .mgz stores data big-endian; SimpleITK only accepts native
+    # byte order, so normalise it (values are unchanged).
+    if data.dtype.byteorder not in ("=", "|"):
+        data = data.astype(data.dtype.newbyteorder("="))
     # nibabel data is (i, j, k); SimpleITK GetImageFromArray wants (k, j, i).
     arr = np.ascontiguousarray(np.transpose(data, (2, 1, 0)))
     img = sitk.GetImageFromArray(arr)

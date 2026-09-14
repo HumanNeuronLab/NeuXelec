@@ -713,8 +713,10 @@ class ExportCoordinatesDialog(QDialog):
         ensuring that the dialog remains usable on smaller screens.
         """
         # Keep these values: this is the current default size you like.
+        # (Taller than before so the BIDS "Include" checkboxes are visible
+        # without scrolling.)
         preferred_width = 720
-        preferred_height = 760
+        preferred_height = 880
 
         try:
             parent = self.parentWidget()
@@ -1109,13 +1111,65 @@ class ExportCoordinatesDialog(QDialog):
             "Deface exported images (anonymize) - native BIDS only"
         )
         self.chk_deface.setToolTip(
-            "Remove facial features (face, nose, ears region) from the exported "
-            "T1, CT, PET and SISCOM images. Uses an ANTs registration to a "
-            "template deface mask; the brain is preserved. Adds a few minutes "
-            "to the export."
+            "Remove the whole facial region - front of the face (skin, eyes, nose, "
+            "mouth) and the ears - from the exported T1, CT, PET and SISCOM images, "
+            "the same way FreeSurfer (mideface / mri_deface) does. The region is "
+            "derived from the head silhouette minus a protected brain mask, then "
+            "set to zero; the brain is left untouched. Adds a few minutes to the "
+            "export."
         )
         self.chk_deface.setEnabled(False)
         lay_bids.addWidget(self.chk_deface)
+
+        # Optional extra images to include in the native BIDS package. By default
+        # the package is minimal (T1 in anat/ + electrodes in ieeg/); the derived
+        # images below are opt-in and, when ticked, are written under
+        # derivatives/neuxelec/. The T1 is always included.
+        self.lbl_include = QLabel(
+            "Include in BIDS - extra images coregistered to the T1 (always "
+            "included). All go under derivatives/:"
+        )
+        self.lbl_include.setWordWrap(True)
+        lay_bids.addWidget(self.lbl_include)
+
+        self.chk_inc_mri2 = QCheckBox("MRI2")
+        self.chk_inc_ct = QCheckBox("CT")
+        self.chk_inc_pet = QCheckBox("PET")
+        self.chk_inc_fmri = QCheckBox("fMRI")
+        self.chk_inc_spect = QCheckBox("SPECT (ictal / interictal)")
+        self.chk_inc_siscom = QCheckBox("SISCOM")
+        self.chk_inc_parc = QCheckBox("Parcellation(s)")
+        self.chk_inc_brainmask = QCheckBox("Brain mask")
+        self._bids_include_checks = [
+            self.chk_inc_mri2,
+            self.chk_inc_ct,
+            self.chk_inc_pet,
+            self.chk_inc_fmri,
+            self.chk_inc_spect,
+            self.chk_inc_siscom,
+            self.chk_inc_parc,
+            self.chk_inc_brainmask,
+        ]
+        self.chk_inc_mri2.setToolTip("Add the second MRI (MRI2) coregistered to the T1.")
+        self.chk_inc_ct.setToolTip("Add the CT coregistered to the T1.")
+        self.chk_inc_pet.setToolTip("Add the PET coregistered to the T1.")
+        self.chk_inc_fmri.setToolTip("Add the fMRI activation map coregistered to the T1.")
+        self.chk_inc_spect.setToolTip(
+            "Add the ictal and interictal SPECT coregistered to the T1."
+        )
+        self.chk_inc_siscom.setToolTip("Add the SISCOM map in T1 space.")
+        self.chk_inc_parc.setToolTip(
+            "Add the loaded parcellation volume(s) in T1 space (derivatives/)."
+        )
+        self.chk_inc_brainmask.setToolTip(
+            "Add the subject brain mask in T1 space (derivatives/)."
+        )
+        include_grid = QGridLayout()
+        include_grid.setContentsMargins(0, 0, 0, 0)
+        for i, chk in enumerate(self._bids_include_checks):
+            chk.setEnabled(False)
+            include_grid.addWidget(chk, i // 2, i % 2)
+        lay_bids.addLayout(include_grid)
 
         # Disable BIDS radio controls until BIDS export is enabled.
         for child in self.grp_bids.findChildren(QRadioButton):
@@ -1123,6 +1177,9 @@ class ExportCoordinatesDialog(QDialog):
 
         self.chk_bids.toggled.connect(self._toggle_bids_section)
         self.chk_bids.toggled.connect(self.chk_deface.setEnabled)
+        self.chk_bids.toggled.connect(self.lbl_include.setEnabled)
+        for chk in self._bids_include_checks:
+            self.chk_bids.toggled.connect(chk.setEnabled)
 
         # The LPS/RAS/Voxel checkboxes only apply to the tabular formats
         # (TXT/CSV/TSV/JSON). Cartool ELS uses its own fixed voxel conversion
@@ -1623,6 +1680,128 @@ class ExportCoordinatesDialog(QDialog):
 
         return parcel1_img, parcel2_img, lut1, lut2
 
+    def _find_sibling_wmparc(self, parc_path, ref_img):
+        """Return a wmparc image on ``ref_img``'s grid, or None.
+
+        Thin wrapper over ``utils.wmparc.find_sibling_wmparc`` so the export and
+        the Oblique Slice contacts table always label contacts on the very same
+        volume.
+        """
+        from ..utils.wmparc import find_sibling_wmparc
+
+        return find_sibling_wmparc(parc_path, ref_img)
+
+    def _build_seeg2parc_sampler(self, which: int = 1):
+        """Return ``lps -> [(region_name, weight), ...]`` for parcellation
+        ``which`` (1 or 2), or None when that parcellation is not loaded.
+
+        Port of the depth-electrode branch of SEEG2parc (Human Neuron Lab): a
+        3x3x3 voxel cube weighted by inverse distance, so NeuXelec's native BIDS
+        export carries Voxeloc-compatible tissueLabel / tissueWeights columns.
+        """
+        parcel1_img, parcel2_img, lut1, lut2 = self._get_parcellation_images_and_luts()
+        if which == 2:
+            parc_img, lut = parcel2_img, lut2
+            parc_path = getattr(self.state, "parcel2_path", None)
+        else:
+            parc_img, lut = parcel1_img, lut1
+            parc_path = getattr(self.state, "parcel1_path", None)
+
+        if parc_img is None:
+            return None
+        try:
+            from ..seeg2parc import build_parcellation_volume, label_contact
+
+            arr = sitk.GetArrayFromImage(parc_img)  # [z, y, x]
+            wm_arr = None
+            if parc_path:
+                wm_img = self._find_sibling_wmparc(parc_path, parc_img)
+                if wm_img is not None:
+                    wm_arr = sitk.GetArrayFromImage(wm_img)
+            parc_vol = build_parcellation_volume(arr, wm_arr)
+            lut = lut or {}
+
+            def sampler(lps_xyz):
+                idx = parc_img.TransformPhysicalPointToIndex(
+                    tuple(float(v) for v in lps_xyz)
+                )
+                # SITK index is (x, y, z); the numpy array is [z, y, x].
+                return label_contact((idx[2], idx[1], idx[0]), parc_vol, lut)
+
+            return sampler
+        except Exception:
+            return None
+
+    def _atlas_label_for(self, parc_path) -> str:
+        """Human-readable atlas name derived from a parcellation filename."""
+        if not parc_path:
+            return "unknown parcellation"
+        name = Path(parc_path).name.lower()
+        if "a2009s" in name:
+            return "Destrieux (aparc.a2009s+aseg)"
+        if "dktatlas" in name or "dkt" in name:
+            return "Desikan-Killiany-Tourville (aparc.DKTatlas+aseg)"
+        if "aparc" in name and "aseg" in name:
+            return "Desikan-Killiany (aparc+aseg)"
+        if "wmparc" in name:
+            return "White-matter parcellation (wmparc)"
+        return Path(parc_path).name
+
+    def _write_electrodes_sidecar(self, ieeg_dir, sub, space_label, n1, n2):
+        """Write the BIDS _electrodes.json documenting the SEEG2parc tissue
+        columns, including which atlas backs tissueLabel1 / tissueLabel2."""
+        try:
+            deriv_rel = f"derivatives/neuxelec/{sub}/anat"
+            seeg2parc_note = (
+                "Anatomical parcellation regions at each contact, computed with "
+                "SEEG2parc (3x3x3 voxel cube weighted by the inverse Euclidean "
+                "distance to the contact centre; regions listed by decreasing weight)."
+            )
+            desc: dict[str, Any] = {
+                "name": {"Description": "Contact label"},
+                "x": {"Description": "Contact coordinate (see coordsystem.json)"},
+                "y": {"Description": "Contact coordinate (see coordsystem.json)"},
+                "z": {"Description": "Contact coordinate (see coordsystem.json)"},
+                "size": {"Description": "Contact size", "Units": "mm^2"},
+                "group": {"Description": "Electrode this contact belongs to"},
+                "hemisphere": {"Description": "Hemisphere (L or R)"},
+                "type": {"Description": "Electrode type"},
+                "dimension": {"Description": "Size of the electrode group, e.g. [1xN]"},
+                "reference": {"Description": "Electrode reference / model"},
+            }
+
+            if n1 > 0:
+                atlas1 = self._atlas_label_for(getattr(self.state, "parcel1_path", None))
+                desc["tissueLabel1"] = {
+                    "Description": seeg2parc_note,
+                    "Atlas": atlas1,
+                    "Source": f"{deriv_rel}/{sub}_desc-parcellation1_space-{space_label}_dseg.nii.gz",
+                }
+                for i in range(n1):
+                    desc[f"tissueWeights1_{i + 1}"] = {
+                        "Description": f"Weight (fraction of 1) of region #{i + 1} in tissueLabel1",
+                        "Atlas": atlas1,
+                    }
+
+            if n2 > 0:
+                atlas2 = self._atlas_label_for(getattr(self.state, "parcel2_path", None))
+                desc["tissueLabel2"] = {
+                    "Description": seeg2parc_note,
+                    "Atlas": atlas2,
+                    "Source": f"{deriv_rel}/{sub}_desc-parcellation2_space-{space_label}_dseg.nii.gz",
+                }
+                for i in range(n2):
+                    desc[f"tissueWeights2_{i + 1}"] = {
+                        "Description": f"Weight (fraction of 1) of region #{i + 1} in tissueLabel2",
+                        "Atlas": atlas2,
+                    }
+
+            out = ieeg_dir / f"{sub}_space-{space_label}_electrodes.json"
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump(desc, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
     def _build_rows(self, coord_system: str = "LPS") -> list[dict[str, Any]]:
         coord_system = str(coord_system or "LPS").upper().strip()
 
@@ -1633,6 +1812,12 @@ class ExportCoordinatesDialog(QDialog):
 
         parcel1_img, parcel2_img, lut1, lut2 = self._get_parcellation_images_and_luts()
         include_parc = bool(self.chk_include_parc.isChecked())
+
+        # SEEG2parc runs automatically whenever a parcellation is loaded, so the
+        # native BIDS export carries Voxeloc-compatible tissueLabel/tissueWeights.
+        # Both parcellations are labelled when two are loaded.
+        seeg2parc_sampler1 = self._build_seeg2parc_sampler(1)
+        seeg2parc_sampler2 = self._build_seeg2parc_sampler(2)
 
         for elec_idx in indices:
             if elec_idx < 0 or elec_idx >= len(electrodes):
@@ -1698,6 +1883,17 @@ class ExportCoordinatesDialog(QDialog):
                     label2 = _sample_parcellation_label(parcel2_img, lps_tuple)
                     row["parcel2_label"] = "" if label2 is None else int(label2)
                     row["parcel2_region"] = _lookup_lut_region(lut2, label2)
+
+                if seeg2parc_sampler1 is not None:
+                    try:
+                        row["_tissue1"] = seeg2parc_sampler1(lps_tuple)
+                    except Exception:
+                        pass
+                if seeg2parc_sampler2 is not None:
+                    try:
+                        row["_tissue2"] = seeg2parc_sampler2(lps_tuple)
+                    except Exception:
+                        pass
 
                 rows.append(row)
 
@@ -2761,10 +2957,59 @@ class ExportCoordinatesDialog(QDialog):
         except Exception:
             return False
 
-    def _build_subject_deface_mask(self):
-        """Compute the subject-space deface mask (sitk uint8), brain-protected.
+    def _bids_includes(self) -> dict[str, bool]:
+        """Which optional images the user ticked for the native BIDS package.
 
-        Returns a SimpleITK image (1 = face voxels to zero out) or None.
+        The T1 is always exported; everything here is opt-in (default off) and
+        written under derivatives/neuxelec/.
+        """
+        def _on(name: str) -> bool:
+            chk = getattr(self, name, None)
+            try:
+                return bool(chk is not None and chk.isChecked())
+            except Exception:
+                return False
+
+        return {
+            "mri2": _on("chk_inc_mri2"),
+            "ct": _on("chk_inc_ct"),
+            "pet": _on("chk_inc_pet"),
+            "fmri": _on("chk_inc_fmri"),
+            "spect": _on("chk_inc_spect"),
+            "siscom": _on("chk_inc_siscom"),
+            "parc": _on("chk_inc_parc"),
+            "brainmask": _on("chk_inc_brainmask"),
+        }
+
+    def _put_brainmask(self, dst: Path) -> None:
+        """Write the subject brain mask (T1 space) to `dst`, if available.
+
+        A mask is never defaced. Uses the session mask if present, otherwise a
+        brainmask file path on the state, otherwise silently skips.
+        """
+        try:
+            bm = getattr(self.state, "brainmask_sitk", None)
+            if bm is not None:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                sitk.WriteImage(sitk.Cast(bm > 0, sitk.sitkUInt8), str(dst))
+                return
+            for attr in ("brainmask_path", "t1_brainmask_path"):
+                p = getattr(self.state, attr, None)
+                if p and Path(p).exists():
+                    self._copy_image_as(p, dst)
+                    return
+        except Exception:
+            logger.warning("Brain mask export failed; skipping", exc_info=True)
+
+    def _build_subject_deface_mask(self):
+        """Compute the subject-space facial blur region (sitk float, 0..1).
+
+        Covers the whole front of the face (skin, eyes, nose, mouth) AND the ears
+        - everything extracranial that is not behind the brain - feathered for a
+        seamless edge. The region is zeroed out of the exported images (see
+        :meth:`_copy_image_defaced`), FreeSurfer-style, removing the identity while
+        the brain is left untouched. Returns None on failure (export then proceeds
+        unmodified).
         """
         t1p = getattr(self.state, "t1_path", None) or getattr(self.state, "t1_source_path", None)
         if not t1p or not Path(t1p).exists():
@@ -2772,32 +3017,34 @@ class ExportCoordinatesDialog(QDialog):
         try:
             import tempfile
 
-            from neuxelec.coregistration import ants_deface_mask_in_subject_space
+            from neuxelec.coregistration import subject_face_blur_region
 
-            mask_path = ants_deface_mask_in_subject_space(
-                str(t1p),
-                out_dir=tempfile.mkdtemp(prefix="neuxelec_deface_"),
-            )
-            mimg = sitk.ReadImage(mask_path)
+            outd = tempfile.mkdtemp(prefix="neuxelec_deface_")
 
+            # Reuse the already-computed brain mask if the session has one, to
+            # skip a redundant ANTs brain-extraction run.
+            brain_path = None
             bm = getattr(self.state, "brainmask_sitk", None)
             if bm is not None:
-                bmr = sitk.Resample(
-                    bm, mimg, sitk.Transform(3, sitk.sitkIdentity),
-                    sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
-                )
-                bmr = sitk.BinaryDilate(sitk.Cast(bmr > 0, sitk.sitkUInt8), [3, 3, 3], sitk.sitkBall)
-                face = sitk.Cast(mimg > 0, sitk.sitkUInt8)
-                face = sitk.And(face, sitk.Not(bmr))
-                face.CopyInformation(mimg)
-                return face
-            return sitk.Cast(mimg > 0, sitk.sitkUInt8)
+                brain_path = str(Path(outd) / "brainmask.nii.gz")
+                sitk.WriteImage(sitk.Cast(bm > 0, sitk.sitkUInt8), brain_path)
+
+            region_path = subject_face_blur_region(
+                str(t1p), brain_mask_path=brain_path, out_dir=outd
+            )
+            return sitk.ReadImage(region_path, sitk.sitkFloat32)
         except Exception:
             logger.warning("Defacing failed; images will be exported unmodified", exc_info=True)
             return None
 
     def _copy_image_defaced(self, src, dst: Path, deface_img):
-        """Zero the face region of `src` (resampling the mask to its grid) and write it."""
+        """Remove (zero) the facial region of `src` and write it, FreeSurfer-style.
+
+        `deface_img` is the subject-space face+ears region (soft 0..1, thresholded
+        here at 0.5). Every voxel inside it is set to 0 - the same "shave off the
+        face" behaviour as FreeSurfer's mideface / mri_deface - while the brain
+        (region = 0) is left untouched.
+        """
         if not src:
             return
         try:
@@ -2809,12 +3056,13 @@ class ExportCoordinatesDialog(QDialog):
                 self._copy_image_as(src, dst)
                 return
             img = sitk.ReadImage(str(src))
-            dm = sitk.Resample(
+            # Region resampled onto this image's grid (linear, then thresholded).
+            a = sitk.Resample(
                 deface_img, img, sitk.Transform(3, sitk.sitkIdentity),
-                sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
+                sitk.sitkLinear, 0.0, sitk.sitkFloat32,
             )
             arr = sitk.GetArrayFromImage(img)
-            m = sitk.GetArrayViewFromImage(dm) > 0
+            m = sitk.GetArrayViewFromImage(a) >= 0.5
             arr[m] = 0
             out = sitk.GetImageFromArray(arr)
             out.CopyInformation(img)
@@ -2838,8 +3086,10 @@ class ExportCoordinatesDialog(QDialog):
         space_label = "MNI152NLin2009cAsym" if is_mni else "T1w"
 
         # Put native and MNI exports in separate dataset folders so they are
-        # never confused and never overwrite each other.
-        dataset_dir = out_dir / f"BIDS_{space_label}"
+        # never confused and never overwrite each other. Include the patient id
+        # so the folder is self-identifying (e.g. BIDS_T1w_PAT6953).
+        patient_id = sub.replace("sub-", "", 1)
+        dataset_dir = out_dir / f"BIDS_{space_label}_{patient_id}"
         sub_dir = dataset_dir / sub
         anat_dir = sub_dir / "anat"
         ieeg_dir = sub_dir / "ieeg"
@@ -2847,7 +3097,8 @@ class ExportCoordinatesDialog(QDialog):
 
         anat_dir.mkdir(parents=True, exist_ok=True)
         ieeg_dir.mkdir(parents=True, exist_ok=True)
-        deriv_dir.mkdir(parents=True, exist_ok=True)
+        # deriv_dir is created lazily by the writers only when something is
+        # actually placed under derivatives/ (keeps the default package minimal).
 
         metadata = self._metadata()
 
@@ -2907,34 +3158,68 @@ class ExportCoordinatesDialog(QDialog):
                 else:
                     self._copy_image_as(src, dst)
 
+            inc = self._bids_includes()
+
+            # The T1 is always included (anat/).
             _put(
                 getattr(self.state, "t1_path", None)
                 or getattr(self.state, "t1_source_path", None),
                 anat_dir / f"{sub}_T1w.nii.gz",
             )
-            _put(
-                getattr(self.state, "ct_coreg_path", None)
-                or getattr(self.state, "ct_path", None),
-                deriv_dir / f"{sub}_desc-coregCT_space-T1w_ct.nii.gz",
-            )
-            _put(
-                getattr(self.state, "pet_coreg_path", None)
-                or getattr(self.state, "pet_path", None),
-                deriv_dir / f"{sub}_desc-coregPET_space-T1w_pet.nii.gz",
-            )
-            _put(
-                getattr(self.state, "siscom_coreg_path", None)
-                or getattr(self.state, "siscom_path", None),
-                deriv_dir / f"{sub}_desc-SISCOM_space-T1w_siscom.nii.gz",
-            )
-            _put(
-                getattr(self.state, "parcel1_path", None),
-                deriv_dir / f"{sub}_desc-parcellation1_space-T1w_dseg.nii.gz",
-            )
-            _put(
-                getattr(self.state, "parcel2_path", None),
-                deriv_dir / f"{sub}_desc-parcellation2_space-T1w_dseg.nii.gz",
-            )
+            # Everything else is opt-in and goes under derivatives/.
+            if inc["mri2"]:
+                _put(
+                    getattr(self.state, "t2_coreg_path", None)
+                    or getattr(self.state, "t2_path", None),
+                    deriv_dir / f"{sub}_desc-coregMRI2_space-T1w_T2w.nii.gz",
+                )
+            if inc["ct"]:
+                _put(
+                    getattr(self.state, "ct_coreg_path", None)
+                    or getattr(self.state, "ct_path", None),
+                    deriv_dir / f"{sub}_desc-coregCT_space-T1w_ct.nii.gz",
+                )
+            if inc["pet"]:
+                _put(
+                    getattr(self.state, "pet_coreg_path", None)
+                    or getattr(self.state, "pet_path", None),
+                    deriv_dir / f"{sub}_desc-coregPET_space-T1w_pet.nii.gz",
+                )
+            if inc.get("fmri"):
+                # Activation / statistical map (BIDS derivatives "statmap").
+                _put(
+                    getattr(self.state, "fmri_coreg_path", None)
+                    or getattr(self.state, "fmri_path", None),
+                    deriv_dir / f"{sub}_desc-coregfMRI_space-T1w_statmap.nii.gz",
+                )
+            if inc["spect"]:
+                _put(
+                    getattr(self.state, "ictal_spect_coreg_path", None)
+                    or getattr(self.state, "ictal_spect_path", None),
+                    deriv_dir / f"{sub}_desc-coregIctalSPECT_space-T1w_spect.nii.gz",
+                )
+                _put(
+                    getattr(self.state, "interictal_spect_coreg_path", None)
+                    or getattr(self.state, "interictal_spect_path", None),
+                    deriv_dir / f"{sub}_desc-coregInterictalSPECT_space-T1w_spect.nii.gz",
+                )
+            if inc["siscom"]:
+                _put(
+                    getattr(self.state, "siscom_coreg_path", None)
+                    or getattr(self.state, "siscom_path", None),
+                    deriv_dir / f"{sub}_desc-SISCOM_space-T1w_siscom.nii.gz",
+                )
+            if inc["parc"]:
+                _put(
+                    getattr(self.state, "parcel1_path", None),
+                    deriv_dir / f"{sub}_desc-parcellation1_space-T1w_dseg.nii.gz",
+                )
+                _put(
+                    getattr(self.state, "parcel2_path", None),
+                    deriv_dir / f"{sub}_desc-parcellation2_space-T1w_dseg.nii.gz",
+                )
+            if inc["brainmask"]:
+                self._put_brainmask(deriv_dir / f"{sub}_desc-brain_space-T1w_mask.nii.gz")
 
         electrodes_tsv = ieeg_dir / f"{sub}_space-{space_label}_electrodes.tsv"
 
@@ -2943,27 +3228,57 @@ class ExportCoordinatesDialog(QDialog):
             s = "" if v is None else str(v).strip()
             return s if s != "" else "n/a"
 
+        # SEEG2parc tissue attribution, added automatically when a parcellation is
+        # loaded. Columns are suffixed per parcellation (tissueLabel1 /
+        # tissueWeights1_N for the first, tissueLabel2 / tissueWeights2_N when a
+        # second parcellation is loaded). The atlas behind each is documented in
+        # the companion _electrodes.json sidecar.
+        n1 = max((len(row.get("_tissue1") or []) for row in rows), default=0)
+        n2 = max((len(row.get("_tissue2") or []) for row in rows), default=0)
+
+        # Electrode dimension (e.g. [1x15]) = number of contacts in the group.
+        group_counts: dict[str, int] = {}
+        for row in rows:
+            g = str(row.get("electrode", ""))
+            group_counts[g] = group_counts.get(g, 0) + 1
+
+        def _tissue_cols(bids_row, tissue, max_w, label_key, weight_prefix):
+            bids_row[label_key] = _na(" ".join(str(n) for n, _ in tissue))
+            for i in range(max_w):
+                bids_row[f"{weight_prefix}{i + 1}"] = (
+                    f"{float(tissue[i][1]):.6f}" if i < len(tissue) else "n/a"
+                )
+
         bids_rows = []
         for row in rows:
             formatted_row = _format_row_for_export(row, decimals=2)
+            group = str(row.get("electrode", ""))
 
-            bids_rows.append(
-                {
-                    "name": _na(formatted_row.get("contact", "")),
-                    "x": _na(formatted_row.get("x", "n/a")),
-                    "y": _na(formatted_row.get("y", "n/a")),
-                    "z": _na(formatted_row.get("z", "n/a")),
-                    "size": 5,
-                    "type": "depth SEEG",
-                    "material": "Ti",
-                    "manufacturer": "DIXI",
-                    "group": _na(formatted_row.get("electrode", "")),
-                    "hemisphere": _na(formatted_row.get("hemisphere", "")),
-                    "reference": _na(formatted_row.get("reference", "")),
-                    "parcel1_region": _na(formatted_row.get("parcel1_region", "")),
-                    "parcel2_region": _na(formatted_row.get("parcel2_region", "")),
-                }
-            )
+            bids_row = {
+                "name": _na(formatted_row.get("contact", "")),
+                "x": _na(formatted_row.get("x", "n/a")),
+                "y": _na(formatted_row.get("y", "n/a")),
+                "z": _na(formatted_row.get("z", "n/a")),
+                "size": 5,
+                "material": "Ti",
+                "manufacturer": "DIXI",
+                "group": _na(group),
+                "hemisphere": _na(formatted_row.get("hemisphere", "")),
+                "type": "depth",
+                "dimension": f"[1x{group_counts.get(group, 0)}]",
+                "reference": _na(formatted_row.get("reference", "")),
+            }
+
+            if n1 > 0:
+                _tissue_cols(
+                    bids_row, row.get("_tissue1") or [], n1, "tissueLabel1", "tissueWeights1_"
+                )
+            if n2 > 0:
+                _tissue_cols(
+                    bids_row, row.get("_tissue2") or [], n2, "tissueLabel2", "tissueWeights2_"
+                )
+
+            bids_rows.append(bids_row)
 
         bids_fields = [
             "name",
@@ -2971,21 +3286,30 @@ class ExportCoordinatesDialog(QDialog):
             "y",
             "z",
             "size",
-            "type",
             "material",
             "manufacturer",
             "group",
             "hemisphere",
+            "type",
+            "dimension",
             "reference",
-            "parcel1_region",
-            "parcel2_region",
         ]
+        if n1 > 0:
+            bids_fields += ["tissueLabel1"] + [f"tissueWeights1_{i + 1}" for i in range(n1)]
+        if n2 > 0:
+            bids_fields += ["tissueLabel2"] + [f"tissueWeights2_{i + 1}" for i in range(n2)]
 
         with open(electrodes_tsv, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=bids_fields, delimiter="\t")
+            writer = csv.DictWriter(
+                f, fieldnames=bids_fields, delimiter="\t", restval="n/a"
+            )
             writer.writeheader()
             for r in bids_rows:
                 writer.writerow(r)
+
+        # Companion BIDS sidecar documenting which atlas each tissue column uses.
+        if n1 > 0 or n2 > 0:
+            self._write_electrodes_sidecar(ieeg_dir, sub, space_label, n1, n2)
 
         units = "mm" if coord_system in ("LPS", "RAS") else "n/a"
 

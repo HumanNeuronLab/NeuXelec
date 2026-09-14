@@ -7,7 +7,7 @@ from PySide6.QtCore import QThread, Signal
 
 from ..coregistration import ants_generate_brainmask_t1, rigid_coreg_to_fixed
 
-Modality = Literal["T2", "CT", "PET", "ictalSPECT", "interictalSPECT"]
+Modality = Literal["T2", "CT", "PET", "ictalSPECT", "interictalSPECT", "fMRI"]
 
 
 class CoregWorker(QThread):
@@ -24,6 +24,7 @@ class CoregWorker(QThread):
         moving_path: str,
         initial_transform: sitk.Transform | None = None,
         transforms_dir: str | None = None,
+        apply_to_path: str | None = None,
     ):
         super().__init__()
         self.modality = modality
@@ -31,6 +32,9 @@ class CoregWorker(QThread):
         self.moving_path = moving_path
         self.initial_transform = initial_transform
         self.transforms_dir = transforms_dir
+        # Companion image moved with the estimated transform (fMRI activation
+        # recovered from a colour fusion: registered on its grey anatomy).
+        self.apply_to_path = apply_to_path
 
     def run(self):
         try:
@@ -45,6 +49,7 @@ class CoregWorker(QThread):
                     else "SPECT"
                 ),
                 transforms_dir=self.transforms_dir,
+                apply_to_path=self.apply_to_path,
             )
             self.finished_ok.emit(self.modality, res)
         except Exception as e:

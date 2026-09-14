@@ -75,6 +75,15 @@ def build_project_dict_from_state(state) -> dict[str, Any]:
                 "coreg_in_t1_path": _as_str_or_none(getattr(state, "t2_coreg_path", None)),
                 "validated": bool(getattr(state, "t2_validated", False)),
             },
+            "fmri": {
+                "path": _as_str_or_none(getattr(state, "fmri_path", None)),
+                "source_path": _as_str_or_none(getattr(state, "fmri_source_path", None)),
+                "coreg_in_t1_path": _as_str_or_none(getattr(state, "fmri_coreg_path", None)),
+                "validated": bool(getattr(state, "fmri_validated", False)),
+                "kind": _as_str_or_none(getattr(state, "fmri_kind", None)),
+                "reg_path": _as_str_or_none(getattr(state, "fmri_reg_path", None)),
+                "min_cluster_mm3": float(getattr(state, "fmri_min_cluster_mm3", 0.0) or 0.0),
+            },
             "ct": {
                 "path": _as_str_or_none(getattr(state, "ct_path", None)),
                 "source_path": _as_str_or_none(getattr(state, "ct_source_path", None)),
@@ -146,6 +155,8 @@ def build_project_dict_from_state(state) -> dict[str, Any]:
             },
         },
         "electrodes": list(getattr(state, "electrodes", []) or []),
+        # Implantation plan imported from NeuroInspire (already in MRI 1 space).
+        "plan": _json_safe(getattr(state, "plan", None)),
         "markers": list(getattr(state, "markers", []) or []),
         # MNI electrode sets (generated or loaded), including per-set ("color")
         # and per-electrode ("group_color") colours, so they are restored on reload.
@@ -267,6 +278,8 @@ def load_project_json(project_path: str | Path) -> dict[str, Any]:
 def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str | Path) -> None:
     state.project_path = str(project_path)
     state.patient_id = str(data.get("patient_id", "") or "").strip()
+    _plan = data.get("plan")
+    state.plan = _plan if isinstance(_plan, dict) else None
     mri_labels = data.get("mri_labels", {}) if isinstance(data.get("mri_labels"), dict) else {}
 
     state.mri1_filename_label = (
@@ -285,6 +298,7 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
 
     t1 = files.get("t1", {}) if isinstance(files.get("t1"), dict) else {}
     t2 = files.get("t2", {}) if isinstance(files.get("t2"), dict) else {}
+    fmri = files.get("fmri", {}) if isinstance(files.get("fmri"), dict) else {}
     ct = files.get("ct", {}) if isinstance(files.get("ct"), dict) else {}
     pet = files.get("pet", {}) if isinstance(files.get("pet"), dict) else {}
     ictal = files.get("ictal_spect", {}) if isinstance(files.get("ictal_spect"), dict) else {}
@@ -315,6 +329,15 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
     state.t1_conformed_spacing = conf_spacing if isinstance(conf_spacing, list) else None
     state.t2_path = _as_str_or_none(t2.get("path"))
     state.t2_source_path = _as_str_or_none(t2.get("source_path"))
+
+    state.fmri_path = _as_str_or_none(fmri.get("path"))
+    state.fmri_source_path = _as_str_or_none(fmri.get("source_path"))
+    state.fmri_kind = _as_str_or_none(fmri.get("kind"))
+    state.fmri_reg_path = _as_str_or_none(fmri.get("reg_path"))
+    try:
+        state.fmri_min_cluster_mm3 = float(fmri.get("min_cluster_mm3", 0.0) or 0.0)
+    except Exception:
+        state.fmri_min_cluster_mm3 = 0.0
 
     state.ct_path = _as_str_or_none(ct.get("path"))
     state.ct_source_path = _as_str_or_none(ct.get("source_path"))
@@ -352,6 +375,7 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
     state.pial_surfaces_assume_lps = bool(pial_surfaces.get("assume_lps", True))
 
     state.t2_coreg_path = _as_str_or_none(t2.get("coreg_in_t1_path"))
+    state.fmri_coreg_path = _as_str_or_none(fmri.get("coreg_in_t1_path"))
     state.ct_coreg_path = _as_str_or_none(ct.get("coreg_in_t1_path"))
     state.pet_coreg_path = _as_str_or_none(pet.get("coreg_in_t1_path"))
     state.ictal_spect_coreg_path = _as_str_or_none(ictal.get("coreg_in_t1_path"))
@@ -359,6 +383,7 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
     state.siscom_coreg_path = _as_str_or_none(siscom.get("coreg_in_t1_path"))
 
     state.t2_validated = bool(t2.get("validated", False))
+    state.fmri_validated = bool(fmri.get("validated", False))
 
     # Persistent CT validation is restored for visualization pages.
     # Reconstruction uses a separate session-only safety flag.
@@ -392,6 +417,7 @@ def get_unsaved_validated_modalities(state) -> list[str]:
     checks = [
         ("CT", getattr(state, "ct_validated", False), getattr(state, "ct_coreg_path", None)),
         ("T2", getattr(state, "t2_validated", False), getattr(state, "t2_coreg_path", None)),
+        ("fMRI", getattr(state, "fmri_validated", False), getattr(state, "fmri_coreg_path", None)),
         ("PET", getattr(state, "pet_validated", False), getattr(state, "pet_coreg_path", None)),
         (
             "ictal SPECT",

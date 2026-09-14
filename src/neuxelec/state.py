@@ -66,6 +66,7 @@ class AppState:
 
         # Saved coreg file paths on disk
         self.t2_coreg_path: str | None = None
+        self.fmri_coreg_path: str | None = None
         self.ct_coreg_path: str | None = None
         self.pet_coreg_path: str | None = None
         self.ictal_spect_coreg_path: str | None = None
@@ -88,6 +89,7 @@ class AppState:
         self.t1_original_spacing: list[float] | None = None
         self.t1_conformed_spacing: list[float] | None = None
         self.t2_source_path: str | None = None
+        self.fmri_source_path: str | None = None
         self.ct_source_path: str | None = None
         self.pet_source_path: str | None = None
         self.ictal_spect_source_path: str | None = None
@@ -102,6 +104,15 @@ class AppState:
         # -------------------------
         self.t1_path: str | None = None
         self.t2_path: str | None = None
+        self.fmri_path: str | None = None
+        # Kind of fMRI input (utils.fmri_ingest): "stat_map" or "rgb_fusion".
+        self.fmri_kind: str | None = None
+        # Colour fusion only: grey anatomy of the fusion, used as the moving
+        # image for the registration (the activation map is moved with it).
+        self.fmri_reg_path: str | None = None
+        # Display: hide activation clusters smaller than this (mm3); 0 = off.
+        # Shared by the 3D View and the Oblique Slice page.
+        self.fmri_min_cluster_mm3: float = 0.0
         self.ct_path: str | None = None
         self.pet_path: str | None = None
         self.ictal_spect_path: str | None = None
@@ -126,6 +137,9 @@ class AppState:
 
         # Global output directory for ANTs transforms / warped NIfTI (optional)
         self.transforms_dir: str | None = None
+        # Imported implantation plan (NeuroInspire .nip) expressed in MRI 1 space,
+        # see utils.plan_import / pages.files_page.load_planning_bundle.
+        self.plan: dict | None = None
 
         # Brain mask (optional, generated on demand)
         self.brainmask_path: str | None = None
@@ -155,6 +169,10 @@ class AppState:
         self.t1_sitk: Any | None = None
 
         self.t2_coreg_in_t1: Any | None = None
+        self.fmri_coreg_in_t1: Any | None = None
+        # Colour fusion only: grey anatomy of the fusion registered in T1
+        # (session only), shown under the activation in "Review coregistration".
+        self.fmri_anat_in_t1: Any | None = None
         self.ct_coreg_in_t1: Any | None = None
         self.pet_coreg_in_t1: Any | None = None
         self.ictal_spect_coreg_in_t1: Any | None = None
@@ -162,6 +180,7 @@ class AppState:
 
         # Backward-compatible aliases (older names used in some modules)
         self.t2_in_t1: Any | None = None
+        self.fmri_in_t1: Any | None = None
         self.ct_in_t1: Any | None = None
         self.pet_in_t1: Any | None = None
         self.ictal_spect_in_t1: Any | None = None
@@ -171,6 +190,7 @@ class AppState:
         # Validation flags
         # -------------------------
         self.t2_validated: bool = False
+        self.fmri_validated: bool = False
 
         # Persistent CT validation:
         # True when a CT coregistered in T1 space has been visually validated
@@ -190,6 +210,7 @@ class AppState:
     def sync_aliases_from_new_names(self) -> None:
         """Optional helper if some legacy code reads ct_in_t1 instead of ct_coreg_in_t1."""
         self.t2_in_t1 = self.t2_coreg_in_t1
+        self.fmri_in_t1 = self.fmri_coreg_in_t1
         self.ct_in_t1 = self.ct_coreg_in_t1
         self.pet_in_t1 = self.pet_coreg_in_t1
         self.ictal_spect_in_t1 = self.ictal_spect_coreg_in_t1

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFrame,
     QLabel,
     QLineEdit,
@@ -46,7 +47,10 @@ from ..state import (
 )
 from ..ui.edit_contact_dialog import EditContactDialog
 from ..ui.export_coordinates_dialog import ExportCoordinatesDialog
-from ..ui.neuxelec_message_dialog import NeuXelecMessageDialog
+from ..ui.neuxelec_message_dialog import (
+    NeuXelecMessageDialog,
+    NeuXelecSelectionDialog,
+)
 from ..utils.electrode_geometry import axis_decomposition, next_contact_voxel
 
 
@@ -215,7 +219,9 @@ def _load_user_electrode_refs() -> dict:
     return refs
 
 
-def _save_user_electrode_ref(name: str, n_contacts: int, spacing_mm: float) -> None:
+def _save_user_electrode_ref(
+    name: str, n_contacts: int, spacing_mm: float, skip=None, spacing_profile=None
+) -> None:
     """Persist one custom reference to the writable user file."""
     p = _user_electrodes_ref_path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -230,11 +236,36 @@ def _save_user_electrode_ref(name: str, n_contacts: int, spacing_mm: float) -> N
     existing[str(name).strip()] = {
         "n": int(n_contacts),
         "d": float(spacing_mm),
-        "skip": [],
-        "spacing_profile_mm": [],
+        "skip": sorted({int(s) for s in (skip or [])}),
+        "spacing_profile_mm": [float(v) for v in (spacing_profile or [])],
         "manufacturer": "Custom",
     }
     p.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _is_user_electrode_ref(name: str) -> bool:
+    """True if ``name`` is a user-created reference (hence deletable)."""
+    return str(name).strip() in _load_user_electrode_refs()
+
+
+def _delete_user_electrode_ref(name: str) -> bool:
+    """Remove a user-created reference from the writable user file."""
+    p = _user_electrodes_ref_path()
+    if not p.exists():
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    target = str(name).strip()
+    key = next((k for k in data if str(k).strip() == target), None)
+    if key is None:
+        return False
+    data.pop(key, None)
+    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return True
 
 
 def _sanitize_spacing_profile(profile) -> list[float]:
@@ -689,6 +720,10 @@ class ReconstructionPage:
         self._deep_lps = None
         self._second_lps = None
 
+        # Planned trajectory matched to the current manual reconstruction (used
+        # for plan-assisted labelling + the axis-consistency check).
+        self._plan_matched_traj = None
+
         # ---- Electrode refs file ----
         self._refs = _parse_electrode_refs(_resource_electrodes_ref_path())
         self._init_ref_combo()
@@ -734,6 +769,8 @@ class ReconstructionPage:
 
         # ---- Picking state ----
         self._pick_mode: str | None = None  # "deepest" or "second"
+
+        # --- Plan-assisted labelling from an imported implantation plan (NeuroInspire) ---
         self._deep_picked: tuple[int, int, int] | None = None
         self._second_picked: tuple[int, int, int] | None = None
 
@@ -794,6 +831,11 @@ class ReconstructionPage:
             self.edit_elec_name.editingFinished.connect(self._check_duplicate_electrode_name)
         if self.combo_ref is not None:
             self.combo_ref.currentTextChanged.connect(lambda _: self._update_estimate_enabled())
+            # Right-click the reference selector to delete a user reference.
+            self.combo_ref.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.combo_ref.customContextMenuRequested.connect(
+                self._show_ref_list_context_menu
+            )
         if self.edit_nb_contacts is not None:
             self.edit_nb_contacts.textChanged.connect(lambda _: self._update_estimate_enabled())
 
@@ -1478,6 +1520,58 @@ class ReconstructionPage:
 
         self._update_estimate_enabled()
 
+    def _show_ref_list_context_menu(self, pos) -> None:
+        """Right-click the reference selector: delete one of your custom refs."""
+        if self.combo_ref is None:
+            return
+        from ..ui.context_menus import make_base_menu
+
+        user_refs = [
+            n for n in self._ordered_ref_names() if _is_user_electrode_ref(n)
+        ]
+        menu = make_base_menu()
+        if not user_refs:
+            act = menu.addAction("No custom reference to delete")
+            act.setEnabled(False)
+            menu.exec(self.combo_ref.mapToGlobal(pos))
+            return
+
+        actions = {}
+        for name in user_refs:
+            actions[menu.addAction(f"Delete '{name}'")] = name
+        chosen = menu.exec(self.combo_ref.mapToGlobal(pos))
+        if chosen is None or chosen not in actions:
+            return
+        self._delete_reference(actions[chosen])
+
+    def _delete_reference(self, name: str) -> None:
+        parent = self.combo_ref.window() if self.combo_ref is not None else None
+        if not NeuXelecMessageDialog.question(
+            parent,
+            "Delete reference",
+            f"Delete the electrode reference '{name}'?\nThis cannot be undone.",
+            accept_text="Delete",
+            reject_text="Cancel",
+        ):
+            return
+
+        _delete_user_electrode_ref(name)
+        self._refs.pop(name, None)
+
+        if self.combo_ref is None:
+            return
+        placeholder = getattr(self, "_ref_placeholder", "")
+        was_selected = self.combo_ref.currentText().strip() == str(name).strip()
+        current = self.combo_ref.currentText()
+        self.combo_ref.blockSignals(True)
+        self.combo_ref.clear()
+        self.combo_ref.addItem(placeholder)
+        self.combo_ref.addItems(self._ordered_ref_names())
+        keep = -1 if was_selected else self.combo_ref.findText(current)
+        self.combo_ref.setCurrentIndex(keep if keep >= 0 else 0)
+        self.combo_ref.blockSignals(False)
+        self._on_ref_changed(self.combo_ref.currentText())
+
     def _reset_ref_combo_to_placeholder(self) -> None:
         if self.combo_ref is None:
             return
@@ -1497,13 +1591,26 @@ class ReconstructionPage:
             self._reset_ref_combo_to_placeholder()
             return
 
-        name, n_contacts, spacing = dlg.values()
+        name, n_shaft, spacing, skip, profile = dlg.values()
+        # `n` in the reference model is the number of CONNECTED contacts; the
+        # dialog collects the total on the shaft + which positions are not
+        # connected (hybrid electrodes), so connected = shaft - unconnected.
+        # `profile` (optional) is the variable inter-contact spacing over the
+        # full shaft (n_shaft - 1 intervals), for mixed-pitch "...PIX" electrodes.
+        n_connected = int(n_shaft) - len(skip)
 
         self._refs[name] = _normalize_ref_info(
-            {"n": int(n_contacts), "d": float(spacing), "skip": [], "spacing_profile_mm": []}
+            {
+                "n": int(n_connected),
+                "d": float(spacing),
+                "skip": list(skip),
+                "spacing_profile_mm": list(profile),
+            }
         )
         try:
-            _save_user_electrode_ref(name, int(n_contacts), float(spacing))
+            _save_user_electrode_ref(
+                name, int(n_connected), float(spacing), list(skip), list(profile)
+            )
         except Exception as e:
             print("[Electrode references] could not save user reference:", e)
 
@@ -1793,12 +1900,18 @@ class ReconstructionPage:
             self._deep_idx = (int(x), int(y), int(z))
             self._deep_lps = lps
             _set_lps_fields(self.edit_deep_x, self.edit_deep_y, self.edit_deep_z, lps)
+            # Plan-assisted labelling: a fresh deep contact starts a new
+            # electrode, so re-match it against the planned trajectories.
+            self._plan_matched_traj = None
+            self._suggest_label_from_plan(lps)
 
         elif self._pick_mode == "second":
             self._second_picked = (x, y, z)
             self._second_idx = (int(x), int(y), int(z))
             self._second_lps = lps
             _set_lps_fields(self.edit_second_x, self.edit_second_y, self.edit_second_z, lps)
+            # Sanity check: does the drawn axis agree with the matched plan?
+            self._check_axis_against_plan()
 
         self._crosshair_locked = True
         self._pick_mode = None
@@ -2034,6 +2147,250 @@ class ReconstructionPage:
             self._update_estimate_enabled()
         except Exception:
             pass
+
+
+    # ------------------------------------------------------------------
+    # Automatic detection from the implantation plan
+    # ------------------------------------------------------------------
+    def _ensure_ref_for_plan(self, traj: dict) -> str | None:
+        """Return a reference name usable by the reconstruction for this planned
+        trajectory, registering the plan's DIXI reference if NeuXelec does not
+        know it yet (same path as a user-created reference)."""
+        key = traj.get("reference_key") or traj.get("reference")
+        if key and key in self._refs:
+            return key
+        n = traj.get("contact_count")
+        sep = traj.get("contact_separation_mm")
+        ln = traj.get("contact_length_mm")
+        if not key or not n or sep is None or ln is None:
+            return None
+        d_mm = float(sep) + float(ln)  # centre-to-centre inter-contact distance
+        self._refs[key] = _normalize_ref_info(
+            {"n": int(n), "d": d_mm, "skip": [], "spacing_profile_mm": []}
+        )
+        try:
+            _save_user_electrode_ref(key, int(n), d_mm)
+        except Exception as e:
+            print("[Electrode references] could not save plan reference:", e)
+        if self.combo_ref is not None:
+            placeholder = getattr(self, "_ref_placeholder", "Select electrode reference")
+            self.combo_ref.blockSignals(True)
+            self.combo_ref.clear()
+            self.combo_ref.addItem(placeholder)
+            self.combo_ref.addItems(self._ordered_ref_names())
+            self.combo_ref.blockSignals(False)
+        return key
+
+    def _select_ref_silently(self, ref_name: str) -> None:
+        if self.combo_ref is None:
+            return
+        self.combo_ref.blockSignals(True)
+        idx = self.combo_ref.findText(ref_name)
+        self.combo_ref.setCurrentIndex(idx if idx >= 0 else 0)
+        self.combo_ref.blockSignals(False)
+        self._on_ref_changed(self.combo_ref.currentText())
+
+    # ------------------------------------------------------------------
+    # Plan-assisted labelling of a MANUAL reconstruction
+    #
+    # The planned trajectory positions drift a few mm vs the real implant, so
+    # we do NOT use them for geometry. But electrodes are >1 cm apart, so the
+    # planned trajectory nearest to the clicked deep contact reliably tells us
+    # WHICH electrode it is - hence its exact name + DIXI reference. The user
+    # keeps their trusted two-click reconstruction; we just pre-fill the label.
+    # ------------------------------------------------------------------
+    def _plan_trajectories(self) -> list[dict]:
+        plan = getattr(self.state, "plan", None)
+        trajs = (plan or {}).get("trajectories_t1") or []
+        out = []
+        for tr in trajs:
+            if (
+                tr.get("entry_t1_lps")
+                and tr.get("target_t1_lps")
+                and str(tr.get("name", "")).strip()
+            ):
+                out.append(tr)
+        return out
+
+    @staticmethod
+    def _point_to_segment_mm(p, a, b) -> float:
+        p = np.asarray(p, dtype=float)
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+        ab = b - a
+        denom = float(ab @ ab)
+        if denom <= 1e-9:
+            return float(np.linalg.norm(p - a))
+        t = max(0.0, min(1.0, float((p - a) @ ab) / denom))
+        return float(np.linalg.norm(p - (a + t * ab)))
+
+    def _rank_plan_trajectories(
+        self, lps, restrict_hemi: str | None = None
+    ) -> list[tuple[float, dict]]:
+        ranked = []
+        for tr in self._plan_trajectories():
+            # Hemisphere firewall: never propose an electrode from the opposite
+            # side of the one the user clicked in.
+            if restrict_hemi is not None and self._plan_hemi(tr) != restrict_hemi:
+                continue
+            d = self._point_to_segment_mm(lps, tr["target_t1_lps"], tr["entry_t1_lps"])
+            ranked.append((d, tr))
+        ranked.sort(key=lambda dt: dt[0])
+        return ranked
+
+    def _midline_x(self) -> float:
+        try:
+            ref = self._ct_ref_for_lps()
+            sz = ref.GetSize()
+            mid = ref.TransformContinuousIndexToPhysicalPoint(
+                (sz[0] / 2.0, sz[1] / 2.0, sz[2] / 2.0)
+            )
+            return float(mid[0])
+        except Exception:
+            return 0.0
+
+    def _point_hemi(self, lps, margin: float = 5.0) -> str | None:
+        """Hemisphere of an LPS point (+x = Left), or None near the midline."""
+        mx = self._midline_x()
+        x = float(lps[0])
+        if x > mx + margin:
+            return "L"
+        if x < mx - margin:
+            return "R"
+        return None
+
+    def _plan_hemi(self, tr: dict) -> str:
+        mx = self._midline_x()
+        ex = float(tr["entry_t1_lps"][0])
+        tx = float(tr["target_t1_lps"][0])
+        x = ex if abs(ex - mx) > 5.0 else tx
+        return "L" if x > mx else "R"
+
+    def _plan_traj_label(self, tr: dict, dist: float | None = None) -> str:
+        name = str(tr.get("name", "")).strip()
+        parts = [name]
+        n = tr.get("contact_count")
+        sep = tr.get("contact_separation_mm")
+        if n:
+            parts.append(f"{int(n)} contacts")
+        if sep is not None:
+            parts.append(f"{float(sep):.1f} mm spacing")
+        label = " · ".join(parts)
+        if dist is not None:
+            label += f"  ({dist:.1f} mm)"
+        return label
+
+    def _apply_plan_traj(self, tr: dict) -> bool:
+        """Fill the electrode name, hemisphere and DIXI reference from a plan."""
+        ref_name = self._ensure_ref_for_plan(tr)
+        parent = self.ui.window() if self.ui is not None else None
+        if ref_name is None:
+            NeuXelecMessageDialog.warning(
+                parent,
+                "Incomplete plan reference",
+                f"The plan reference for {tr.get('name', '')} is incomplete; "
+                "please choose the electrode reference manually.",
+            )
+            return False
+        if self.edit_elec_name is not None and not self.edit_elec_name.text().strip():
+            self.edit_elec_name.setText(str(tr.get("name", "")).strip())
+        hemi = self._plan_hemi(tr)
+        if self.chk_hemi_left is not None and self.chk_hemi_right is not None:
+            self.chk_hemi_left.setChecked(hemi == "L")
+            self.chk_hemi_right.setChecked(hemi == "R")
+        self._select_ref_silently(ref_name)
+        self._plan_matched_traj = tr
+        return True
+
+    def _suggest_label_from_plan(self, deep_lps) -> None:
+        """On a deep-contact pick, offer the nearest planned electrode's label."""
+        if deep_lps is None:
+            return
+        if getattr(self, "_editing_elec_id", None) is not None:
+            return
+        if self.edit_elec_name is not None and self.edit_elec_name.text().strip():
+            return  # do not override a name the user already typed
+        # Hemisphere firewall: a left click only matches left-side plan electrodes.
+        ranked = self._rank_plan_trajectories(
+            deep_lps, restrict_hemi=self._point_hemi(deep_lps)
+        )
+        if not ranked:
+            return
+        d0, tr0 = ranked[0]
+        if d0 > 12.0:
+            return  # click is far from every planned trajectory
+        parent = self.ui.window() if self.ui is not None else None
+        msg = (
+            "Closest planned electrode to this deep contact:\n\n"
+            f"    {self._plan_traj_label(tr0, d0)}\n\n"
+            "Use this label and reference?"
+        )
+        choices = [("use", "Use it", True)]
+        if len(ranked) > 1:
+            choices.append(("other", "Choose another…", False))
+        res = NeuXelecMessageDialog.choice(
+            parent, "Planned electrode", msg, choices, cancel_text="No"
+        )
+        if res == "use":
+            self._apply_plan_traj(tr0)
+        elif res == "other":
+            self._pick_plan_traj_from_list(
+                ranked, parent, "Choose the planned electrode",
+                "Pick the electrode this deep contact belongs to:",
+            )
+
+    def _pick_plan_traj_from_list(self, ranked, parent, title, message) -> None:
+        names = [self._plan_traj_label(tr, d) for d, tr in ranked]
+        dlg = NeuXelecSelectionDialog(
+            title, message, names, 0, parent, accept_text="Use it", reject_text="Cancel"
+        )
+        if dlg.exec() == QDialog.Accepted:
+            idx = dlg.combo_selection.currentIndex()
+            if 0 <= idx < len(ranked):
+                if self.edit_elec_name is not None:
+                    self.edit_elec_name.clear()
+                self._apply_plan_traj(ranked[idx][1])
+
+    def _check_axis_against_plan(self) -> None:
+        """After the 2nd pick, warn if the drawn axis disagrees with the plan."""
+        tr = getattr(self, "_plan_matched_traj", None)
+        if tr is None or self._deep_lps is None or self._second_lps is None:
+            return
+        drawn = np.asarray(self._second_lps, float) - np.asarray(self._deep_lps, float)
+        planned = np.asarray(tr["entry_t1_lps"], float) - np.asarray(
+            tr["target_t1_lps"], float
+        )
+        nd = float(np.linalg.norm(drawn))
+        npd = float(np.linalg.norm(planned))
+        if nd < 1e-6 or npd < 1e-6:
+            return
+        cosang = float(np.clip((drawn @ planned) / (nd * npd), -1.0, 1.0))
+        ang = math.degrees(math.acos(cosang))
+        # Which trajectory best fits the drawn segment's midpoint (same side)?
+        mid = (np.asarray(self._deep_lps, float) + np.asarray(self._second_lps, float)) / 2.0
+        ranked = self._rank_plan_trajectories(mid, restrict_hemi=self._point_hemi(mid))
+        best_name = str(ranked[0][1].get("name", "")).strip() if ranked else ""
+        cur_name = str(tr.get("name", "")).strip()
+        if ang <= 25.0 and (not best_name or best_name == cur_name):
+            return
+        parent = self.ui.window() if self.ui is not None else None
+        better = (
+            f"\n\nThe axis you drew fits '{best_name}' better."
+            if best_name and best_name != cur_name
+            else ""
+        )
+        keep = NeuXelecMessageDialog.question(
+            parent,
+            "Axis mismatch",
+            f"The axis you drew differs from the planned direction of "
+            f"'{cur_name}' by {ang:.0f}°.{better}\n\nKeep '{cur_name}'?",
+            accept_text="Keep",
+            reject_text="Relabel…",
+        )
+        if not keep and ranked:
+            self._pick_plan_traj_from_list(
+                ranked, parent, "Relabel electrode", "Pick the correct planned electrode:"
+            )
 
     def _reconstruct_electrode_from_two_points(self):
         """Voxeloc-like reconstruction:

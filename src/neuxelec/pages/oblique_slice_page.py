@@ -47,6 +47,7 @@ from neuxelec.ui.page_loading_overlay import PageLoadingOverlay
 from neuxelec.ui.pyvista_quick_tools import PyVistaQuickTools
 from neuxelec.ui.slice_quick_tools import SliceQuickTools
 
+from ..utils.cortex_mask import build_cortex_mask, cortex_label_ids
 from ..utils.pet_visualization import (
     blend_pet_on_rgb,
     compute_pet_reference,
@@ -59,6 +60,7 @@ from ..utils.pet_visualization import (
 from ..utils.siscom_visualization import (
     get_siscom_window,
 )
+from .oblique_fmri import ObliqueFmriMixin
 from .oblique_spect import ObliqueSpectMixin
 
 
@@ -74,7 +76,7 @@ def _top_level_window():
     return None
 
 
-class ObliqueSlicePage(ObliqueSpectMixin, QObject):
+class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
     """
     First implementation of the Oblique Slice page.
 
@@ -322,9 +324,9 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
 
         if self.tbl_parcellation_contacts is not None:
             try:
-                self.tbl_parcellation_contacts.setColumnCount(3)
+                self.tbl_parcellation_contacts.setColumnCount(4)
                 self.tbl_parcellation_contacts.setHorizontalHeaderLabels(
-                    ["Contact", "Label", "Region"]
+                    ["Contact", "Label", "Region", "% region"]
                 )
                 self.tbl_parcellation_contacts.setRowCount(0)
 
@@ -424,6 +426,11 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
 
         self._pan1 = [0.0, 0.0]  # x, y in source-pixmap pixels
         self._pan2 = [0.0, 0.0]
+
+        # Shift+wheel offset of each slice along its plane normal (mm); 0 = the
+        # slice containing the electrode. Reset to 0 on double-click.
+        self._slice_normal_offset_1 = 0.0
+        self._slice_normal_offset_2 = 0.0
 
         self._dragging_slot = None
         self._drag_last_pos = None
@@ -557,6 +564,12 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         # Build and wire the ictal / inter-ictal SPECT overlay card (additive).
         try:
             self._oblique_spect_setup()
+        except Exception:
+            pass
+
+        # Build and wire the fMRI overlay card (additive, same pattern as SPECT).
+        try:
+            self._oblique_fmri_setup()
         except Exception:
             pass
 
@@ -1089,6 +1102,35 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         elif event.type() == QEvent.Wheel:
             delta = event.angleDelta().y()
 
+            try:
+                shift_held = bool(event.modifiers() & Qt.ShiftModifier)
+            except Exception:
+                shift_held = False
+
+            # Shift + wheel: translate the plane through the volume along its own
+            # normal (parallel slices moving away from the electrode). One notch
+            # = 1 mm. Double-click returns to the electrode's slice (offset 0).
+            if shift_held and obj in (self.frame1, self.image1, self.frame2, self.image2):
+                try:
+                    notches = max(1, int(abs(delta) / 120))
+                except Exception:
+                    notches = 1
+                step = (1.0 if delta > 0 else -1.0) * 1.0 * notches
+                if obj in (self.frame1, self.image1):
+                    self._slice_normal_offset_1 = (
+                        float(getattr(self, "_slice_normal_offset_1", 0.0) or 0.0) + step
+                    )
+                else:
+                    self._slice_normal_offset_2 = (
+                        float(getattr(self, "_slice_normal_offset_2", 0.0) or 0.0) + step
+                    )
+                # Fast path: update the 2D slice every notch, but defer the 3D
+                # preview plane to when scrolling settles (re-rendering the whole
+                # pyvista scene every notch is what makes scrolling feel slow).
+                self._schedule_refresh(slices=True, brain=False)
+                self._schedule_brain_plane_follow()
+                return True
+
             # ONLY handle wheel for the 2 slice views
             if obj in (self.frame1, self.image1):
                 if delta > 0:
@@ -1326,6 +1368,23 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             return
 
         self._refresh_timer.start(20)
+
+    def _schedule_brain_plane_follow(self):
+        """Move the 3D preview plane once wheel scrolling settles.
+
+        Re-rendering the whole pyvista scene on every wheel notch is what makes
+        Shift+wheel navigation feel heavy, so the 2D slice updates immediately
+        while the 3D plane is refreshed a short moment after the last notch.
+        """
+        timer = getattr(self, "_brain_follow_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(
+                lambda: self._schedule_refresh(slices=False, brain=True)
+            )
+            self._brain_follow_timer = timer
+        timer.start(140)
 
     def _flush_pending_refresh(self):
         do_slices = self._pending_refresh_slices
@@ -1692,6 +1751,12 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         except Exception:
             pass
 
+        # Same gating for the fMRI overlay (validated coregistration only).
+        try:
+            self._oblique_fmri_update_availability()
+        except Exception:
+            pass
+
     def refresh_available_modalities(
         self,
         refresh: bool = True,
@@ -1781,7 +1846,7 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
                 pass
 
             # turn off competing overlays
-            for cb in (self.chk_ct, self.chk_pet, self.chk_siscom):
+            for cb in (self.chk_ct, self.chk_pet, self.chk_siscom, getattr(self, "chk_ofmri", None)):
                 try:
                     if cb is not None and cb.isChecked():
                         cb.blockSignals(True)
@@ -1911,9 +1976,51 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         u = axis
         return u, w
 
+    def _cached_volume_array(self, img):
+        """Return ``sitk.GetArrayFromImage(img)`` as float32, cached per image.
+
+        Converting the whole volume on every oblique frame is the main cost of
+        slice extraction; caching it keeps navigation fluid. The image object is
+        kept in the cache value so its ``id`` cannot be reused by a new image.
+        """
+        if img is None:
+            return None
+        cache = getattr(self, "_vol_arr_cache", None)
+        if cache is None:
+            cache = {}
+            self._vol_arr_cache = cache
+        key = id(img)
+        entry = cache.get(key)
+        if entry is not None and entry[0] is img:
+            return entry[1]
+        arr = sitk.GetArrayFromImage(img).astype(np.float32)  # [z, y, x]
+        if len(cache) > 12:
+            cache.clear()
+        cache[key] = (img, arr)
+        return arr
+
+    def _cortex_only_active(self) -> bool:
+        return bool(getattr(self.state, "functional_cortex_only", False)) and (
+            self._parcel1_img is not None
+        )
+
+    def _cortex_mask_2d(self, arr_parcel1):
+        """Boolean cortex mask for an oblique-slice parcellation array."""
+        if arr_parcel1 is None:
+            return None
+        try:
+            labels = np.rint(np.nan_to_num(arr_parcel1, nan=0.0)).astype(np.int64)
+            return build_cortex_mask(labels, self._parcel1_lut or {})
+        except Exception:
+            return None
+
     # ---------- Slice extraction ----------
     def _extract_electrode_plane_slice(
-        self, elec: dict, angle_deg: float, image_label: QLabel | None = None
+        self,
+        elec: dict,
+        angle_deg: float,
+        image_label: QLabel | None = None,
+        normal_offset_mm: float = 0.0,
     ):
         axis, center = self._electrode_axis_and_center(elec)
 
@@ -1921,6 +2028,15 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             return None
 
         u, w = self._make_plane_basis(axis, angle_deg)
+
+        # Shift+wheel translates the plane through the volume along its own normal:
+        # parallel slices (same orientation, still parallel to the electrode axis)
+        # moving away from the electrode. offset 0 = the slice containing it.
+        if abs(float(normal_offset_mm)) > 1e-9:
+            n = np.cross(u, w)
+            nn = float(np.linalg.norm(n))
+            if nn > 1e-9:
+                center = center + (float(normal_offset_mm) / nn) * n
 
         # Use T1 as reference for FOV
         ref_img = self._get_t1_image()
@@ -1965,7 +2081,9 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
                 return None, None
 
             try:
-                vol = sitk.GetArrayFromImage(img).astype(np.float32)  # [z, y, x]
+                vol = self._cached_volume_array(img)  # [z, y, x], cached float32
+                if vol is None:
+                    return None, None
             except Exception:
                 return None, None
 
@@ -2028,6 +2146,17 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         arr_sis, valid_sis = _sample_image(self._get_siscom_image(), interp_order=1)
         arr_parcel1, valid_parcel1 = _sample_image(self._parcel1_img, interp_order=0)
         arr_parcel2, valid_parcel2 = _sample_image(self._parcel2_img, interp_order=0)
+
+        # Cortex-only restriction of the functional overlays (PET / SISCOM),
+        # shared with the 3D view via the app state. Hide the signal outside the
+        # cortical ribbon of parcellation 1.
+        if self._cortex_only_active():
+            cortex2d = self._cortex_mask_2d(arr_parcel1)
+            if cortex2d is not None:
+                if arr_pet is not None:
+                    arr_pet = np.where(cortex2d, arr_pet, np.nan)
+                if arr_sis is not None:
+                    arr_sis = np.where(cortex2d, arr_sis, np.nan)
 
         # Project contacts into the oblique plane
         contacts = np.asarray(elec.get("contacts_lps", []) or [], dtype=np.float64)
@@ -2373,6 +2502,10 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         sis_enabled = bool(self.chk_siscom is not None and self.chk_siscom.isChecked())
         parcel1_enabled = bool(self.chk_parcel1 is not None and self.chk_parcel1.isChecked())
         parcel2_enabled = bool(self.chk_parcel2 is not None and self.chk_parcel2.isChecked())
+        try:
+            fmri_enabled = bool(self._ofmri_is_on())
+        except Exception:
+            fmri_enabled = False
 
         if not (
             t1_enabled
@@ -2381,6 +2514,7 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             or sis_enabled
             or parcel1_enabled
             or parcel2_enabled
+            or fmri_enabled
         ):
             image_label.setText("No modality checked")
             image_label.setPixmap(QPixmap())
@@ -2390,12 +2524,17 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         # -----------------------------
         # 1) Geometry / sampling cache
         # -----------------------------
-        cache_key = self._make_slice_cache_key(elec_name, angle_deg)
+        normal_offset = float(
+            getattr(self, f"_slice_normal_offset_{slot_index}", 0.0) or 0.0
+        )
+        if abs(normal_offset) > 1e-6:
+            badge.setText(f"{elec_name}   {normal_offset:+.0f} mm")
+        cache_key = self._make_slice_cache_key(elec_name, angle_deg, normal_offset)
 
         cache = self._slice_cache_1 if slot_index == 1 else self._slice_cache_2
         if cache is None or cache.get("key") != cache_key:
             extracted = self._extract_electrode_plane_slice(
-                elec, angle_deg, image_label=image_label
+                elec, angle_deg, image_label=image_label, normal_offset_mm=normal_offset
             )
             if extracted is None:
                 image_label.setText("Slice failed")
@@ -2564,12 +2703,23 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         # -----------------------------
         # 4) Compose final image
         # -----------------------------
+        # fMRI alone behaves like SISCOM alone: drawn on a black background.
+        if base_rgb is None and fmri_enabled:
+            base_rgb = np.zeros((int(H), int(W), 3), dtype=np.uint8)
         img_rgb = self._compose_rgb_with_pet(base_rgb, pet_rgb, pet_norm, pet_opacity)
 
         # Blend ictal / inter-ictal SPECT overlays on top (additive, no colour
         # scale). Uses the same plane geometry; a no-op unless a layer is active.
         try:
             img_rgb = self._blend_spect_on_oblique_rgb(
+                img_rgb, center, u, w, s_min, s_max, t_min, t_max, H, W
+            )
+        except Exception:
+            pass
+
+        # fMRI activation overlay on top (same plane geometry, same pattern).
+        try:
+            img_rgb = self._blend_fmri_on_oblique_rgb(
                 img_rgb, center, u, w, s_min, s_max, t_min, t_max, H, W
             )
         except Exception:
@@ -2654,6 +2804,7 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             self._zoom1 = 1.0
             self._pan1 = [0.0, 0.0]
             self._display_rotation1 = 0.0
+            self._slice_normal_offset_1 = 0.0
 
             if reset_background:
                 self._slice_background_removed1 = False
@@ -2672,6 +2823,7 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             self._zoom2 = 1.0
             self._pan2 = [0.0, 0.0]
             self._display_rotation2 = 0.0
+            self._slice_normal_offset_2 = 0.0
 
             if reset_background:
                 self._slice_background_removed2 = False
@@ -2688,6 +2840,12 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
 
         if refresh:
             self.render_slice_slot(slot)
+            # The Shift+wheel offset was reset above, so move the 3D preview
+            # plane back onto the electrode too.
+            try:
+                self._schedule_refresh(slices=False, brain=True)
+            except Exception:
+                pass
 
     def _get_oblique_slice_display_pixmap_for_export(
         self, slot_index: int, remove_background: bool | None = None
@@ -3749,16 +3907,22 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
 
         return getattr(self.state, "siscom_z_in_t1", None)
 
-    def _make_slice_cache_key(self, elec_name: str | None, angle_deg: float):
+    def _make_slice_cache_key(
+        self, elec_name: str | None, angle_deg: float, normal_offset: float = 0.0
+    ):
         return (
             elec_name,
             float(angle_deg),
+            round(float(normal_offset), 3),
             str(getattr(self, "_oblique_mri_source", "T1")),
             bool(self._get_t1_image() is not None),
             bool(self._get_t2_image() is not None),
             bool(self._get_ct_image() is not None),
             bool(self._get_pet_image() is not None),
             bool(self._get_siscom_image() is not None),
+            # The cortex restriction is applied at extraction time (PET / SISCOM
+            # arrays are masked there), so a toggle from any page must re-extract.
+            bool(self._cortex_only_active()),
         )
 
     def _apply_zoom_to_pixmap(self, pm: QPixmap, target_size, zoom: float, pan_xy=None) -> QPixmap:
@@ -4589,7 +4753,9 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
 
         return None
 
-    def _make_plane_mesh_for_electrode(self, elec: dict, angle_deg: float):
+    def _make_plane_mesh_for_electrode(
+        self, elec: dict, angle_deg: float, normal_offset_mm: float = 0.0
+    ):
         axis, electrode_center = self._electrode_axis_and_center(elec)
         if axis is None or electrode_center is None:
             return None
@@ -4631,6 +4797,16 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
                 preview_center_lps = np.asarray(electrode_center, dtype=np.float64)
         else:
             preview_center_lps = np.asarray(electrode_center, dtype=np.float64)
+
+        # Follow the Shift+wheel slice offset: move the preview plane along its
+        # normal so it matches the 2D slice currently displayed.
+        if abs(float(normal_offset_mm)) > 1e-9:
+            n = np.cross(u, w)
+            nn = float(np.linalg.norm(n))
+            if nn > 1e-9:
+                preview_center_lps = preview_center_lps + (
+                    float(normal_offset_mm) / nn
+                ) * n
 
         c = self._lps_to_ras_point(preview_center_lps)
         u_r = self._lps_to_ras_vec(u)
@@ -4752,7 +4928,8 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             except Exception:
                 color1_key = None
 
-            plane1_key = (elec1_name, float(angle1), color1_key)
+            offset1 = float(getattr(self, "_slice_normal_offset_1", 0.0) or 0.0)
+            plane1_key = (elec1_name, float(angle1), color1_key, round(offset1, 3))
             if plane1_key != self._last_plane1_key:
                 # remove old plane surface
                 if self._plane_actor_1 is not None:
@@ -4775,7 +4952,7 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
                 if elec1_name:
                     elec1 = self._get_electrode_by_name(elec1_name)
                     if elec1 is not None:
-                        plane1 = self._make_plane_mesh_for_electrode(elec1, angle1)
+                        plane1 = self._make_plane_mesh_for_electrode(elec1, angle1, offset1)
                         if plane1 is not None:
                             color1 = self._get_electrode_rgb(elec1_name)
                             color1_list = [int(color1[0]), int(color1[1]), int(color1[2])]
@@ -4837,7 +5014,8 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             except Exception:
                 color2_key = None
 
-            plane2_key = (elec2_name, float(angle2), color2_key)
+            offset2 = float(getattr(self, "_slice_normal_offset_2", 0.0) or 0.0)
+            plane2_key = (elec2_name, float(angle2), color2_key, round(offset2, 3))
             if plane2_key != self._last_plane2_key:
                 # remove old plane surface
                 if self._plane_actor_2 is not None:
@@ -4860,7 +5038,7 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
                 if elec2_name:
                     elec2 = self._get_electrode_by_name(elec2_name)
                     if elec2 is not None:
-                        plane2 = self._make_plane_mesh_for_electrode(elec2, angle2)
+                        plane2 = self._make_plane_mesh_for_electrode(elec2, angle2, offset2)
                         if plane2 is not None:
                             color2 = self._get_electrode_rgb(elec2_name)
                             color2_list = [int(color2[0]), int(color2[1]), int(color2[2])]
@@ -5068,7 +5246,13 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         except Exception:
             siscom_on = False
 
-        return bool(pet_on or siscom_on)
+        # The fMRI overlay draws a colour bar too (same rule as PET / SISCOM).
+        try:
+            fmri_on = bool(self._ofmri_is_on())
+        except Exception:
+            fmri_on = False
+
+        return bool(pet_on or siscom_on or fmri_on)
 
     def _show_slice_context_menu(self, pos):
         sender = self.sender()
@@ -5083,23 +5267,70 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
                 show_color_scale_option=bool(self._is_pet_or_siscom_checked()),
                 show_ictal_color=True,
                 show_interictal_color=True,
+                show_cortex_only_option=self._parcel1_img is not None,
+                cortex_only=bool(getattr(self.state, "functional_cortex_only", False)),
+                # Same rule as "Color PET" / "Color SISCOM" here: always offered.
+                show_fmri_color=True,
             )
 
             if choice == "pet":
                 self._choose_pet_colormap()
             elif choice == "siscom":
                 self._choose_siscom_colormap()
+            elif choice == "fmri_color":
+                self._choose_oblique_fmri_colormap()
             elif choice == "ictal_color":
                 self._choose_oblique_spect_colormap("ictal")
             elif choice == "interictal_color":
                 self._choose_oblique_spect_colormap("interictal")
             elif choice == "toggle_color_scale":
                 self._toggle_color_scales()
+            elif choice == "toggle_cortex_only":
+                self._toggle_functional_cortex_only()
         except Exception:
             pass
 
     def _toggle_color_scales(self):
         self._show_color_scales = not bool(getattr(self, "_show_color_scales", True))
+        self._schedule_refresh(slices=True, brain=False)
+
+    def _cortex_labels_available(self) -> bool:
+        """True when parcellation 1 names cortical regions (see the 3D view)."""
+        try:
+            return bool(cortex_label_ids(getattr(self, "_parcel1_lut", {}) or {}))
+        except Exception:
+            return False
+
+    def _toggle_functional_cortex_only(self):
+        # Shared with the 3D view via the app state.
+        turning_on = not bool(getattr(self.state, "functional_cortex_only", False))
+        if turning_on and not self._cortex_labels_available():
+            NeuXelecMessageDialog.information(
+                self._dialog_parent(),
+                "Cortex only",
+                "Parcellation 1 does not name any cortical region.\n\n"
+                "The cortex restriction recognises FreeSurfer-style names "
+                "(ctx-lh-..., ctx_rh_..., Left/Right-Cerebral-Cortex). Load a "
+                "FreeSurfer / FastSurfer parcellation, or its lookup table, to "
+                "use it.",
+            )
+            return
+
+        self.state.functional_cortex_only = turning_on
+        self._on_functional_cortex_only_changed()
+        # Keep the 3D View in sync (same flag, same toggle from either page).
+        vp = getattr(self.state, "view3d_page", None)
+        if vp is not None and hasattr(vp, "_apply_functional_cortex_only_change"):
+            try:
+                vp._apply_functional_cortex_only_change()
+            except Exception:
+                pass
+
+    def _on_functional_cortex_only_changed(self):
+        """Re-extract the slices with / without the cortex mask (called after the
+        shared flag changed, from this page or from the 3D View)."""
+        self._slice_cache_1 = None
+        self._slice_cache_2 = None
         self._schedule_refresh(slices=True, brain=False)
 
     def _choose_siscom_colormap(self) -> None:
@@ -5513,6 +5744,10 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         out = pm
         out = self._overlay_pet_scalar_bar_on_pixmap(out)
         out = self._overlay_siscom_scalar_bar_on_pixmap(out)
+        try:
+            out = self._overlay_fmri_scalar_bar_on_pixmap(out)
+        except Exception:
+            pass
         return out
 
     def _overlay_contacts_and_labels_on_display_pixmap(
@@ -6055,6 +6290,13 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         s_proj = rel @ u
         t_proj = rel @ w
 
+        # Distance of each contact to THIS (possibly Shift+wheel-offset) plane,
+        # so contacts disappear when the slice slides away from the electrode.
+        n = np.cross(u, w)
+        nn = float(np.linalg.norm(n))
+        perp = np.abs(rel @ (n / nn)) if nn > 1e-9 else np.zeros(contacts.shape[0])
+        SLAB_MM = 2.0
+
         rows = np.round((s_proj - s_min) / max(1e-9, (s_max - s_min)) * (H - 1)).astype(int)
         cols = np.round((t_proj - t_min) / max(1e-9, (t_max - t_min)) * (W - 1)).astype(int)
 
@@ -6062,6 +6304,10 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
 
         for ci, (row, col) in enumerate(zip(rows, cols)):
             if not bool(contacts_visible[ci]):
+                continue
+
+            # Hide contacts that are off the current (offset) plane.
+            if float(perp[ci]) > SLAB_MM:
                 continue
 
             if 0 <= row < H and 0 <= col < W:
@@ -6114,8 +6360,29 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             header_region = "Region"
 
         try:
-            tbl.setColumnCount(3)
-            tbl.setHorizontalHeaderLabels(["Contact", header_label, header_region])
+            tbl.setColumnCount(4)
+            tbl.setHorizontalHeaderLabels(
+                ["Contact", header_label, header_region, "% region"]
+            )
+            # Explain the columns on hover: these numbers are not a single-voxel
+            # read-out but the SEEG2parc weighted neighbourhood.
+            header_tips = (
+                "Contact of the electrodes currently shown in the two oblique slices.",
+                "Parcellation label number of the region attributed to the contact.",
+                "Region attributed to the contact by SEEG2parc: the one that dominates "
+                "the 3x3x3 voxel cube centred on it. Hover a row to see every region "
+                "the contact straddles.",
+                "SEEG2parc: share of the 3x3x3 voxel cube centred on the contact that "
+                "belongs to the region shown. Each neighbouring voxel is weighted by "
+                "1 / its distance to the contact (centre and faces 1, edges 1/\u221a2, "
+                "corners 1/\u221a3), so 100% means the whole neighbourhood is that "
+                "region. Hover a row for the full breakdown; the same values are "
+                "exported as tissueLabel / tissueWeights in BIDS.",
+            )
+            for _col, _tip in enumerate(header_tips):
+                _hdr_item = tbl.horizontalHeaderItem(_col)
+                if _hdr_item is not None:
+                    _hdr_item.setToolTip(_tip)
         except Exception:
             pass
 
@@ -6126,6 +6393,38 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             except Exception:
                 pass
             return
+
+        # For the "% region" column: fraction of the SEEG2parc 3x3x3 weighted cube
+        # occupied by the contact's region. The label volume is cached per image.
+        parc_arr = None
+        _cube_weights = None
+        try:
+            from ..seeg2parc import build_parcellation_volume as _build_vol
+            from ..seeg2parc import cube_label_weights as _cube_weights
+            from ..utils.wmparc import find_sibling_wmparc
+
+            cache = getattr(self, "_parcel_conf_arr_cache", None)
+            if cache is None:
+                cache = {}
+                self._parcel_conf_arr_cache = cache
+
+            parc_path = getattr(
+                self.state, "parcel1_path" if p1_on else "parcel2_path", None
+            )
+            key = (id(parcel), str(parc_path or ""))
+            parc_arr = cache.get(key)
+            if parc_arr is None:
+                raw = sitk.GetArrayFromImage(parcel)  # [z, y, x]
+                # Same labelling volume as the BIDS export: aparc+aseg with the
+                # generic white matter (2 / 41) replaced by the detailed wmparc
+                # labels when a wmparc sits next to the parcellation.
+                wm_img = find_sibling_wmparc(parc_path, parcel)
+                wm_arr = sitk.GetArrayFromImage(wm_img) if wm_img is not None else None
+                parc_arr = _build_vol(raw, wm_arr)
+                cache[key] = parc_arr
+        except Exception:
+            parc_arr = None
+            _cube_weights = None
 
         rows = []
 
@@ -6153,10 +6452,37 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
                 if i >= len(contacts_visible) or not bool(contacts_visible[i]):
                     continue
 
+                conf_txt = ""
+                tip = ""
                 try:
                     idx = parcel.TransformPhysicalPointToIndex(tuple(float(v) for v in p))
                     label = int(parcel.GetPixel(*idx))
                     _label_txt, region, region_rgb = lookup_region(label)
+
+                    if parc_arr is not None and _cube_weights is not None:
+                        # sitk index is (x, y, z); the numpy array is [z, y, x].
+                        vox = (idx[2], idx[1], idx[0])
+                        centre_label = label
+                        weights = _cube_weights(parc_arr, vox)
+                        if weights:
+                            # SEEG2parc result: the contact is attributed to the
+                            # region dominating the weighted 3x3x3 cube, exactly
+                            # what the BIDS export writes as tissueLabel #1.
+                            label, top_weight = weights[0]
+                            _label_txt, region, region_rgb = lookup_region(label)
+                            conf_txt = f"{round(top_weight * 100)}%"
+
+                            # Hover: every region the cube straddles, in the same
+                            # order as the export, flagging the voxel the contact
+                            # dot actually sits on when it is not the dominant one.
+                            parts = []
+                            for lab_i, w in weights:
+                                _lt, rname, _rgb = lookup_region(lab_i)
+                                txt = f"{rname} {round(w * 100)}%"
+                                if lab_i == centre_label and lab_i != label:
+                                    txt += " (contact voxel)"
+                                parts.append(txt)
+                            tip = " · ".join(parts)
                 except Exception:
                     label = -1
                     region = "Out of bounds"
@@ -6185,6 +6511,8 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
                         f"{elec_name}{i + 1}",
                         str(label),
                         str(region),
+                        conf_txt,
+                        tip,
                         elec_rgb,
                         region_rgb,
                     )
@@ -6194,11 +6522,17 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
             tbl.setRowCount(len(rows))
 
             for r, row_data in enumerate(rows):
-                contact, label, region, elec_rgb, region_rgb = row_data
+                contact, label, region, conf_txt, tip, elec_rgb, region_rgb = row_data
 
                 item_contact = QTableWidgetItem(contact)
                 item_label = QTableWidgetItem(label)
                 item_region = QTableWidgetItem(region)
+                item_conf = QTableWidgetItem(conf_txt)
+
+                # Hover any cell to see the full SEEG2parc breakdown.
+                if tip:
+                    for _it in (item_contact, item_label, item_region, item_conf):
+                        _it.setToolTip(tip)
 
                 # Contact column background = electrode color.
                 try:
@@ -6235,12 +6569,14 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
                 tbl.setItem(r, 0, item_contact)
                 tbl.setItem(r, 1, item_label)
                 tbl.setItem(r, 2, item_region)
+                tbl.setItem(r, 3, item_conf)
 
             header = tbl.horizontalHeader()
-            header.setStretchLastSection(True)
+            header.setStretchLastSection(False)
             header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
             header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
             header.setSectionResizeMode(2, QHeaderView.Stretch)
+            header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
 
         except Exception:
             pass
@@ -6405,6 +6741,10 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
 
         entry = lut.get(int(label), None)
         if entry is None:
+            # Same naming as SEEG2parc: 0 is the background, any other label
+            # without a LUT entry keeps its number so the row stays usable.
+            if int(label) != 0:
+                return str(label), f"label-{int(label)}", (255, 255, 255)
             # debug
             # print(f"[Parcellation LUT] missing label {label} | LUT size={len(lut)}")
             return str(label), "Unknown", (255, 255, 255)
@@ -6438,6 +6778,10 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
 
         entry = lut.get(int(label), None)
         if entry is None:
+            # Same naming as SEEG2parc: 0 is the background, any other label
+            # without a LUT entry keeps its number so the row stays usable.
+            if int(label) != 0:
+                return str(label), f"label-{int(label)}", (255, 255, 255)
             return str(label), "Unknown", (255, 255, 255)
 
         try:
@@ -6476,8 +6820,10 @@ class ObliqueSlicePage(ObliqueSpectMixin, QObject):
         ct_on = bool(self.chk_ct is not None and self.chk_ct.isChecked())
         pet_on = bool(self.chk_pet is not None and self.chk_pet.isChecked())
         sis_on = bool(self.chk_siscom is not None and self.chk_siscom.isChecked())
+        chk_fmri = getattr(self, "chk_ofmri", None)
+        fmri_on = bool(chk_fmri is not None and chk_fmri.isChecked())
 
-        if ct_on or pet_on or sis_on:
+        if ct_on or pet_on or sis_on or fmri_on:
             try:
                 if self.chk_parcel1 is not None and self.chk_parcel1.isChecked():
                     self.chk_parcel1.blockSignals(True)

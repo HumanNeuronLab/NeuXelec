@@ -307,6 +307,7 @@ class View3DSlicePlanesMixin:
                 self._render_coronal_plane()
                 self._render_coronal_pet_overlay()
                 self._render_coronal_siscom_overlay()
+                self._render_coronal_fmri_overlay()
                 self._render_plane_spect_overlays("coronal")
                 self._render_coronal_electrodes_overlay()
 
@@ -314,6 +315,7 @@ class View3DSlicePlanesMixin:
                 self._render_axial_plane()
                 self._render_axial_pet_overlay()
                 self._render_axial_siscom_overlay()
+                self._render_axial_fmri_overlay()
                 self._render_plane_spect_overlays("axial")
                 self._render_axial_electrodes_overlay()
 
@@ -321,6 +323,7 @@ class View3DSlicePlanesMixin:
                 self._render_sagittal_plane()
                 self._render_sagittal_pet_overlay()
                 self._render_sagittal_siscom_overlay()
+                self._render_sagittal_fmri_overlay()
                 self._render_plane_spect_overlays("sagittal")
                 self._render_sagittal_electrodes_overlay()
 
@@ -336,6 +339,7 @@ class View3DSlicePlanesMixin:
                     self._render_coronal_plane()
                     self._render_coronal_pet_overlay()
                     self._render_coronal_siscom_overlay()
+                    self._render_coronal_fmri_overlay()
                     self._render_plane_spect_overlays("coronal")
                     self._render_coronal_outline()
                     self._render_coronal_electrodes_overlay()
@@ -348,6 +352,7 @@ class View3DSlicePlanesMixin:
                     self._render_axial_plane()
                     self._render_axial_pet_overlay()
                     self._render_axial_siscom_overlay()
+                    self._render_axial_fmri_overlay()
                     self._render_plane_spect_overlays("axial")
                     self._render_axial_outline()
                     self._render_axial_electrodes_overlay()
@@ -360,6 +365,7 @@ class View3DSlicePlanesMixin:
                     self._render_sagittal_plane()
                     self._render_sagittal_pet_overlay()
                     self._render_sagittal_siscom_overlay()
+                    self._render_sagittal_fmri_overlay()
                     self._render_plane_spect_overlays("sagittal")
                     self._render_sagittal_outline()
                     self._render_sagittal_electrodes_overlay()
@@ -492,14 +498,17 @@ class View3DSlicePlanesMixin:
 
         try:
             self._render_coronal_siscom_overlay()
+            self._render_coronal_fmri_overlay()
         except Exception:
             pass
         try:
             self._render_axial_siscom_overlay()
+            self._render_axial_fmri_overlay()
         except Exception:
             pass
         try:
             self._render_sagittal_siscom_overlay()
+            self._render_sagittal_fmri_overlay()
         except Exception:
             pass
         try:

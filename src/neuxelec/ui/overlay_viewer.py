@@ -1825,7 +1825,16 @@ class OverlayViewer(QDialog):
         moving_in_t1: sitk.Image,
         moving_name: str = "CT",
         parent=None,
+        overlay_in_t1: sitk.Image | None = None,
+        overlay_name: str = "activation",
+        overlay_threshold: float = 0.02,
     ):
+        """``overlay_in_t1`` (optional): a second image on the T1 grid drawn ON
+        TOP of the red/green blend as an opaque coloured mask where
+        |value| >= ``overlay_threshold`` (fMRI activation recovered from a
+        colour fusion, shown over its registered grey anatomy). It follows the
+        manual refinement exactly like the moving image; get it back with
+        ``corrected_overlay_image()``."""
         super().__init__(parent)
 
         self._ui_ready = False
@@ -1842,6 +1851,11 @@ class OverlayViewer(QDialog):
         self.fixed_img = fixed_t1
         self.moving_img = moving_in_t1
         self.moving_name = moving_name
+        self.overlay_img = overlay_in_t1
+        self.overlay_name = overlay_name
+        self.overlay_threshold = float(overlay_threshold)
+        # Overlay colour: yellow-orange, distinct from the green T1 / red moving.
+        self.overlay_rgb = (255, 200, 40)
 
         self.setWindowTitle(f"Review coregistration: MRI 1 + {self.moving_name}")
 
@@ -2085,6 +2099,12 @@ class OverlayViewer(QDialog):
         Call this AFTER dlg.exec() returns Accepted to store the refined result in AppState.
         """
         return self._resample_manual_on_moving()
+
+    def corrected_overlay_image(self) -> sitk.Image | None:
+        """The overlay image (if any) after the same manual refinement."""
+        if self.overlay_img is None:
+            return None
+        return self._resample_manual_on(self.overlay_img)
 
     def manual_transform(self) -> sitk.Euler3DTransform:
         return self.manual_t
@@ -2716,22 +2736,28 @@ class OverlayViewer(QDialog):
     # ----------------------------
     # Manual resample (extra transform in T1 space)
     # ----------------------------
-    def _resample_manual_on_moving(self) -> sitk.Image:
-        """
-        Applies self.manual_t to self.moving_img (which is already in T1 space).
-        Output remains in T1 geometry.
-        """
+    def _resample_manual_on(self, img: sitk.Image) -> sitk.Image:
+        """Applies self.manual_t to an image already in T1 space (T1 geometry kept)."""
         resampler = sitk.ResampleImageFilter()
         resampler.SetReferenceImage(self.fixed_img)
         resampler.SetInterpolator(sitk.sitkLinear)
         resampler.SetTransform(self.manual_t)
         resampler.SetDefaultPixelValue(0)
-        return resampler.Execute(self.moving_img)
+        return resampler.Execute(img)
+
+    def _resample_manual_on_moving(self) -> sitk.Image:
+        """
+        Applies self.manual_t to self.moving_img (which is already in T1 space).
+        Output remains in T1 geometry.
+        """
+        return self._resample_manual_on(self.moving_img)
 
     # ----------------------------
     # Rendering
     # ----------------------------
-    def _compose_rgb(self, fixed2d: np.ndarray, moving2d: np.ndarray) -> np.ndarray:
+    def _compose_rgb(
+        self, fixed2d: np.ndarray, moving2d: np.ndarray, overlay2d: np.ndarray | None = None
+    ) -> np.ndarray:
         f = np.clip(_norm01(fixed2d) * self.g_fixed, 0.0, 1.0)
         m = np.clip(_norm01(moving2d) * self.g_moving, 0.0, 1.0)
 
@@ -2741,6 +2767,11 @@ class OverlayViewer(QDialog):
         rgb = np.zeros((f_u8.shape[0], f_u8.shape[1], 3), dtype=np.float32)
         rgb[..., 1] = f_u8  # fixed in GREEN
         rgb[..., 0] = (1.0 - self.alpha) * rgb[..., 0] + self.alpha * m_u8  # moving in RED
+        if overlay2d is not None:
+            # Opaque coloured mask on top (activation clusters).
+            mask = np.isfinite(overlay2d) & (np.abs(overlay2d) >= self.overlay_threshold)
+            if np.any(mask):
+                rgb[mask] = np.asarray(self.overlay_rgb, dtype=np.float32)
         return np.clip(rgb, 0, 255).astype(np.uint8)
 
     def _draw_crosshair_on_pixmap(self, pm: QPixmap, x: float, y: float) -> QPixmap:
@@ -2766,11 +2797,17 @@ class OverlayViewer(QDialog):
         ry = np.rad2deg(self.manual_t.GetAngleY())
         rz = np.rad2deg(self.manual_t.GetAngleZ())
 
+        overlay_line = (
+            f"{self.overlay_name}: yellow, moved with {self.moving_name}\n"
+            if self.overlay_img is not None
+            else ""
+        )
         self.lbl_header.setText(
             f"MRI 1 size: {self.fixed_img.GetSize()}    "
             f"spacing: {tuple(round(s, 3) for s in self.fixed_img.GetSpacing())}\n"
             f"{self.moving_name} in MRI 1 size: {self.moving_img.GetSize()}    "
             f"spacing: {tuple(round(s, 3) for s in self.moving_img.GetSpacing())}\n"
+            f"{overlay_line}"
             f"Crosshair:  ix={self.ix}   iy={self.iy}   iz={self.iz}\n\n"
             f"Manual correction\n"
             f"Translation (mm):  Tx={tx:.1f}   Ty={ty:.1f}   Tz={tz:.1f}\n"
@@ -2792,9 +2829,17 @@ class OverlayViewer(QDialog):
         m_co0 = self._base_coronal(moving_np, self.iy)
         m_sa0 = self._base_sagittal(moving_np, self.ix)
 
-        rgb_ax = self._compose_rgb(f_ax0, m_ax0)
-        rgb_co = self._compose_rgb(f_co0, m_co0)
-        rgb_sa = self._compose_rgb(f_sa0, m_sa0)
+        # optional overlay (moved with the same manual refinement)
+        o_ax0 = o_co0 = o_sa0 = None
+        if self.overlay_img is not None:
+            overlay_np = _sitk_to_np_zyx(self._resample_manual_on(self.overlay_img))
+            o_ax0 = self._base_axial(overlay_np, self.iz)
+            o_co0 = self._base_coronal(overlay_np, self.iy)
+            o_sa0 = self._base_sagittal(overlay_np, self.ix)
+
+        rgb_ax = self._compose_rgb(f_ax0, m_ax0, o_ax0)
+        rgb_co = self._compose_rgb(f_co0, m_co0, o_co0)
+        rgb_sa = self._compose_rgb(f_sa0, m_sa0, o_sa0)
 
         rgb_ax_r = _rot90_k(rgb_ax, self.K_AXIAL)
         rgb_co_r = _rot90_k(rgb_co, self.K_CORONAL)

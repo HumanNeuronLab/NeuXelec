@@ -997,6 +997,7 @@ QWidget#pageObliqueSlices QLabel#label_28 {
 QWidget#pageObliqueSlices QFrame#cardObliqueDisplay,
 QWidget#pageObliqueSlices QFrame#cardObliqueAnatomical,
 QWidget#pageObliqueSlices QFrame#cardObliquePET,
+QWidget#pageObliqueSlices QFrame#cardObliquefMRI,
 QWidget#pageObliqueSlices QFrame#cardObliqueSPECT,
 QWidget#pageObliqueSlices QFrame#cardObliqueSISCOM {
     background-color: #11131B;
@@ -1007,6 +1008,7 @@ QWidget#pageObliqueSlices QFrame#cardObliqueSISCOM {
 QWidget#pageObliqueSlices QLabel#lblObliqueDisplayCard,
 QWidget#pageObliqueSlices QLabel#lblObliqueAnatomicalCard,
 QWidget#pageObliqueSlices QLabel#lblObliquePETCard,
+QWidget#pageObliqueSlices QLabel#lblObliquefMRICard,
 QWidget#pageObliqueSlices QLabel#lblObliqueSPECTCard,
 QWidget#pageObliqueSlices QLabel#lblObliqueSISCOMCard {
     color: #F4D9D0;
@@ -1027,10 +1029,14 @@ QWidget#pageObliqueSlices QFrame#cardObliqueSISCOM {
 QWidget#pageObliqueSlices QFrame#cardObliqueSPECT {
     border: 1px solid #382638;
 }
+QWidget#pageObliqueSlices QFrame#cardObliquefMRI {
+    border: 1px solid #382638;
+}
 
 /* Compact labels in the parameter cards. */
 QWidget#pageObliqueSlices QFrame#cardObliqueDisplay QLabel,
 QWidget#pageObliqueSlices QFrame#cardObliquePET QLabel,
+QWidget#pageObliqueSlices QFrame#cardObliquefMRI QLabel,
 QWidget#pageObliqueSlices QFrame#cardObliqueSPECT QLabel,
 QWidget#pageObliqueSlices QFrame#cardObliqueSISCOM QLabel {
     color: #A8ABBA;
@@ -1038,6 +1044,7 @@ QWidget#pageObliqueSlices QFrame#cardObliqueSISCOM QLabel {
 }
 QWidget#pageObliqueSlices QFrame#cardObliqueDisplay QLabel#lblObliqueDisplayCard,
 QWidget#pageObliqueSlices QFrame#cardObliquePET QLabel#lblObliquePETCard,
+QWidget#pageObliqueSlices QFrame#cardObliquefMRI QLabel#lblObliquefMRICard,
 QWidget#pageObliqueSlices QFrame#cardObliqueSPECT QLabel#lblObliqueSPECTCard,
 QWidget#pageObliqueSlices QFrame#cardObliqueSISCOM QLabel#lblObliqueSISCOMCard {
     color: #F4D9D0;
@@ -1338,6 +1345,24 @@ QFrame#menu QPushButton#btn_menu_saveProject[saved=&quot;true&quot;]:hover {
     border: 1px solid #FF487D;
 }
 
+/* User guide button, right under Save project: same neutral card, rose on hover. */
+QFrame#menu QPushButton#btn_menu_userGuide {
+    color: #C9CCDA;
+    background-color: #11131B;
+    border: 1px solid #2B2D38;
+    border-radius: 10px;
+    padding: 0px;
+    min-height: 32px;
+    max-height: 32px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QFrame#menu QPushButton#btn_menu_userGuide:hover {
+    color: white;
+    background-color: #171923;
+    border: 1px solid #FF487D;
+}
+
 
 /* ===============================================================
    FILES LOAD/SAVE STATES + REGULAR NAVIGATION - final refinement
@@ -1513,6 +1538,7 @@ QWidget#page3DView QFrame#card3DMRI,
 QWidget#page3DView QFrame#card3DCT,
 QWidget#page3DView QFrame#card3DPET,
 QWidget#page3DView QFrame#card3DSISCOM,
+QWidget#page3DView QFrame#card3DfMRI,
 QWidget#page3DView QFrame#card3DSPECT,
 QWidget#page3DView QFrame#card3DParcellation {
     background-color: #11131B;
@@ -1521,6 +1547,7 @@ QWidget#page3DView QFrame#card3DParcellation {
 }
 QWidget#page3DView QFrame#card3DPET,
 QWidget#page3DView QFrame#card3DSISCOM,
+QWidget#page3DView QFrame#card3DfMRI,
 QWidget#page3DView QFrame#card3DSPECT {
     border: 1px solid #382638;
 }
@@ -1532,6 +1559,7 @@ QWidget#page3DView QLabel#lbl3DMRICard,
 QWidget#page3DView QLabel#lbl3DCTCard,
 QWidget#page3DView QLabel#lbl3DPETCard,
 QWidget#page3DView QLabel#lbl3DSISCOMCard,
+QWidget#page3DView QLabel#lbl3DfMRICard,
 QWidget#page3DView QLabel#lbl3DSPECTCard,
 QWidget#page3DView QLabel#lbl3DParcellationCard {
     color: #F4D9D0;
@@ -1550,6 +1578,7 @@ QWidget#page3DView QFrame#card3DMRI QLabel,
 QWidget#page3DView QFrame#card3DCT QLabel,
 QWidget#page3DView QFrame#card3DPET QLabel,
 QWidget#page3DView QFrame#card3DSISCOM QLabel,
+QWidget#page3DView QFrame#card3DfMRI QLabel,
 QWidget#page3DView QFrame#card3DSPECT QLabel,
 QWidget#page3DView QFrame#card3DParcellation QLabel {
     color: #A8ABBA;
@@ -1564,6 +1593,7 @@ QWidget#page3DView QLabel#lbl3DMRICard,
 QWidget#page3DView QLabel#lbl3DCTCard,
 QWidget#page3DView QLabel#lbl3DPETCard,
 QWidget#page3DView QLabel#lbl3DSISCOMCard,
+QWidget#page3DView QLabel#lbl3DfMRICard,
 QWidget#page3DView QLabel#lbl3DSPECTCard,
 QWidget#page3DView QLabel#lbl3DParcellationCard {
     color: #F4D9D0;
@@ -1934,9 +1964,7 @@ QWidget#pageReconstruction QPushButton#btn_researchView:checked:hover {
 
 /* ---------- Files/Coregistration workflow grouping ---------- */
 QLabel#filesLoadGroupMRI,
-QLabel#filesLoadGroupCT,
 QLabel#filesLoadGroupFunctional,
-QLabel#filesLoadGroupDerived,
 QLabel#filesLoadGroupLabels,
 QLabel#filesLoadGroupSurfaces {
     color: #8B8FA0;
@@ -1971,6 +1999,7 @@ QFrame#btn_FilesCoreg_loadCTCell,
 QFrame#btn_FilesCoreg_loadPETCell,
 QFrame#btn_FilesCoreg_loadictalSPECTCell,
 QFrame#btn_FilesCoreg_loadinterictalSPECTCell,
+QFrame#btn_FilesCoreg_loadfMRICell,
 QFrame#btn_FilesCoreg_loadSISCOMCell,
 QFrame#btn_FilesCoreg_loadParcel1Cell,
 QFrame#btn_FilesCoreg_loadParcel2Cell,
@@ -2330,6 +2359,16 @@ QLabel[uiRole=&quot;statusGroupTitle&quot;] {
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 1px;
+}
+QLabel[uiRole=&quot;statusSubGroup&quot;] {
+    color: #7E8294;
+    background-color: transparent;
+    border: none;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.1px;
+    padding-top: 4px;
+    padding-left: 2px;
 }
 QLabel[uiRole=&quot;statusPill&quot;] {
     color: #525764;
@@ -2717,6 +2756,38 @@ QWidget#pageFiles QLabel#cardFilesToSaveSubtitle {
                </property>
                <property name="text">
                 <string>Save project</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="btn_menu_userGuide">
+               <property name="minimumSize">
+                <size>
+                 <width>186</width>
+                 <height>34</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>206</width>
+                 <height>34</height>
+                </size>
+               </property>
+               <property name="font">
+                <font>
+                 <family>Segoe UI</family>
+                 <pointsize>-1</pointsize>
+                 <fontweight>DemiBold</fontweight>
+                </font>
+               </property>
+               <property name="cursor">
+                <cursorShape>PointingHandCursor</cursorShape>
+               </property>
+               <property name="toolTip">
+                <string>Open the user guide (F1)</string>
+               </property>
+               <property name="text">
+                <string>User guide</string>
                </property>
               </widget>
              </item>
@@ -3308,12 +3379,28 @@ QLabel {
                               </property>
                              </widget>
                             </item>
+                            <item>
+                             <widget class="QPushButton" name="btn_FilesCoreg_loadPlanning">
+                              <property name="cursor">
+                               <cursorShape>PointingHandCursor</cursorShape>
+                              </property>
+                              <property name="text">
+                               <string>Load Planning</string>
+                              </property>
+                              <property name="toolTip">
+                               <string>Import a NeuroInspire (.nip) implantation plan: electrode names, references and planned trajectories.</string>
+                              </property>
+                              <property name="uiRole" stdset="0">
+                               <string>loadFile</string>
+                              </property>
+                             </widget>
+                            </item>
                            </layout>
                           </item>
                           <item>
                            <widget class="QLabel" name="cardBulkImportHint">
                             <property name="text">
-                             <string>Imaging: MRI 1/MRI 2/CT/PET/SPECT/SISCOM   •   Parcellation: atlas   •   Surfaces: LH/RH pial and brain mask</string>
+                             <string>Imaging: MRI 1/MRI 2/CT/PET/SPECT/SISCOM   •   Parcellation: atlas   •   Surfaces: LH/RH pial and brain mask   •   Planning: NeuroInspire .nip</string>
                             </property>
                             <property name="uiRole" stdset="0">
                              <string>microLabel</string>
@@ -3456,7 +3543,7 @@ QLabel {
                                  <property name="verticalSpacing">
                                   <number>5</number>
                                  </property>
-                                 <item row="0" column="0">
+                                 <item row="1" column="0">
                                   <widget class="QLabel" name="pill_FilesCoreg_T1">
                                    <property name="minimumSize">
                                     <size>
@@ -3484,7 +3571,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="0" column="1">
+                                 <item row="1" column="1">
                                   <widget class="QLabel" name="label_FilesCoreg_T1">
                                    <property name="minimumSize">
                                     <size>
@@ -3500,7 +3587,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="0" column="2">
+                                 <item row="1" column="2">
                                   <widget class="QLabel" name="status_FilesCoreg_T1">
                                    <property name="text">
                                     <string>Missing</string>
@@ -3513,7 +3600,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="1" column="0">
+                                 <item row="2" column="0">
                                   <widget class="QLabel" name="pill_FilesCoreg_T2">
                                    <property name="minimumSize">
                                     <size>
@@ -3541,7 +3628,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="1" column="1">
+                                 <item row="2" column="1">
                                   <widget class="QLabel" name="label_FilesCoreg_T2">
                                    <property name="minimumSize">
                                     <size>
@@ -3557,7 +3644,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="1" column="2">
+                                 <item row="2" column="2">
                                   <widget class="QLabel" name="status_FilesCoreg_T2">
                                    <property name="text">
                                     <string>Missing</string>
@@ -3570,7 +3657,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="2" column="0">
+                                 <item row="3" column="0">
                                   <widget class="QLabel" name="pill_FilesCoreg_CT">
                                    <property name="minimumSize">
                                     <size>
@@ -3598,7 +3685,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="2" column="1">
+                                 <item row="3" column="1">
                                   <widget class="QLabel" name="label_FilesCoreg_CT">
                                    <property name="minimumSize">
                                     <size>
@@ -3614,7 +3701,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="2" column="2">
+                                 <item row="3" column="2">
                                   <widget class="QLabel" name="status_FilesCoreg_CT">
                                    <property name="text">
                                     <string>Missing</string>
@@ -3627,7 +3714,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="3" column="0">
+                                 <item row="5" column="0">
                                   <widget class="QLabel" name="pill_FilesCoreg_PET">
                                    <property name="minimumSize">
                                     <size>
@@ -3655,7 +3742,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="3" column="1">
+                                 <item row="5" column="1">
                                   <widget class="QLabel" name="label_FilesCoreg_PET">
                                    <property name="minimumSize">
                                     <size>
@@ -3671,7 +3758,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="3" column="2">
+                                 <item row="5" column="2">
                                   <widget class="QLabel" name="status_FilesCoreg_PET">
                                    <property name="text">
                                     <string>Missing</string>
@@ -3684,7 +3771,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="4" column="0">
+                                 <item row="6" column="0">
                                   <widget class="QLabel" name="pill_FilesCoreg_ictalSPECT">
                                    <property name="minimumSize">
                                     <size>
@@ -3712,7 +3799,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="4" column="1">
+                                 <item row="6" column="1">
                                   <widget class="QLabel" name="label_FilesCoreg_ictalSPECT">
                                    <property name="minimumSize">
                                     <size>
@@ -3728,7 +3815,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="4" column="2">
+                                 <item row="6" column="2">
                                   <widget class="QLabel" name="status_FilesCoreg_ictalSPECT">
                                    <property name="text">
                                     <string>Missing</string>
@@ -3741,7 +3828,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="5" column="0">
+                                 <item row="7" column="0">
                                   <widget class="QLabel" name="pill_FilesCoreg_interictalSPECT">
                                    <property name="minimumSize">
                                     <size>
@@ -3769,7 +3856,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="5" column="1">
+                                 <item row="7" column="1">
                                   <widget class="QLabel" name="label_FilesCoreg_interictalSPECT">
                                    <property name="minimumSize">
                                     <size>
@@ -3785,7 +3872,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="5" column="2">
+                                 <item row="7" column="2">
                                   <widget class="QLabel" name="status_FilesCoreg_interictalSPECT">
                                    <property name="text">
                                     <string>Missing</string>
@@ -3798,7 +3885,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="6" column="0">
+                                 <item row="8" column="0">
                                   <widget class="QLabel" name="pill_FilesCoreg_SISCOM">
                                    <property name="minimumSize">
                                     <size>
@@ -3826,7 +3913,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="6" column="1">
+                                 <item row="8" column="1">
                                   <widget class="QLabel" name="label_FilesCoreg_SISCOM">
                                    <property name="minimumSize">
                                     <size>
@@ -3842,7 +3929,7 @@ QLabel {
                                    </property>
                                   </widget>
                                  </item>
-                                 <item row="6" column="2">
+                                 <item row="8" column="2">
                                   <widget class="QLabel" name="status_FilesCoreg_SISCOM">
                                    <property name="text">
                                     <string>Missing</string>
@@ -3852,6 +3939,77 @@ QLabel {
                                    </property>
                                    <property name="status" stdset="0">
                                     <string>missing</string>
+                                   </property>
+                                  </widget>
+                                 </item>
+                                 <item row="9" column="0">
+                                  <widget class="QLabel" name="pill_FilesCoreg_fMRI">
+                                   <property name="minimumSize">
+                                    <size>
+                                     <width>18</width>
+                                     <height>0</height>
+                                    </size>
+                                   </property>
+                                   <property name="maximumSize">
+                                    <size>
+                                     <width>18</width>
+                                     <height>16777215</height>
+                                    </size>
+                                   </property>
+                                   <property name="text">
+                                    <string>●</string>
+                                   </property>
+                                   <property name="alignment">
+                                    <set>Qt::AlignmentFlag::AlignCenter</set>
+                                   </property>
+                                   <property name="uiRole" stdset="0">
+                                    <string>statusPill</string>
+                                   </property>
+                                   <property name="status" stdset="0">
+                                    <string>missing</string>
+                                   </property>
+                                  </widget>
+                                 </item>
+                                 <item row="9" column="1">
+                                  <widget class="QLabel" name="label_FilesCoreg_fMRI">
+                                   <property name="text">
+                                    <string>fMRI</string>
+                                   </property>
+                                   <property name="uiRole" stdset="0">
+                                    <string>statusName</string>
+                                   </property>
+                                  </widget>
+                                 </item>
+                                 <item row="9" column="2">
+                                  <widget class="QLabel" name="status_FilesCoreg_fMRI">
+                                   <property name="text">
+                                    <string>Missing</string>
+                                   </property>
+                                   <property name="uiRole" stdset="0">
+                                    <string>statusText</string>
+                                   </property>
+                                   <property name="status" stdset="0">
+                                    <string>missing</string>
+                                   </property>
+                                  </widget>
+                                 </item>
+                                 <item row="0" column="0" colspan="3">
+                                  <widget class="QLabel" name="statusSub_Structural">
+                                   <property name="text">
+                                    <string>Structural</string>
+                                   </property>
+                                   <property name="uiRole" stdset="0">
+                                    <string>statusSubGroup</string>
+                                   </property>
+                                  </widget>
+                                 </item>
+                                 <item row="4" column="0" colspan="3">
+                                  <widget class="QLabel" name="statusSub_Functional">
+                                   <property name="text">
+                                    <string>Functional</string>
+                                   </property>
+                                   <property name="uiRole" stdset="0">
+                                    <string>statusSubGroup</string>
                                    </property>
                                   </widget>
                                  </item>
@@ -4277,6 +4435,137 @@ QLabel {
                                  </item>
                                  <item row="2" column="2">
                                   <widget class="QLabel" name="status_FilesCoreg_BrainMask">
+                                   <property name="text">
+                                    <string>Missing</string>
+                                   </property>
+                                   <property name="uiRole" stdset="0">
+                                    <string>statusText</string>
+                                   </property>
+                                   <property name="status" stdset="0">
+                                    <string>missing</string>
+                                   </property>
+                                  </widget>
+                                 </item>
+                                </layout>
+                               </item>
+                              </layout>
+                             </widget>
+                            </item>
+                            <item row="2" column="0" colspan="2">
+                             <widget class="QFrame" name="frameFilesStatusPlanning">
+                              <property name="frameShape">
+                               <enum>QFrame::Shape::StyledPanel</enum>
+                              </property>
+                              <property name="frameShadow">
+                               <enum>QFrame::Shadow::Raised</enum>
+                              </property>
+                              <property name="uiRole" stdset="0">
+                               <string>statusGroupCard</string>
+                              </property>
+                              <layout class="QVBoxLayout" name="frameFilesStatusPlanningLayout">
+                               <property name="spacing">
+                                <number>6</number>
+                               </property>
+                               <property name="leftMargin">
+                                <number>10</number>
+                               </property>
+                               <property name="topMargin">
+                                <number>8</number>
+                               </property>
+                               <property name="rightMargin">
+                                <number>10</number>
+                               </property>
+                               <property name="bottomMargin">
+                                <number>10</number>
+                               </property>
+                               <item>
+                                <widget class="QLabel" name="frameFilesStatusPlanningTitle">
+                                 <property name="minimumSize">
+                                  <size>
+                                   <width>0</width>
+                                   <height>18</height>
+                                  </size>
+                                 </property>
+                                 <property name="maximumSize">
+                                  <size>
+                                   <width>16777215</width>
+                                   <height>18</height>
+                                  </size>
+                                 </property>
+                                 <property name="text">
+                                  <string>PLANNING</string>
+                                 </property>
+                                 <property name="uiRole" stdset="0">
+                                  <string>statusGroupTitle</string>
+                                 </property>
+                                </widget>
+                               </item>
+                               <item>
+                                <layout class="QGridLayout" name="frameFilesStatusPlanningGrid" columnstretch="0,0,0">
+                                 <property name="leftMargin">
+                                  <number>0</number>
+                                 </property>
+                                 <property name="topMargin">
+                                  <number>0</number>
+                                 </property>
+                                 <property name="rightMargin">
+                                  <number>0</number>
+                                 </property>
+                                 <property name="bottomMargin">
+                                  <number>0</number>
+                                 </property>
+                                 <property name="horizontalSpacing">
+                                  <number>6</number>
+                                 </property>
+                                 <property name="verticalSpacing">
+                                  <number>5</number>
+                                 </property>
+                                 <item row="0" column="0">
+                                  <widget class="QLabel" name="pill_FilesCoreg_Planning">
+                                   <property name="minimumSize">
+                                    <size>
+                                     <width>18</width>
+                                     <height>0</height>
+                                    </size>
+                                   </property>
+                                   <property name="maximumSize">
+                                    <size>
+                                     <width>18</width>
+                                     <height>16777215</height>
+                                    </size>
+                                   </property>
+                                   <property name="text">
+                                    <string>●</string>
+                                   </property>
+                                   <property name="alignment">
+                                    <set>Qt::AlignmentFlag::AlignCenter</set>
+                                   </property>
+                                   <property name="uiRole" stdset="0">
+                                    <string>statusPill</string>
+                                   </property>
+                                   <property name="status" stdset="0">
+                                    <string>missing</string>
+                                   </property>
+                                  </widget>
+                                 </item>
+                                 <item row="0" column="1">
+                                  <widget class="QLabel" name="label_FilesCoreg_Planning">
+                                   <property name="minimumSize">
+                                    <size>
+                                     <width>0</width>
+                                     <height>0</height>
+                                    </size>
+                                   </property>
+                                   <property name="text">
+                                    <string>Implantation plan</string>
+                                   </property>
+                                   <property name="uiRole" stdset="0">
+                                    <string>statusName</string>
+                                   </property>
+                                  </widget>
+                                 </item>
+                                 <item row="0" column="2">
+                                  <widget class="QLabel" name="status_FilesCoreg_Planning">
                                    <property name="text">
                                     <string>Missing</string>
                                    </property>
@@ -4770,7 +5059,7 @@ QLabel {
                               </layout>
                              </widget>
                             </item>
-                            <item row="5" column="0">
+                            <item row="4" column="1">
                              <widget class="QFrame" name="btn_FilesCoreg_loadSISCOMCell">
                               <property name="frameShape">
                                <enum>QFrame::Shape::NoFrame</enum>
@@ -4838,7 +5127,7 @@ QLabel {
                               </layout>
                              </widget>
                             </item>
-                            <item row="5" column="1">
+                            <item row="6" column="0">
                              <widget class="QFrame" name="btn_FilesCoreg_loadParcel1Cell">
                               <property name="frameShape">
                                <enum>QFrame::Shape::NoFrame</enum>
@@ -4906,7 +5195,7 @@ QLabel {
                               </layout>
                              </widget>
                             </item>
-                            <item row="5" column="2">
+                            <item row="6" column="1">
                              <widget class="QFrame" name="btn_FilesCoreg_loadParcel2Cell">
                               <property name="frameShape">
                                <enum>QFrame::Shape::NoFrame</enum>
@@ -4974,7 +5263,7 @@ QLabel {
                               </layout>
                              </widget>
                             </item>
-                            <item row="7" column="0">
+                            <item row="8" column="0">
                              <widget class="QFrame" name="btn_FilesCoreg_lhpialCell">
                               <property name="frameShape">
                                <enum>QFrame::Shape::NoFrame</enum>
@@ -5042,7 +5331,7 @@ QLabel {
                               </layout>
                              </widget>
                             </item>
-                            <item row="7" column="1">
+                            <item row="8" column="1">
                              <widget class="QFrame" name="btn_FilesCoreg_rhpialCell">
                               <property name="frameShape">
                                <enum>QFrame::Shape::NoFrame</enum>
@@ -5110,7 +5399,7 @@ QLabel {
                               </layout>
                              </widget>
                             </item>
-                            <item row="7" column="2">
+                            <item row="8" column="2">
                              <widget class="QFrame" name="btn_FilesCoreg_loadBrainMaskCell">
                               <property name="frameShape">
                                <enum>QFrame::Shape::NoFrame</enum>
@@ -5178,42 +5467,96 @@ QLabel {
                               </layout>
                              </widget>
                             </item>
-                            <item row="0" column="0" colspan="2">
-                             <widget class="QLabel" name="filesLoadGroupMRI">
-                              <property name="text">
-                               <string>MRI / ANATOMICAL</string>
+                            <item row="4" column="0">
+                             <widget class="QFrame" name="btn_FilesCoreg_loadfMRICell">
+                              <property name="frameShape">
+                               <enum>QFrame::Shape::NoFrame</enum>
                               </property>
+                              <property name="fileCell" stdset="0">
+                               <bool>true</bool>
+                              </property>
+                              <layout class="QVBoxLayout" name="btn_FilesCoreg_loadfMRICellLayout">
+                               <property name="spacing">
+                                <number>6</number>
+                               </property>
+                               <property name="leftMargin">
+                                <number>0</number>
+                               </property>
+                               <property name="topMargin">
+                                <number>0</number>
+                               </property>
+                               <property name="rightMargin">
+                                <number>0</number>
+                               </property>
+                               <property name="bottomMargin">
+                                <number>0</number>
+                               </property>
+                               <item>
+                                <widget class="QPushButton" name="btn_FilesCoreg_loadfMRI">
+                                 <property name="minimumSize">
+                                  <size>
+                                   <width>0</width>
+                                   <height>44</height>
+                                  </size>
+                                 </property>
+                                 <property name="text">
+                                  <string>fMRI (activation map)</string>
+                                 </property>
+                                 <property name="autoDefault">
+                                  <bool>false</bool>
+                                 </property>
+                                 <property name="default">
+                                  <bool>false</bool>
+                                 </property>
+                                 <property name="uiRole" stdset="0">
+                                  <string>loadFile</string>
+                                 </property>
+                                </widget>
+                               </item>
+                               <item>
+                                <widget class="QLineEdit" name="le_FilesCoreg_loadfMRI">
+                                 <property name="minimumSize">
+                                  <size>
+                                   <width>0</width>
+                                   <height>33</height>
+                                  </size>
+                                 </property>
+                                 <property name="readOnly">
+                                  <bool>true</bool>
+                                 </property>
+                                 <property name="placeholderText">
+                                  <string>No file selected</string>
+                                 </property>
+                                 <property name="uiRole" stdset="0">
+                                  <string>pathLabel</string>
+                                 </property>
+                                </widget>
+                               </item>
+                              </layout>
                              </widget>
                             </item>
-                            <item row="0" column="2">
-                             <widget class="QLabel" name="filesLoadGroupCT">
+                            <item row="0" column="0" colspan="3">
+                             <widget class="QLabel" name="filesLoadGroupMRI">
                               <property name="text">
-                               <string>IMPLANTATION CT</string>
+                               <string>STRUCTURAL</string>
                               </property>
                              </widget>
                             </item>
                             <item row="2" column="0" colspan="3">
                              <widget class="QLabel" name="filesLoadGroupFunctional">
                               <property name="text">
-                               <string>FUNCTIONAL IMAGING</string>
+                               <string>FUNCTIONAL</string>
                               </property>
                              </widget>
                             </item>
-                            <item row="4" column="0">
-                             <widget class="QLabel" name="filesLoadGroupDerived">
-                              <property name="text">
-                               <string>DERIVED MAP</string>
-                              </property>
-                             </widget>
-                            </item>
-                            <item row="4" column="1" colspan="2">
+                            <item row="5" column="0" colspan="3">
                              <widget class="QLabel" name="filesLoadGroupLabels">
                               <property name="text">
                                <string>PARCELLATIONS</string>
                               </property>
                              </widget>
                             </item>
-                            <item row="6" column="0" colspan="3">
+                            <item row="7" column="0" colspan="3">
                              <widget class="QLabel" name="filesLoadGroupSurfaces">
                               <property name="text">
                                <string>SURFACES / MASK</string>
@@ -5406,6 +5749,16 @@ QLabel {
                              <widget class="QCheckBox" name="chk_FilesCoreg_interictalSPECT">
                               <property name="text">
                                <string>Interictal SPECT</string>
+                              </property>
+                              <property name="uiRole" stdset="0">
+                               <string>modalityCheck</string>
+                              </property>
+                             </widget>
+                            </item>
+                            <item row="1" column="2">
+                             <widget class="QCheckBox" name="chk_FilesCoreg_fMRI">
+                              <property name="text">
+                               <string>fMRI</string>
                               </property>
                               <property name="uiRole" stdset="0">
                                <string>modalityCheck</string>
@@ -5930,6 +6283,28 @@ QLabel {
                               </property>
                               <property name="text">
                                <string>Save MRI 2</string>
+                              </property>
+                              <property name="autoDefault">
+                               <bool>false</bool>
+                              </property>
+                              <property name="default">
+                               <bool>false</bool>
+                              </property>
+                              <property name="uiRole" stdset="0">
+                               <string>saveAction</string>
+                              </property>
+                             </widget>
+                            </item>
+                            <item row="1" column="2">
+                             <widget class="QPushButton" name="btn_FilesCoreg_savefMRI">
+                              <property name="minimumSize">
+                               <size>
+                                <width>0</width>
+                                <height>44</height>
+                               </size>
+                              </property>
+                              <property name="text">
+                               <string>Save fMRI</string>
                               </property>
                               <property name="autoDefault">
                                <bool>false</bool>
@@ -8079,6 +8454,95 @@ QLabel {
                                   </widget>
                                  </item>
                                  <item>
+                                  <widget class="QFrame" name="cardObliquefMRI">
+                                   <property name="frameShape">
+                                    <enum>QFrame::Shape::NoFrame</enum>
+                                   </property>
+                                   <layout class="QVBoxLayout" name="cardObliquefMRILayout">
+                                    <property name="spacing">
+                                     <number>8</number>
+                                    </property>
+                                    <property name="leftMargin">
+                                     <number>12</number>
+                                    </property>
+                                    <property name="topMargin">
+                                     <number>10</number>
+                                    </property>
+                                    <property name="rightMargin">
+                                     <number>12</number>
+                                    </property>
+                                    <property name="bottomMargin">
+                                     <number>10</number>
+                                    </property>
+                                    <item>
+                                     <widget class="QLabel" name="lblObliquefMRICard">
+                                      <property name="text">
+                                       <string>fMRI</string>
+                                      </property>
+                                     </widget>
+                                    </item>
+                                    <item>
+                                     <layout class="QHBoxLayout" name="horizontalLayout_ofmri_show">
+                                      <property name="spacing">
+                                       <number>8</number>
+                                      </property>
+                                      <item>
+                                       <widget class="QCheckBox" name="chk_obliqueSlice_fMRI">
+                                        <property name="text">
+                                         <string>fMRI</string>
+                                        </property>
+                                       </widget>
+                                      </item>
+                                      <item>
+                                       <widget class="QSlider" name="horizontalSlider_obliqueSlice_fMRI">
+                                        <property name="orientation">
+                                         <enum>Qt::Orientation::Horizontal</enum>
+                                        </property>
+                                       </widget>
+                                      </item>
+                                      <item>
+                                       <widget class="QSpinBox" name="sb_obliqueSlice_fMRI"/>
+                                      </item>
+                                     </layout>
+                                    </item>
+                                    <item>
+                                     <layout class="QHBoxLayout" name="horizontalLayout_ofmri_thr">
+                                      <property name="spacing">
+                                       <number>8</number>
+                                      </property>
+                                      <item>
+                                       <widget class="QLabel" name="label_ofmri_thr">
+                                        <property name="text">
+                                         <string>Threshold &gt;</string>
+                                        </property>
+                                       </widget>
+                                      </item>
+                                      <item>
+                                       <widget class="QDoubleSpinBox" name="doubleSpinBox_ObliqueSlices_thrfMRI"/>
+                                      </item>
+                                     </layout>
+                                    </item>
+                                    <item>
+                                     <layout class="QHBoxLayout" name="horizontalLayout_ofmri_cluster">
+                                      <property name="spacing">
+                                       <number>8</number>
+                                      </property>
+                                      <item>
+                                       <widget class="QLabel" name="label_ofmri_cluster">
+                                        <property name="text">
+                                         <string>Min cluster (mm³)</string>
+                                        </property>
+                                       </widget>
+                                      </item>
+                                      <item>
+                                       <widget class="QSpinBox" name="sb_obliqueSlice_fMRIMinCluster"/>
+                                      </item>
+                                     </layout>
+                                    </item>
+                                   </layout>
+                                  </widget>
+                                 </item>
+                                 <item>
                                   <spacer name="obliqueOverlayStretch">
                                    <property name="orientation">
                                     <enum>Qt::Orientation::Vertical</enum>
@@ -9283,6 +9747,112 @@ QLabel {
                                                <enum>Qt::Orientation::Horizontal</enum>
                                               </property>
                                              </widget>
+                                            </item>
+                                           </layout>
+                                          </item>
+                                         </layout>
+                                        </widget>
+                                       </item>
+                                       <item>
+                                        <widget class="QFrame" name="card3DfMRI">
+                                         <property name="frameShape">
+                                          <enum>QFrame::Shape::NoFrame</enum>
+                                         </property>
+                                         <layout class="QVBoxLayout" name="card3DfMRILayout">
+                                          <property name="spacing">
+                                           <number>8</number>
+                                          </property>
+                                          <property name="leftMargin">
+                                           <number>12</number>
+                                          </property>
+                                          <property name="topMargin">
+                                           <number>10</number>
+                                          </property>
+                                          <property name="rightMargin">
+                                           <number>12</number>
+                                          </property>
+                                          <property name="bottomMargin">
+                                           <number>10</number>
+                                          </property>
+                                          <item>
+                                           <widget class="QLabel" name="lbl3DfMRICard">
+                                            <property name="text">
+                                             <string>fMRI</string>
+                                            </property>
+                                           </widget>
+                                          </item>
+                                          <item>
+                                           <layout class="QHBoxLayout" name="horizontalLayout_fmri3d">
+                                            <property name="spacing">
+                                             <number>8</number>
+                                            </property>
+                                            <item>
+                                             <widget class="QCheckBox" name="chk_3d_showfMRI">
+                                              <property name="text">
+                                               <string>Show fMRI</string>
+                                              </property>
+                                             </widget>
+                                            </item>
+                                            <item>
+                                             <spacer name="horizontalSpacer_fmri3d">
+                                              <property name="orientation">
+                                               <enum>Qt::Orientation::Horizontal</enum>
+                                              </property>
+                                              <property name="sizeHint" stdset="0">
+                                               <size>
+                                                <width>40</width>
+                                                <height>20</height>
+                                               </size>
+                                              </property>
+                                             </spacer>
+                                            </item>
+                                            <item>
+                                             <widget class="QLabel" name="lbl_3d_fmriThrInfo">
+                                              <property name="text">
+                                               <string>Threshold &gt;</string>
+                                              </property>
+                                             </widget>
+                                            </item>
+                                            <item>
+                                             <widget class="QDoubleSpinBox" name="dsb_3d_fmriThr"/>
+                                            </item>
+                                           </layout>
+                                          </item>
+                                          <item>
+                                           <layout class="QHBoxLayout" name="horizontalLayout_fmri3dOpacity">
+                                            <property name="spacing">
+                                             <number>8</number>
+                                            </property>
+                                            <item>
+                                             <widget class="QLabel" name="label_fmri3dOpacity">
+                                              <property name="text">
+                                               <string>Opacity</string>
+                                              </property>
+                                             </widget>
+                                            </item>
+                                            <item>
+                                             <widget class="QSlider" name="sld_3d_fmriOpacity">
+                                              <property name="orientation">
+                                               <enum>Qt::Orientation::Horizontal</enum>
+                                              </property>
+                                             </widget>
+                                            </item>
+                                           </layout>
+                                          </item>
+                                          <item>
+                                           <layout class="QHBoxLayout" name="horizontalLayout_fmri3dCluster">
+                                            <property name="spacing">
+                                             <number>8</number>
+                                            </property>
+                                            <item>
+                                             <widget class="QLabel" name="label_fmri3dCluster">
+                                              <property name="text">
+                                               <string>Min cluster (mm³)</string>
+                                              </property>
+                                             </widget>
+                                            </item>
+                                            <item>
+                                             <widget class="QSpinBox" name="sb_3d_fmriMinCluster"/>
                                             </item>
                                            </layout>
                                           </item>

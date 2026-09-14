@@ -403,6 +403,11 @@ class View3DMniMixin:
         except Exception:
             pass
 
+        try:
+            self._remove_fmri_scalar_bar()
+        except Exception:
+            pass
+
     def _store_native_checkbox_state_for_mni(self) -> None:
         """
         Remember current native checkboxes before entering MNI mode.
