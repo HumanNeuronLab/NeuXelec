@@ -14,9 +14,11 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 from neuxelec.coregistration import (
+    SHARED_REG_SUBDIR,
     _ants_dir,
     _ants_exe,
     _default_brainmask_template_paths,
+    ensure_t1_to_template_registration,
 )
 
 
@@ -254,72 +256,31 @@ def ensure_t1_to_mni_transforms(
             "No T1 image is available. Load a T1 MRI before exporting MNI coordinates."
         )
 
+    # One registration per patient, shared with the brain mask and the defacing.
+    # It lives where this module has always written it, under the same names.
     out_dir = _default_mni_output_dir(state)
-    prefix = str(out_dir / "T1_to_MNI_")
 
-    affine_path = f"{prefix}0GenericAffine.mat"
-    warp_path = f"{prefix}1Warp.nii.gz"
-    inverse_warp_path = f"{prefix}1InverseWarp.nii.gz"
-    warped_path = f"{prefix}Warped.nii.gz"
-    inverse_warped_path = f"{prefix}InverseWarped.nii.gz"
+    def _run(cmd, cwd):
+        _run_cmd_with_progress(
+            cmd,
+            cwd=cwd,
+            progress_callback=progress_callback,
+            start_value=10,
+            end_value=85,
+            message="Registering patient T1 to MNI template with ANTs...",
+        )
 
-    ants_reg = str(_ants_exe("antsRegistration.exe"))
-
-    reg_cmd = [
-        ants_reg,
-        "--dimensionality",
-        "3",
-        "--float",
-        "1",
-        "--output",
-        f"[{prefix},{warped_path},{inverse_warped_path}]",
-        "--interpolation",
-        "Linear",
-        "--winsorize-image-intensities",
-        "[0.005,0.995]",
-        "--use-histogram-matching",
-        "0",
-        # fixed = MNI template, moving = patient T1
-        "--initial-moving-transform",
-        f"[{template_t1_path},{t1_path},1]",
-        # Affine
-        "--transform",
-        "Affine[0.1]",
-        "--metric",
-        f"MI[{template_t1_path},{t1_path},1,32,Regular,0.25]",
-        "--convergence",
-        "[500x250x100,1e-6,10]",
-        "--shrink-factors",
-        "8x4x2",
-        "--smoothing-sigmas",
-        "3x2x1vox",
-        # Light SyN
-        "--transform",
-        "SyN[0.1,3,0]",
-        "--metric",
-        f"CC[{template_t1_path},{t1_path},1,4]",
-        "--convergence",
-        "[80x40x20,1e-6,10]",
-        "--shrink-factors",
-        "8x4x2",
-        "--smoothing-sigmas",
-        "3x2x1vox",
-    ]
-
-    _run_cmd_with_progress(
-        reg_cmd,
-        cwd=str(out_dir),
-        progress_callback=progress_callback,
-        start_value=10,
-        end_value=85,
-        message="Registering patient T1 to MNI template with ANTs...",
+    transforms = ensure_t1_to_template_registration(
+        str(t1_path),
+        out_dir.parent if out_dir.name == SHARED_REG_SUBDIR else out_dir,
+        template_t1_path=str(template_t1_path),
+        force=force,
+        runner=_run,
     )
 
-    if not Path(affine_path).exists():
-        raise RuntimeError(f"ANTs did not produce affine transform:\n{affine_path}")
-
-    if not Path(warp_path).exists():
-        raise RuntimeError(f"ANTs did not produce forward warp:\n{warp_path}")
+    affine_path = transforms["affine"]
+    warp_path = transforms["warp"]
+    inverse_warp_path = transforms["inverse_warp"]
 
     # Store in state
     state.mni_template_path = str(template_t1_path)
@@ -329,7 +290,9 @@ def ensure_t1_to_mni_transforms(
     state.t1_to_mni_inverse_warp_path = (
         str(inverse_warp_path) if Path(inverse_warp_path).exists() else None
     )
-    state.t1_to_mni_warped_path = str(warped_path) if Path(warped_path).exists() else None
+    # The T1 resampled into MNI space is no longer produced: nothing ever
+    # read it, and it cost about 30 MB per patient.
+    state.t1_to_mni_warped_path = None
     _report_progress(progress_callback, "T1 → MNI transform ready.", 88, 100)
     return {
         "affine": str(affine_path),

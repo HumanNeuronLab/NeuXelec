@@ -76,7 +76,7 @@ class Section:
     id: str
     title: str
     body: str
-    figure: str | None = None          # file name under resources/docs/figures
+    figure: str | None = None  # file name under resources/docs/figures
     caption: str = ""
 
 
@@ -99,7 +99,8 @@ maps together.</li>
 <p>The left menu carries the patient identifier, <b>Save project</b>, this
 <b>User guide</b>, and the four pages. A project file (<code>.json</code>)
 remembers the paths of the images, the electrodes and the display settings; it
-does <b>not</b> contain the images themselves.</p>
+does <b>not</b> contain the images themselves. It travels between computers:
+see <i>Moving a project</i>.</p>
 <p><b>Watch out.</b> Validating a coregistration keeps it for the session only.
 It is written to disk when you click the matching <i>Save</i> button, or
 <i>Save all validated</i>. NeuXelec warns you when you save the project with
@@ -138,12 +139,28 @@ coregistration</b>: the reference is green, the moving image is red, the wheel
 zooms, Ctrl+wheel moves through the slices, and a manual console lets you
 correct the alignment by hand before accepting it.</p>
 
-<h3>4. Brain mask and SISCOM</h3>
-<p><b>Generate brain mask</b> produces the mask used for 3D rendering and for
-cropping the functional overlays. <b>Generate SISCOM</b> computes the
-ictal minus inter-ictal map once both SPECT are validated.</p>
+<h3>4. The implantation plan</h3>
+<p><b>Load Planning</b> reads a NeuroInspire <code>.nip</code> file. When the
+plan was made on another MRI, that image is registered on MRI 1 first, which
+takes about three minutes and shows the usual progress. The alignment is then
+presented for review, reference in green and planning MRI in red, exactly like
+any other modality: <b>every trajectory of the plan rests on this one
+registration</b>. A correction made by hand there is applied to the coordinates
+of the trajectories, not only to the image. A right click on <b>Load
+Planning</b> reopens that review later in the session.</p>
 
-<h3>5. Save</h3>
+<h3>5. Brain mask and SISCOM</h3>
+<p><b>Generate brain mask</b> produces the mask used for 3D rendering and for
+cropping the functional overlays. It works by registering MRI 1 onto the
+reference template and bringing the template's own mask back, which takes a few
+minutes. That registration is the same one the MNI coordinates and the defacing
+need, so it is computed once per patient and kept in the transforms folder: the
+second feature to ask for it gets it in seconds. NeuXelec recomputes it if you
+change MRI 1 or the template.</p>
+<p><b>Generate SISCOM</b> computes the ictal minus inter-ictal map once both
+SPECT are validated.</p>
+
+<h3>6. Save</h3>
 <p>Each validated output has its own <i>Save</i> button, and <b>Save all
 validated</b> writes everything in one folder. The button keeps a rose outline
 once the file exists on disk.</p>
@@ -247,6 +264,19 @@ centre. The regions are sorted, and the table shows the dominant one. Hovering a
 row lists every region the contact straddles with its own share; hovering a
 column header explains the column. These are the values exported to BIDS.</p>
 
+<h3>Contacts in grey matter</h3>
+<p>A depth electrode crosses grey and white matter alternately, and the contacts
+that record what you are looking for sit in grey matter. <b>Contacts: grey
+matter only</b>, in the right-click menu of either view, hides the others. The
+test is the same SEEG2parc region the contacts table displays, so the filter can
+never disagree with what you read in the table, and it keeps <b>every</b> grey
+structure, not just the cortical ribbon: the hippocampus and the amygdala stay
+visible, which would not be the case with a cortex restriction. A contact whose
+label is unknown stays visible, because a hidden contact is one nobody looks at.
+The entry appears only when a parcellation names grey regions, the filter is
+shared between the oblique slice and the 3D view, and it never alters the
+contacts you showed or hid by hand.</p>
+
 <h3>White matter and wmparc</h3>
 <p>An <code>aparc+aseg</code> parcellation labels the cortex gyrus by gyrus but
 puts every cerebral white-matter voxel under one generic label, so a contact in
@@ -317,9 +347,11 @@ fMRI</i>, <i>Color CT</i>, <i>Color Ictal SPECT</i>, <i>Color Inter-ictal
 SPECT</i>.</p>
 <p><b>fMRI</b>: <i>Plot</i> or <i>Hide fMRI blob</i>; <i>Keep</i> or <i>Crop
 fMRI blob through slices</i>; <i>Project</i> or <i>Hide fMRI on surface</i>.</p>
-<p><b>DISPLAY</b>: <i>Add</i> or <i>Remove color scale</i>; <i>Add</i> or
+<p><b>DISPLAY</b>: <i>Background color</i> and, once one is chosen,
+<i>Reset background</i>; <i>Add</i> or <i>Remove color scale</i>; <i>Add</i> or
 <i>Remove frame</i> around the slice planes; <i>Functional overlays: cortex
-only</i> or <i>whole brain</i>; <i>Keep electrodes visible through slices</i>;
+only</i> or <i>whole brain</i>; <i>Contacts: grey matter only</i> or <i>Contacts:
+all</i>; <i>Keep electrodes visible through slices</i>;
 <i>Don't crop SISCOM blob through slices</i>; <i>Render Brain</i>, which opens
 the lighting and material settings of the surface.</p>
 <p><b>PLANNING</b>: <i>Plot</i> or <i>Hide planning electrodes</i>.</p>
@@ -333,9 +365,27 @@ patient.</p>
 <h3>Oblique slice, right click on a slice</h3>
 <p><b>OVERLAY COLORS</b>: <i>Color PET</i>, <i>Color SISCOM</i>, <i>Color
 fMRI</i>, <i>Color Ictal SPECT</i>, <i>Color Inter-ictal SPECT</i>.</p>
-<p><b>DISPLAY</b>: <i>Add</i> or <i>Remove color scale</i>; <i>Functional
-overlays: cortex only</i> or <i>whole brain</i>, which is the same setting as in
-the 3D view.</p>
+<p><b>DISPLAY</b>: <i>Background color</i> and, once one is chosen,
+<i>Reset background</i>; <i>Add</i> or <i>Remove color scale</i>; <i>Functional
+overlays: cortex only</i> or <i>whole brain</i>; <i>Contacts: grey matter only</i>
+or <i>Contacts: all</i>. The last two are shared with the 3D view; the background
+is set per view.</p>
+
+<h3>Choosing a background</h3>
+<p>Both views are drawn on black by default. <i>Background color</i> replaces
+that black with a colour of your choosing, which matters when a screenshot or an
+animation has to sit on a slide: painted in the colour of the slide, the picture
+reads as having no background at all, and a GIF cannot achieve that with
+transparency because the format carries none.</p>
+<p>In the <b>3D view</b> the colour is simply the ground behind the scene. In
+the <b>Oblique slice</b> it does something less obvious, because there the black
+around the head is not a canvas, it is the air of the scan. NeuXelec makes that
+air transparent and lets the skin fade into the colour progressively, so no dark
+outline is left around the head. Only the air that reaches the edge of the
+picture is treated this way: air trapped inside the skull, in the sinuses or the
+orbits, stays black, because it is anatomy.</p>
+<p>The choice lives with the session, not with the project: reopening a patient
+gives you black again. <i>Reset background</i> returns to it at any time.</p>
 
 <h3>Electrode list</h3>
 <p>On an <b>electrode</b>: <i>Add</i> or <i>Remove contact labels</i> and
@@ -350,6 +400,13 @@ slice</i> (3D view only); <i>Edit coordinates</i> (Reconstruction only);
 <i>Delete contact</i>, or <i>Delete N contacts</i>.</p>
 <p>In View Only mode, renaming and deleting are hidden; the colour, the labels
 and the projection stay available.</p>
+
+<h3>Load Planning, on the Files page</h3>
+<p><i>Review plan alignment</i> reopens the comparison of the planning MRI with
+MRI 1, so the registration every trajectory rests on can be checked again, and
+corrected by hand if needed. The entry is greyed out until a plan is loaded, and
+after a project is reopened, since the registered planning MRI only lives in the
+session.</p>
 
 <h3>Electrode reference, on the Reconstruction page</h3>
 <p>A right click on the reference selector deletes a reference you created
@@ -389,11 +446,43 @@ the white-matter labels.</p>
 """,
     ),
     Section(
+        id="portability",
+        title="Moving a project",
+        body="""
+<p>The project file holds the location of every image, not the images. Copy it
+to another computer, move the patient folder, change a drive letter, and those
+locations no longer point anywhere.</p>
+<p>NeuXelec checks them all when the project opens, before reading a single
+image, and finds them again on its own whenever it can. It looks, in order: at
+the stored location; at the same place relative to the project file; at the move
+it has just learned from another file, so relocating one image relocates every
+image that shared its folder; and finally by file name, around the project
+folder and around the files already found. Your images do not have to sit in one
+folder: each one is resolved on its own.</p>
+<p>A file is only rebound when it really is the right file. Saving records the
+size and the geometry of each image, and a candidate whose fingerprint does not
+match is refused. Two patients whose MRI is called <code>T1.nii</code> is not
+rare in a shared folder, and binding the wrong one would be far worse than
+asking.</p>
+<p><b>The window appears only when a file the project needs is still missing.</b>
+It lists those files, where they used to be, and what was found instead. Point
+NeuXelec at one of them with <i>Locate</i>, or let it search a folder you choose,
+and everything that moved with it follows. <i>Save the new locations in the
+project file</i> makes the repair permanent. Files that are only stored for
+convenience, such as the original DICOM folder you deleted after conversion,
+never open this window.</p>
+<p><b>In practice.</b> Keep the <code>.json</code> inside the patient folder.
+The whole folder then travels as one piece, between computers or between
+colleagues, and reopens without a single question. Sending the project file
+alone is also safe: no patient image leaves with it, and the person who receives
+it points NeuXelec at their own copy of the images.</p>
+""",
+    ),
+    Section(
         id="shortcuts",
         title="Keyboard shortcuts",
         body="<p>The slice views and the 3D scene do not answer to the same "
-        "gestures, so the table gives them page by page.</p>"
-        + _shortcut_table_html(),
+        "gestures, so the table gives them page by page.</p>" + _shortcut_table_html(),
     ),
 ]
 
@@ -413,8 +502,8 @@ class TourStep:
     title: str
     body: str
     target: str | list[str] | None = None
-    page: str | None = None           # objectName of the page to show first
-    delay_ms: int = 0                 # extra wait after switching page
+    page: str | None = None  # objectName of the page to show first
+    delay_ms: int = 0  # extra wait after switching page
     extra: dict = field(default_factory=dict)
 
 
@@ -422,83 +511,102 @@ TOUR_STEPS: list[TourStep] = [
     TourStep(
         title="Welcome to NeuXelec",
         body="A short tour of the interface: the pages, the cockpit and where "
-             "the options live. You can leave it at any time and replay it later.",
+        "the options live. You can leave it at any time and replay it later.",
         target=None,
         page="pageFiles",
     ),
     TourStep(
         title="The four pages",
         body="Files and coregistration, Reconstruction, Oblique slice, 3D view. "
-             "The work follows that order, from importing the images to the "
-             "reconstructed electrodes.",
-        target=["btn_menu_fileCoreg", "btn_menu_reconstruction",
-                "btn_menu_obliqueSlice", "btn_menu_3Dview"],
+        "The work follows that order, from importing the images to the "
+        "reconstructed electrodes.",
+        target=[
+            "btn_menu_fileCoreg",
+            "btn_menu_reconstruction",
+            "btn_menu_obliqueSlice",
+            "btn_menu_3Dview",
+        ],
         page="pageFiles",
     ),
     TourStep(
         title="Import the patient data",
         body="Select several files at once, then assign each one to its modality. "
-             "NIfTI, DICOM folders and FreeSurfer volumes are all accepted.",
+        "NIfTI, DICOM folders and FreeSurfer volumes are all accepted.",
         target="btn_FilesCoreg_loadImaging",
         page="pageFiles",
     ),
     TourStep(
         title="The cockpit",
         body="The state of the patient at a glance: structural images, functional "
-             "images, parcellations, surfaces and plan. Hover a row to see the "
-             "full path of the file.",
+        "images, parcellations, surfaces and plan. Hover a row to see the "
+        "full path of the file.",
         target="cardFilesStatusOverview",
         page="pageFiles",
     ),
     TourStep(
         title="Align on MRI 1",
         body="Tick one modality, run the coregistration, then review it. MRI 1 is "
-             "the reference for every image and every coordinate.",
+        "the reference for every image and every coordinate.",
         target="cardCoregistration",
         page="pageFiles",
     ),
     TourStep(
         title="Save what you validated",
         body="A validated coregistration lives in the session only. It reaches the "
-             "disk when you save it here, and the button then keeps a rose outline.",
+        "disk when you save it here, and the button then keeps a rose outline.",
         target="cardFilesToSave",
         page="pageFiles",
     ),
     TourStep(
         title="Reconstruct an electrode",
         body="Choose the electrode reference, name it, then click the deepest "
-             "contact and a second one along the shaft. The other contacts follow "
-             "from the geometry of the reference.",
-        target=["comboReco_electrodeRef", "btnReco_pickDeepest",
-                "btnReco_pickSecond", "btnReco_estimate"],
+        "contact and a second one along the shaft. The other contacts follow "
+        "from the geometry of the reference.",
+        target=[
+            "comboReco_electrodeRef",
+            "btnReco_pickDeepest",
+            "btnReco_pickSecond",
+            "btnReco_estimate",
+        ],
         page="pageReconstruction",
         delay_ms=400,
     ),
     TourStep(
         title="Slices along the electrode",
         body="Tick an electrode to cut along its axis and see every contact at "
-             "once. The overlay panel switches CT, MRI, PET, SISCOM and fMRI on, "
-             "one layer at a time.",
-        target=["cardObliqueDisplay", "cardObliqueAnatomical", "cardObliquePET",
-                "cardObliqueSISCOM", "cardObliquefMRI"],
+        "once. The overlay panel switches CT, MRI, PET, SISCOM and fMRI on, "
+        "one layer at a time.",
+        target=[
+            "cardObliqueDisplay",
+            "cardObliqueAnatomical",
+            "cardObliquePET",
+            "cardObliqueSISCOM",
+            "cardObliquefMRI",
+        ],
         page="pageObliqueSlices",
         delay_ms=900,
     ),
     TourStep(
         title="The 3D scene",
         body="Brain surface, electrodes, slice planes and functional maps are "
-             "switched on from these panels. In the scene above, left drag "
-             "rotates, the wheel zooms, Ctrl+F goes full screen.",
-        target=["card3DSurfaces", "card3DElectrodes", "card3DSlices",
-                "card3DPET", "card3DSISCOM", "card3DfMRI"],
+        "switched on from these panels. In the scene above, left drag "
+        "rotates, the wheel zooms, Ctrl+F goes full screen.",
+        target=[
+            "card3DSurfaces",
+            "card3DElectrodes",
+            "card3DSlices",
+            "card3DPET",
+            "card3DSISCOM",
+            "card3DfMRI",
+        ],
         page="page3DView",
         delay_ms=1200,
     ),
     TourStep(
         title="Right click carries the options",
         body="Every view hides its options behind a right click, grouped in "
-             "labelled sections: overlay colours, display, fMRI, planning, "
-             "surfaces.",
+        "labelled sections: overlay colours, display, fMRI, planning, "
+        "surfaces.",
         target=None,
         page="page3DView",
         extra={"image": "menu_3d_sections.png"},
@@ -506,7 +614,7 @@ TOUR_STEPS: list[TourStep] = [
     TourStep(
         title="Everything is written down here",
         body="The user guide explains every page, every right-click menu and every "
-             "shortcut. Press F1 at any time, or click this button.",
+        "shortcut. Press F1 at any time, or click this button.",
         target="btn_menu_userGuide",
         page="pageFiles",
     ),

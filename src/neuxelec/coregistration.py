@@ -22,6 +22,7 @@ Notes:
   * For SEEG/electrodes, CT->T1 is kept RIGID-only by default (no affine scaling).
 """
 
+import json
 import logging
 import math
 import os
@@ -270,6 +271,207 @@ def _default_brainmask_template_paths() -> tuple[Path, Path]:
 
 
 # =============================================================================
+# The subject T1 to template registration, computed once and shared
+# =============================================================================
+#
+# Three features need exactly the same thing: the nonlinear registration of the
+# subject T1 onto the bundled template. The brain mask pulls the template mask
+# back through it, the defacing pulls the face mask back through it, and the MNI
+# coordinates push the contacts forward through it. Until now each ran its own
+# antsRegistration with, argument for argument, the same command, and kept its
+# own copy of the result: three minutes and 73 MB of warp fields, three times
+# over, for one and the same measurement.
+#
+# They now share one registration, stored where mni_coordinates has always kept
+# it, under the same file names, so projects written by earlier versions keep
+# working. A stamp file records which T1 and which template produced it: the
+# transforms are reused only when both still match, which also closes an old
+# hole where changing MRI 1 in the same folder silently reused its predecessor's
+# transforms.
+
+#: Subfolder and file names of the shared registration. These are the names
+#: mni_coordinates wrote before this was factored out. Do not change them.
+SHARED_REG_SUBDIR = "mni"
+SHARED_REG_PREFIX = "T1_to_MNI_"
+_SHARED_REG_STAMP = "T1_to_MNI_source.json"
+
+
+def shared_registration_dir(out_dir: str | Path | None) -> Path:
+    """Where the shared T1 to template registration lives."""
+    base = _ants_out_dir(str(out_dir) if out_dir else None)
+    directory = base / SHARED_REG_SUBDIR
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _registration_paths(directory: Path) -> dict[str, str]:
+    prefix = str(directory / SHARED_REG_PREFIX)
+    return {
+        "affine": f"{prefix}0GenericAffine.mat",
+        "warp": f"{prefix}1Warp.nii.gz",
+        "inverse_warp": f"{prefix}1InverseWarp.nii.gz",
+    }
+
+
+def _identity_of(path: str) -> dict:
+    """What makes a file *this* file, for the stamp."""
+    from .project_paths import file_fingerprint
+
+    return {"path": str(path), "fingerprint": file_fingerprint(str(path))}
+
+
+def _stamp_agrees(recorded: dict | None, path: str) -> bool:
+    """True when ``path`` is still the file the stamp was written for."""
+    from .project_paths import file_fingerprint, fingerprint_matches
+
+    if not isinstance(recorded, dict):
+        return False
+    verdict = fingerprint_matches(recorded.get("fingerprint"), file_fingerprint(path))
+    if verdict is not None:
+        return verdict
+    # No fingerprint on either side: fall back to the path, which is what the
+    # previous code compared.
+    return os.path.normcase(os.path.normpath(str(recorded.get("path") or ""))) == os.path.normcase(
+        os.path.normpath(str(path))
+    )
+
+
+def existing_t1_to_template_registration(
+    t1_path: str,
+    out_dir: str | Path | None,
+    template_t1_path: str,
+) -> dict[str, str] | None:
+    """The shared registration already on disk, if it is still the right one."""
+    directory = Path(_ants_out_dir(str(out_dir) if out_dir else None)) / SHARED_REG_SUBDIR
+    stamp_path = directory / _SHARED_REG_STAMP
+    paths = _registration_paths(directory)
+
+    if not Path(paths["affine"]).exists() or not Path(paths["inverse_warp"]).exists():
+        return None
+    if not Path(paths["warp"]).exists():
+        return None
+
+    try:
+        stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # Written before stamps existed. The transforms are there, but nothing
+        # says which T1 or template made them, so they cannot be trusted.
+        logger.info("Shared registration in %s has no stamp; recomputing", directory)
+        return None
+
+    if not _stamp_agrees(stamp.get("t1"), t1_path):
+        logger.info("Shared registration ignored: it was computed for another MRI 1")
+        return None
+    if not _stamp_agrees(stamp.get("template"), template_t1_path):
+        logger.info("Shared registration ignored: the template changed")
+        return None
+
+    return {**paths, "template": str(template_t1_path)}
+
+
+def ensure_t1_to_template_registration(
+    t1_path: str,
+    out_dir: str | Path | None = None,
+    *,
+    template_t1_path: str | None = None,
+    force: bool = False,
+    runner: Callable[[list[str], str], None] | None = None,
+) -> dict[str, str]:
+    """Register the subject T1 onto the template, once, and reuse it after that.
+
+    Returns the affine, the forward warp, the inverse warp and the template they
+    were computed against. ``runner`` lets a caller keep its own progress
+    reporting; it receives the command and the working directory.
+    """
+    _ants_exe("antsRegistration.exe")
+
+    if template_t1_path is None:
+        template, _mask = _default_brainmask_template_paths()
+        template_t1_path = str(template)
+    if not Path(template_t1_path).exists():
+        raise FileNotFoundError(f"Template T1 not found:\n{template_t1_path}")
+    if not Path(str(t1_path)).exists():
+        raise FileNotFoundError(f"T1 not found:\n{t1_path}")
+
+    if not force:
+        existing = existing_t1_to_template_registration(t1_path, out_dir, template_t1_path)
+        if existing is not None:
+            logger.info("Reusing the shared T1 to template registration in %s", out_dir)
+            return existing
+
+    directory = shared_registration_dir(out_dir)
+    prefix = str(directory / SHARED_REG_PREFIX)
+    paths = _registration_paths(directory)
+
+    # Only the transforms are asked for. The two resampled volumes ANTs writes
+    # when they are named here (about 50 MB per registration) were never read by
+    # anything; they only cost disk and a second resampling.
+    reg_cmd = [
+        str(_ants_exe("antsRegistration.exe")),
+        "--dimensionality", "3",
+        "--float", "1",
+        "--output", f"[{prefix}]",
+        "--interpolation", "Linear",
+        "--winsorize-image-intensities", "[0.005,0.995]",
+        "--use-histogram-matching", "0",
+        # fixed = template, moving = subject T1
+        "--initial-moving-transform", f"[{template_t1_path},{t1_path},1]",
+        "--transform", "Affine[0.1]",
+        "--metric", f"MI[{template_t1_path},{t1_path},1,32,Regular,0.25]",
+        "--convergence", "[500x250x100,1e-6,10]",
+        "--shrink-factors", "8x4x2",
+        "--smoothing-sigmas", "3x2x1vox",
+        "--transform", "SyN[0.1,3,0]",
+        "--metric", f"CC[{template_t1_path},{t1_path},1,4]",
+        "--convergence", "[80x40x20,1e-6,10]",
+        "--shrink-factors", "8x4x2",
+        "--smoothing-sigmas", "3x2x1vox",
+    ]  # fmt: skip
+
+    (runner or _run_cmd)(reg_cmd, str(directory))
+
+    for key in ("affine", "warp", "inverse_warp"):
+        if not Path(paths[key]).exists():
+            raise RuntimeError(f"ANTs did not produce the {key} transform:\n{paths[key]}")
+
+    try:
+        (directory / _SHARED_REG_STAMP).write_text(
+            json.dumps(
+                {"t1": _identity_of(str(t1_path)), "template": _identity_of(str(template_t1_path))},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        # Without the stamp the registration is simply recomputed next time.
+        logger.warning("Could not write the registration stamp in %s", directory, exc_info=True)
+
+    return {**paths, "template": str(template_t1_path)}
+
+
+def _apply_template_mask_to_subject(
+    mask_in_template: str,
+    t1_path: str,
+    transforms: dict[str, str],
+    out_path: str,
+    cwd: str,
+) -> str:
+    """Pull a template-space mask back into the subject's space."""
+    apply_cmd = [
+        str(_ants_exe("antsApplyTransforms.exe")),
+        "-d", "3",
+        "-i", str(mask_in_template),
+        "-r", str(t1_path),
+        "-o", str(out_path),
+        "-n", "NearestNeighbor",
+        "-t", transforms["inverse_warp"],
+        "-t", f"[{transforms['affine']},1]",
+    ]  # fmt: skip
+    _run_cmd(apply_cmd, cwd=cwd)
+    return str(out_path)
+
+
+# =============================================================================
 # ANTs brain mask (on-demand)
 # =============================================================================
 
@@ -288,6 +490,9 @@ def ants_generate_brainmask_t1(
       1) Register subject T1 (moving) to template T1 (fixed) (Affine + light SyN)
       2) Bring the TEMPLATE brain mask back into SUBJECT space using inverse transforms
       3) Write SUBJECT brainmask as NIfTI (uint8 0/1)
+
+    Step 1 is the registration shared with the MNI coordinates and the defacing,
+    so it runs once per patient instead of once per feature.
 
     Returns: path to T1_brainmask.nii.gz (subject space)
     """
@@ -310,77 +515,19 @@ def ants_generate_brainmask_t1(
         )
 
     outd = _ants_out_dir(out_dir)
-    prefix = str(outd / "brainmask_")
-    ants_reg = str(_ants_exe("antsRegistration.exe"))
-    ants_apply = str(_ants_exe("antsApplyTransforms.exe"))
+    out_mask = str(outd / "T1_brainmask.nii.gz")
 
-    # Register subject -> template
-    reg_cmd = [
-        ants_reg,
-        "--dimensionality",
-        "3",
-        "--float",
-        "1",
-        "--output",
-        f"[{prefix},{prefix}Warped.nii.gz,{prefix}InverseWarped.nii.gz]",
-        "--interpolation",
-        "Linear",
-        "--winsorize-image-intensities",
-        "[0.005,0.995]",
-        "--use-histogram-matching",
-        "0",
-        "--initial-moving-transform",
-        f"[{template_t1_path},{t1_path},1]",
-        # Affine
-        "--transform",
-        "Affine[0.1]",
-        "--metric",
-        f"MI[{template_t1_path},{t1_path},1,32,Regular,0.25]",
-        "--convergence",
-        "[500x250x100,1e-6,10]",
-        "--shrink-factors",
-        "8x4x2",
-        "--smoothing-sigmas",
-        "3x2x1vox",
-        # Light SyN
-        "--transform",
-        "SyN[0.1,3,0]",
-        "--metric",
-        f"CC[{template_t1_path},{t1_path},1,4]",
-        "--convergence",
-        "[80x40x20,1e-6,10]",
-        "--shrink-factors",
-        "8x4x2",
-        "--smoothing-sigmas",
-        "3x2x1vox",
-    ]
-    _run_cmd(reg_cmd, cwd=str(outd))
+    transforms = ensure_t1_to_template_registration(
+        str(t1_path),
+        outd,
+        template_t1_path=template_t1_path,
+    )
 
     _report_progress(progress_cb, 70)
 
-    affine = f"{prefix}0GenericAffine.mat"
-    inv_warp = f"{prefix}1InverseWarp.nii.gz"
-
-    out_mask = str(outd / "T1_brainmask.nii.gz")
-
-    apply_cmd = [
-        ants_apply,
-        "-d",
-        "3",
-        "-i",
-        str(template_mask_path),
-        "-r",
-        str(t1_path),
-        "-o",
-        out_mask,
-        "-n",
-        "NearestNeighbor",
-        "-t",
-        inv_warp,
-        "-t",
-        f"[{affine},1]",
-    ]
-    _run_cmd(apply_cmd, cwd=str(outd))
+    _apply_template_mask_to_subject(
+        str(template_mask_path), str(t1_path), transforms, out_mask, cwd=str(outd)
+    )
 
     # Binarize + clean up the mask so it fully covers the cortex.
     #
@@ -474,48 +621,20 @@ def ants_deface_mask_in_subject_space(
         raise FileNotFoundError(f"Template T1 not found: {template_t1_path}")
 
     outd = _ants_out_dir(out_dir)
-    prefix = str(outd / "deface_")
-    ants_reg = str(_ants_exe("antsRegistration.exe"))
-    ants_apply = str(_ants_exe("antsApplyTransforms.exe"))
-
-    reg_cmd = [
-        ants_reg,
-        "--dimensionality", "3",
-        "--float", "1",
-        "--output", f"[{prefix},{prefix}Warped.nii.gz,{prefix}InverseWarped.nii.gz]",
-        "--interpolation", "Linear",
-        "--winsorize-image-intensities", "[0.005,0.995]",
-        "--use-histogram-matching", "0",
-        "--initial-moving-transform", f"[{template_t1_path},{t1_path},1]",
-        "--transform", "Affine[0.1]",
-        "--metric", f"MI[{template_t1_path},{t1_path},1,32,Regular,0.25]",
-        "--convergence", "[500x250x100,1e-6,10]",
-        "--shrink-factors", "8x4x2",
-        "--smoothing-sigmas", "3x2x1vox",
-        "--transform", "SyN[0.1,3,0]",
-        "--metric", f"CC[{template_t1_path},{t1_path},1,4]",
-        "--convergence", "[80x40x20,1e-6,10]",
-        "--shrink-factors", "8x4x2",
-        "--smoothing-sigmas", "3x2x1vox",
-    ]
-    _run_cmd(reg_cmd, cwd=str(outd))
-    _report_progress(progress_cb, 70)
-
-    affine = f"{prefix}0GenericAffine.mat"
-    inv_warp = f"{prefix}1InverseWarp.nii.gz"
     out_mask = str(outd / "T1_deface_mask.nii.gz")
 
-    apply_cmd = [
-        ants_apply,
-        "-d", "3",
-        "-i", str(deface_mask_path),
-        "-r", str(t1_path),
-        "-o", out_mask,
-        "-n", "NearestNeighbor",
-        "-t", inv_warp,
-        "-t", f"[{affine},1]",
-    ]
-    _run_cmd(apply_cmd, cwd=str(outd))
+    # Same registration as the brain mask and the MNI coordinates. Computed once
+    # per patient and reused; the face mask is only pulled back through it.
+    transforms = ensure_t1_to_template_registration(
+        str(t1_path),
+        outd,
+        template_t1_path=template_t1_path,
+    )
+    _report_progress(progress_cb, 70)
+
+    _apply_template_mask_to_subject(
+        str(deface_mask_path), str(t1_path), transforms, out_mask, cwd=str(outd)
+    )
 
     try:
         m = sitk.ReadImage(out_mask)
@@ -586,8 +705,12 @@ def subject_face_blur_region(
     brain = sitk.Cast(brain > 0.5, sitk.sitkUInt8)
     if brain.GetSize() != t1.GetSize():
         brain = sitk.Resample(
-            brain, t1, sitk.Transform(3, sitk.sitkIdentity),
-            sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
+            brain,
+            t1,
+            sitk.Transform(3, sitk.sitkIdentity),
+            sitk.sitkNearestNeighbor,
+            0,
+            sitk.sitkUInt8,
         )
     spacing = t1.GetSpacing()
     rad = [max(1, int(round(brain_protect_mm / s))) for s in spacing]
@@ -813,7 +936,9 @@ def ants_coreg_to_fixed(
     registered_in_fixed = None
     if apply_to_path:
         if affine_mat_path is None:
-            raise RuntimeError("ANTs did not produce the affine needed to move the companion image.")
+            raise RuntimeError(
+                "ANTs did not produce the affine needed to move the companion image."
+            )
         registered_in_fixed = moving_in_fixed
         moving_in_fixed = ants_apply_affine_to_image(
             fixed_path=fixed_path,

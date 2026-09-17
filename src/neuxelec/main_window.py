@@ -946,8 +946,7 @@ class NeuxelecWindow(QWidget):
                 self.state.fmri_coreg_in_t1 = img
                 self.state.fmri_in_t1 = img
                 self.state.fmri_validated = bool(
-                    getattr(self.state, "fmri_validated", False)
-                    or self.state.fmri_coreg_path
+                    getattr(self.state, "fmri_validated", False) or self.state.fmri_coreg_path
                 )
             else:
                 self.state.fmri_coreg_in_t1 = None
@@ -1160,6 +1159,24 @@ class NeuxelecWindow(QWidget):
             0.80,
             "Loading parcellations",
         )
+        # -------------------------
+        # Planning MRI, registered on MRI 1
+        # -------------------------
+        # Every trajectory of the plan rests on this one registration, so the
+        # review has to remain available after the project is reopened, not only
+        # in the session that imported the plan.
+        try:
+            plan_mri_path = getattr(self.state, "plan_mri_in_t1_path", None)
+            if plan_mri_path:
+                self.state.plan_mri_in_t1 = sitk.ReadImage(str(plan_mri_path))
+        except Exception:
+            self.state.plan_mri_in_t1 = None
+            logger.warning(
+                "Could not restore the registered planning MRI from %s",
+                getattr(self.state, "plan_mri_in_t1_path", None),
+                exc_info=True,
+            )
+
         # -------------------------
         # Parcellation 1
         # -------------------------

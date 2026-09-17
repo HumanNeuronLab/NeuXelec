@@ -164,6 +164,72 @@ def build_trajectories_t1(
     return result
 
 
+def is_identity_transform(transform, tol_mm: float = 1e-4, tol_deg: float = 1e-3) -> bool:
+    """True when a rigid refinement leaves everything where it was."""
+    import math
+
+    try:
+        translation = [abs(float(v)) for v in transform.GetTranslation()]
+        angles = [
+            abs(math.degrees(float(a)))
+            for a in (
+                transform.GetAngleX(),
+                transform.GetAngleY(),
+                transform.GetAngleZ(),
+            )
+        ]
+    except Exception:
+        return False
+    return max(translation) <= tol_mm and max(angles) <= tol_deg
+
+
+def describe_rigid_transform(transform) -> dict:
+    """JSON-friendly record of a rigid refinement, kept in the project file."""
+    import math
+
+    return {
+        "translation_mm": [round(float(v), 4) for v in transform.GetTranslation()],
+        "angles_deg": [
+            round(math.degrees(float(a)), 4)
+            for a in (
+                transform.GetAngleX(),
+                transform.GetAngleY(),
+                transform.GetAngleZ(),
+            )
+        ],
+        "center_lps": [round(float(v), 4) for v in transform.GetCenter()],
+    }
+
+
+def apply_manual_refinement(trajectories: list[dict], transform) -> list[dict]:
+    """Move the plan points through the manual refinement of the review window.
+
+    The review hands the transform back the way SimpleITK resamples an image:
+    it maps a point of the corrected image onto the uncorrected one. A point
+    therefore travels the other way, through the inverse, otherwise the
+    trajectories would move away from the anatomy the user just aligned.
+
+    ``trajectories`` are the dicts returned by :func:`build_trajectories_t1`.
+    The result carries the corrected ``entry_t1_lps`` / ``target_t1_lps`` and
+    the hemisphere recomputed from the corrected entry point.
+    """
+    inverse = transform.GetInverse()
+    result = []
+    for traj in trajectories:
+        moved = dict(traj)
+        for key in ("entry_t1_lps", "target_t1_lps"):
+            point = moved.get(key)
+            if point is None:
+                continue
+            new_point = inverse.TransformPoint(tuple(float(v) for v in point))
+            moved[key] = [round(float(v), 3) for v in new_point]
+        entry = moved.get("entry_t1_lps")
+        if entry:
+            moved["hemisphere_guess"] = hemisphere_from_lps_x(entry[0])
+        result.append(moved)
+    return result
+
+
 def summarize_plan(plan: dict) -> str:
     """One-line human summary used by the cockpit tooltip / status."""
     info = plan.get("plan_info", {}) or {}

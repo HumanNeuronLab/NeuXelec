@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 import time
 from collections.abc import Callable
@@ -9,7 +10,7 @@ from typing import Literal
 import nibabel as nib
 import numpy as np
 import SimpleITK as sitk
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -151,8 +152,7 @@ class FilesPage:
         }
         # White modality-name labels in the cockpit (used for path tooltips).
         self._status_names: dict[str, QLabel] = {
-            key: self.ui.findChild(QLabel, f"label_FilesCoreg_{key}")
-            for key in self._status_pills
+            key: self.ui.findChild(QLabel, f"label_FilesCoreg_{key}") for key in self._status_pills
         }
 
         # --- Load buttons ---
@@ -189,6 +189,12 @@ class FilesPage:
             self.btn_load_surfaces.clicked.connect(self.load_surfaces_bundle)
         if self.btn_load_planning:
             self.btn_load_planning.clicked.connect(self.load_planning_bundle)
+            # Right click carries the extra actions of a control, the way
+            # the electrode reference selector already does.
+            self.btn_load_planning.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.btn_load_planning.customContextMenuRequested.connect(
+                self._show_planning_context_menu
+            )
 
         if self.btn_load_t1:
             self.btn_load_t1.clicked.connect(self.load_t1)
@@ -228,11 +234,25 @@ class FilesPage:
         self._moving_modality_group = QButtonGroup(self.ui)
         self._moving_modality_group.setExclusive(True)
 
-        for cb in (self.chk_t2, self.chk_fmri, self.chk_ct, self.chk_pet, self.chk_ictal, self.chk_interictal):
+        for cb in (
+            self.chk_t2,
+            self.chk_fmri,
+            self.chk_ct,
+            self.chk_pet,
+            self.chk_ictal,
+            self.chk_interictal,
+        ):
             if cb is not None:
                 self._moving_modality_group.addButton(cb)
 
-        for cb in (self.chk_t2, self.chk_fmri, self.chk_ct, self.chk_pet, self.chk_ictal, self.chk_interictal):
+        for cb in (
+            self.chk_t2,
+            self.chk_fmri,
+            self.chk_ct,
+            self.chk_pet,
+            self.chk_ictal,
+            self.chk_interictal,
+        ):
             if cb is not None:
                 cb.toggled.connect(self._update_buttons)
 
@@ -355,6 +375,7 @@ class FilesPage:
         self.btn_save_interictal = self.ui.findChild(
             QAbstractButton, "btn_FilesCoreg_saveInterIctalSPECT"
         )
+        self.btn_save_plan = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_savePlan")
         self.btn_save_all = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_saveAll")
 
         if self.btn_save_t2:
@@ -369,6 +390,9 @@ class FilesPage:
             self.btn_save_ictal.clicked.connect(lambda: self.save_coreg("ictalSPECT"))
         if self.btn_save_interictal:
             self.btn_save_interictal.clicked.connect(lambda: self.save_coreg("interictalSPECT"))
+        if self.btn_save_plan:
+            self.btn_save_plan.clicked.connect(self.save_plan_mri_and_electrodes)
+            self.btn_save_plan.setEnabled(False)
         if self.btn_save_all:
             self.btn_save_all.clicked.connect(self.save_all_coreg_validated)
 
@@ -706,6 +730,11 @@ class FilesPage:
 
             if not self._loading_overlay.isVisible():
                 self._loading_overlay.begin(message)
+                # begin() starts the reveal at 10%, and the overlay draws the
+                # logo at progress x size, so a caller asking to start further
+                # along was silently ignored. set_progress keeps the larger of
+                # the two, so callers happy with the default are unaffected.
+                self._loading_overlay.set_progress(progress, message)
             else:
                 self._loading_overlay.set_progress(progress, message)
 
@@ -1042,8 +1071,19 @@ class FilesPage:
         # fusions. Tested before CT because "activation" contains "ct".
         if any(
             k in name
-            for k in ("fmri", "irmf", "bold", "fused", "fusion", "activation", "tmap", "t_map",
-                      "zstat", "spmt", "functional")
+            for k in (
+                "fmri",
+                "irmf",
+                "bold",
+                "fused",
+                "fusion",
+                "activation",
+                "tmap",
+                "t_map",
+                "zstat",
+                "spmt",
+                "functional",
+            )
         ):
             return "fMRI"
         if (
@@ -1376,10 +1416,214 @@ class FilesPage:
 
         self._update_buttons()
 
-
     # ------------------------------------------------------------------
     # Implantation plan (NeuroInspire .nip)
     # ------------------------------------------------------------------
+    #: Where the brain reveal starts on a long operation.
+    #:
+    #: The overlay draws the logo at ``progress x size``: below roughly a third
+    #: it is a speck in the middle of the page, which on a three minute
+    #: registration reads as nothing happening at all. Starting here makes it a
+    #: brain from the first second, and the growth remains the progress.
+    _LOADING_REVEAL_FLOOR = 0.35
+
+    def _coregister_planning_mri(self, mri_path: str):
+        """Align the planning MRI on MRI 1 and return the CoregResult.
+
+        ANTs needs around three minutes on a planning MRI, so the registration
+        runs in a worker thread while the page shows the same progressive brain
+        used by the imports. A local event loop keeps this import flow linear;
+        the overlay covers the page, so nothing else can be clicked meanwhile.
+        """
+        from ..workers import CoregWorker
+
+        message = "Aligning the planning MRI on MRI 1"
+
+        # The overlay comes up before anything else: preparing the moving image
+        # can mean converting a whole DICOM series, which used to run with a
+        # frozen page and nothing drawn on it.
+        self._show_files_loading("Reading the planning MRI", self._LOADING_REVEAL_FLOOR)
+        self._set_busy(True)
+        try:
+            moving_path = self._prepare_planning_mri(mri_path)
+        except Exception:
+            self._cancel_files_loading()
+            self._set_busy(False)
+            self._update_buttons()
+            raise
+        self._update_files_loading(self._LOADING_REVEAL_FLOOR, message)
+
+        outcome: dict = {}
+        worker = CoregWorker(
+            "planningMRI",
+            fixed_path=self.state.t1_path,
+            moving_path=moving_path,
+            transforms_dir=getattr(self.state, "transforms_dir", None),
+        )
+        worker.finished_ok.connect(lambda _m, res: outcome.update(result=res))
+        worker.failed.connect(lambda _m, msg: outcome.update(error=str(msg)))
+
+        # The engine reports only 0 and 100, so the brain fills on the same
+        # three minute estimate as the coregistration bar and waits just short
+        # of the end until the worker really finishes.
+        started = time.monotonic()
+        ticker = QTimer(self._page_widget or self.ui)
+        ticker.setInterval(250)
+
+        def _tick() -> None:
+            done = min(1.0, (time.monotonic() - started) / 180.0)
+            stage = self._coreg_progress_stage_text(int(done * 100))
+            # The reveal starts at the floor and grows from there, so the brain
+            # is a brain from the first second instead of a speck that takes a
+            # minute to become recognisable.
+            share = self._LOADING_REVEAL_FLOOR + (0.94 - self._LOADING_REVEAL_FLOOR) * done
+            self._update_files_loading(share, f"{message} \u00b7 {stage}")
+
+        ticker.timeout.connect(_tick)
+
+        loop = QEventLoop()
+        worker.finished.connect(loop.quit)
+        ticker.start()
+        worker.start()
+        try:
+            loop.exec()
+        finally:
+            ticker.stop()
+            worker.wait()
+            self._set_busy(False)
+            # Like every other flow that goes busy: rebuild the button states
+            # from the patient's state. Without this the page stays frozen after
+            # the plan import, with no way to review or save anything else.
+            self._update_buttons()
+            if "result" in outcome:
+                self._complete_files_loading()
+            else:
+                self._cancel_files_loading()
+
+        if "error" in outcome:
+            raise RuntimeError(outcome["error"])
+        if "result" not in outcome:
+            raise RuntimeError("The registration returned no result.")
+        return outcome["result"]
+
+    def _show_planning_context_menu(self, pos) -> None:
+        """Right click on Load Planning: come back to the alignment review."""
+        from ..ui.context_menus import add_menu_section, make_base_menu
+
+        if self.btn_load_planning is None:
+            return
+        plan = getattr(self.state, "plan", None)
+        planning_in_t1 = getattr(self.state, "plan_mri_in_t1", None)
+
+        menu = make_base_menu()
+        add_menu_section(menu, "PLANNING")
+        act_review = menu.addAction("Review plan alignment...")
+        if plan is None:
+            act_review.setEnabled(False)
+            act_review.setToolTip("Load an implantation plan first.")
+        elif planning_in_t1 is None:
+            act_review.setEnabled(False)
+            act_review.setToolTip(
+                "The registered planning MRI is not in memory. Load the plan "
+                "again to review its alignment."
+            )
+        chosen = menu.exec(self.btn_load_planning.mapToGlobal(pos))
+        if chosen is not None and chosen == act_review:
+            self._reopen_plan_alignment_review()
+
+    def _reopen_plan_alignment_review(self) -> None:
+        """Show the plan alignment again and apply any further correction.
+
+        Each review starts from the image corrected by the previous one, so a
+        new correction adds to the ones already applied to the trajectories.
+        """
+        from ..ui.neuxelec_message_dialog import NeuXelecMessageDialog
+        from ..utils.plan_import import (
+            apply_manual_refinement,
+            describe_rigid_transform,
+            is_identity_transform,
+        )
+
+        plan = getattr(self.state, "plan", None)
+        planning_in_t1 = getattr(self.state, "plan_mri_in_t1", None)
+        if plan is None or planning_in_t1 is None:
+            return
+
+        manual, corrected = self._review_plan_alignment(planning_in_t1)
+        if manual is None:
+            return
+
+        transform = dict(plan.get("transform") or {})
+        transform["reviewed"] = True
+        if is_identity_transform(manual):
+            plan["transform"] = transform
+            self.state.plan = plan
+            return
+
+        plan["trajectories_t1"] = apply_manual_refinement(plan.get("trajectories_t1") or [], manual)
+        history = list(transform.get("manual") or [])
+        history.append(describe_rigid_transform(manual))
+        transform["manual"] = history
+        plan["transform"] = transform
+        self.state.plan = plan
+        if corrected is not None:
+            self.state.plan_mri_in_t1 = corrected
+            # The image on disk is the one saved before this correction, so it
+            # no longer matches what is on screen. Let Save plan MRI light up
+            # again rather than leave a stale file passing for the current one.
+            self._update_buttons()
+
+        # Redraw the planned trajectories if the 3D view is showing them.
+        view = self._view3d()
+        if view is not None and getattr(view, "_plan_traj_visible", False):
+            try:
+                view._plot_plan_trajectories()
+            except Exception:
+                logging.getLogger(__name__).exception("Could not redraw the planned trajectories")
+
+        saved_before = bool(getattr(self.state, "plan_mri_in_t1_path", None))
+        NeuXelecMessageDialog.information(
+            self._dialog_parent(),
+            "Plan alignment updated",
+            "The correction you made by hand has been applied to the "
+            f"{len(plan.get('trajectories_t1') or [])} trajectories of the plan."
+            + (
+                "\n\nThe registered planning MRI saved earlier is the one from "
+                "before this correction. Use Save plan MRI / electrodes again to "
+                "keep the corrected one."
+                if saved_before
+                else ""
+            ),
+        )
+
+    def _review_plan_alignment(self, planning_in_t1):
+        """Show the planning MRI on MRI 1 and collect the manual refinement.
+
+        Returns ``(transform, corrected_image)``. Both are ``None`` when the
+        user closed the review without validating: the plan then keeps the
+        coordinates produced by the automatic registration.
+        """
+        from ..ui.overlay_viewer import OverlayViewer
+
+        fixed = getattr(self.state, "t1_sitk", None)
+        if fixed is None or planning_in_t1 is None:
+            return None, None
+        dlg = OverlayViewer(
+            fixed_t1=fixed,
+            moving_in_t1=planning_in_t1,
+            moving_name="Planning MRI",
+            parent=self._dialog_parent(),
+        )
+        if dlg.exec() != QDialog.Accepted:
+            return None, None
+        try:
+            return dlg.manual_transform(), dlg.corrected_moving_image()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not read the manual refinement of the plan"
+            )
+            return None, None
+
     def _prepare_planning_mri(self, path: str) -> str:
         """Return a NIfTI path usable by the coregistration engine for the planning
         MRI (DICOM folders are converted next to the project transforms)."""
@@ -1397,7 +1641,9 @@ class FilesPage:
         reader = sitk.ImageSeriesReader()
         reader.SetFileNames(files)
         img = reader.Execute()
-        out_dir = getattr(self.state, "transforms_dir", None) or tempfile.mkdtemp(prefix="neuxelec_plan_")
+        out_dir = getattr(self.state, "transforms_dir", None) or tempfile.mkdtemp(
+            prefix="neuxelec_plan_"
+        )
         _Path(out_dir).mkdir(parents=True, exist_ok=True)
         out = str(_Path(out_dir) / "planning_mri.nii.gz")
         sitk.WriteImage(img, out)
@@ -1413,7 +1659,14 @@ class FilesPage:
         from ..ui.load_plan_dialog import LoadPlanDialog
         from ..ui.neuxelec_message_dialog import NeuXelecMessageDialog
         from ..utils.nip_reader import read_nip
-        from ..utils.plan_import import build_trajectories_t1, series_uid_from_source, summarize_plan
+        from ..utils.plan_import import (
+            apply_manual_refinement,
+            build_trajectories_t1,
+            describe_rigid_transform,
+            is_identity_transform,
+            series_uid_from_source,
+            summarize_plan,
+        )
 
         parent = self._dialog_parent()
         start = getattr(self.state, "last_browse_dir", "") or ""
@@ -1448,33 +1701,25 @@ class FilesPage:
 
         mri1_uid = series_uid_from_source(getattr(self.state, "t1_source_path", None))
         mri1_label = str(getattr(self.state, "mri1_filename_label", None) or "MRI 1")
-        dlg = LoadPlanDialog(plan, parent=parent, mri1_uid=mri1_uid, mri1_label=mri1_label, start_dir=start)
+        dlg = LoadPlanDialog(
+            plan, parent=parent, mri1_uid=mri1_uid, mri1_label=mri1_label, start_dir=start
+        )
         if not dlg.exec():
             return
         choice = dlg.values()
 
+        planning_in_t1 = None
         try:
             if choice["mode"] == "identity":
                 trajs = build_trajectories_t1(plan, "identity")
                 transform = {"mode": "identity"}
             else:
                 mri_path = choice["planning_mri_path"]
-                QApplication.setOverrideCursor(_Qt.WaitCursor)
-                try:
-                    from ..coregistration import rigid_coreg_to_fixed
-
-                    moving_path = self._prepare_planning_mri(mri_path)
-                    res = rigid_coreg_to_fixed(
-                        self.state.t1_path,
-                        moving_path,
-                        moving_modality="MR",
-                        transforms_dir=getattr(self.state, "transforms_dir", None),
-                    )
-                finally:
-                    QApplication.restoreOverrideCursor()
+                res = self._coregister_planning_mri(mri_path)
                 if not getattr(res, "affine_mat_path", None):
                     raise RuntimeError("The registration did not produce an affine transform file.")
                 trajs = build_trajectories_t1(plan, "affine", affine_mat_path=res.affine_mat_path)
+                planning_in_t1 = getattr(res, "moving_in_fixed", None)
                 transform = {
                     "mode": "affine",
                     "affine_mat_path": str(res.affine_mat_path),
@@ -1488,6 +1733,23 @@ class FilesPage:
             )
             return
 
+        # Every trajectory rests on this single registration: show it
+        # before it counts, exactly like any other modality.
+        reviewed = False
+        if planning_in_t1 is not None:
+            manual, corrected = self._review_plan_alignment(planning_in_t1)
+            if manual is not None:
+                reviewed = True
+                if not is_identity_transform(manual):
+                    trajs = apply_manual_refinement(trajs, manual)
+                    # Each review starts from the corrected image, so the
+                    # corrections stack up and are recorded one by one.
+                    transform.setdefault("manual", []).append(describe_rigid_transform(manual))
+                    if corrected is not None:
+                        planning_in_t1 = corrected
+            transform["reviewed"] = reviewed
+        self.state.plan_mri_in_t1 = planning_in_t1
+
         plan = dict(plan)
         plan["trajectories_t1"] = trajs
         plan["transform"] = transform
@@ -1497,11 +1759,25 @@ class FilesPage:
             self._sync_files_status_overview()
         except Exception:
             pass
+        if transform.get("manual"):
+            alignment = "The correction you made by hand has been applied to the " "trajectories."
+        elif reviewed:
+            alignment = "You reviewed the planning MRI against MRI 1."
+        elif transform.get("mode") == "affine":
+            alignment = (
+                "The alignment of the planning MRI on MRI 1 was not reviewed. "
+                "Load the plan again to check it."
+            )
+        else:
+            alignment = ""
         NeuXelecMessageDialog.information(
             parent,
             "Implantation plan imported",
             f"{summarize_plan(plan)}\n\n{len(trajs)} trajectories are now expressed in MRI 1 space.\n"
-            "Open Reconstruction and use Automatic detection to reconstruct them on the CT.",
+            f"{alignment}\n\n"
+            "Open Reconstruction: when you pick the deepest contact of an "
+            "electrode, the nearest planned trajectory is proposed with its "
+            "name and its reference.",
         )
 
     def _import_imaging_file(self, role: str, source_path: str, path: str) -> None:
@@ -1530,9 +1806,7 @@ class FilesPage:
 
             self.state.t1_was_conformed = bool(norm_info.get("was_modified", False))
             self.state.t1_conformed_path = (
-                str(norm_info.get("final_path"))
-                if norm_info.get("was_modified")
-                else None
+                str(norm_info.get("final_path")) if norm_info.get("was_modified") else None
             )
             self.state.t1_original_spacing = norm_info.get("original_spacing", None)
             self.state.t1_conformed_spacing = norm_info.get("final_spacing", None)
@@ -1707,6 +1981,7 @@ class FilesPage:
         parcellation vs an obliquely-acquired T1). A low value means the images
         live in different world spaces and the overlay would be misplaced.
         """
+
         def _world_aabb(im: sitk.Image):
             sx, sy, sz = im.GetSize()
             corners = []
@@ -2105,9 +2380,7 @@ class FilesPage:
 
         source_path, path = picked
 
-        final_path, final_img, info = self._normalize_on_load(
-            "T1", path, make_isotropic=True
-        )
+        final_path, final_img, info = self._normalize_on_load("T1", path, make_isotropic=True)
         if final_path is None:
             return
 
@@ -3153,6 +3426,30 @@ class FilesPage:
         else:
             self.brainmask_bar.setFormat(f"{label}: Failed")
 
+    def _brainmask_expected_duration_s(self) -> float:
+        """How long the bar should take to fill.
+
+        Almost all of the time goes into registering the T1 onto the template.
+        That registration is now shared with the MNI coordinates and the
+        defacing, so when one of those has already computed it the mask is only
+        a resampling away and the four-minute estimate would be a lie.
+        """
+        try:
+            from ..coregistration import (
+                _default_brainmask_template_paths,
+                existing_t1_to_template_registration,
+            )
+
+            template, _mask = _default_brainmask_template_paths()
+            already = existing_t1_to_template_registration(
+                str(self.state.t1_path),
+                getattr(self.state, "transforms_dir", None),
+                str(template),
+            )
+            return 15.0 if already is not None else 240.0
+        except Exception:
+            return 240.0
+
     def generate_brain_mask(self) -> None:
         """Generate a brain mask for the currently loaded T1 (on demand)."""
         if not self.state.t1_path:
@@ -3161,11 +3458,8 @@ class FilesPage:
             )
             return
 
-        self._start_brainmask_progress_animation(
-            label="Brain mask",
-            duration_s=240.0,
-        )
-
+        # Ask for the folder BEFORE starting the bar: it used to start first, so
+        # cancelling this dialog left it animating for a job that never ran.
         if not getattr(self.state, "transforms_dir", None):
             out_dir = QFileDialog.getExistingDirectory(
                 self._dialog_parent(),
@@ -3179,6 +3473,11 @@ class FilesPage:
                 self.state.last_browse_dir = str(Path(out_dir))
             except Exception:
                 pass
+
+        self._start_brainmask_progress_animation(
+            label="Brain mask",
+            duration_s=self._brainmask_expected_duration_s(),
+        )
 
         self._bm_worker = BrainMaskWorker(
             self.state.t1_path, transforms_dir=self.state.transforms_dir
@@ -3302,6 +3601,212 @@ class FilesPage:
 
         self.brainmask_bar.setValue(v)
 
+    def _planned_contacts_lps(self, traj: dict) -> list[tuple[float, float, float]]:
+        """The planned contact centres of one trajectory, in MRI 1 LPS.
+
+        The deepest contact sits on the target and the others step back towards
+        the entry, spaced centre to centre by ``separation + length``: the same
+        geometry the reconstruction registers as the DIXI reference of this
+        trajectory, so the file agrees with what NeuXelec proposes on the CT.
+        """
+        from ..utils.plan_import import theoretical_contacts
+
+        entry = traj.get("entry_t1_lps") or traj.get("entry_mm")
+        target = traj.get("target_t1_lps") or traj.get("target_mm")
+        if not entry or not target:
+            return []
+        try:
+            count = int(traj.get("contact_count") or 0)
+            separation = float(traj.get("contact_separation_mm"))
+            length = float(traj.get("contact_length_mm"))
+        except (TypeError, ValueError):
+            return []
+        if count < 1:
+            return []
+        return theoretical_contacts(entry, target, [separation + length] * (count - 1))
+
+    def _write_planned_trajectories(self, path: Path) -> int:
+        """Write the planned trajectories as TXT LPS. Returns the contact count.
+
+        Same shape as the coordinate export, so the two files read alike: a
+        header saying who and when, then one block per electrode.
+        """
+        from datetime import datetime
+
+        from ..utils.plan_import import hemisphere_from_lps_x
+
+        plan = getattr(self.state, "plan", None) or {}
+        trajectories = plan.get("trajectories_t1") or plan.get("trajectories") or []
+        transform = plan.get("transform") or {}
+        now = datetime.now()
+
+        alignment = str(transform.get("mode") or "unknown")
+        if transform.get("reviewed"):
+            alignment += ", reviewed"
+        corrections = transform.get("manual") or []
+        if corrections:
+            alignment += f", {len(corrections)} manual correction(s)"
+
+        written = 0
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("SEEG_planned_trajectories\n")
+            handle.write("=" * 40 + "\n")
+            handle.write(f"Patient: {getattr(self.state, 'patient_id', '') or ''}\n")
+            handle.write(f"Export date: {now:%Y-%m-%d}\n")
+            handle.write(f"Export time: {now:%H:%M:%S}\n")
+            handle.write(f"Coordinate system: LPS ({self._mri1_filename_label()})\n")
+            handle.write(f"Plan source: {plan.get('source', 'NeuroInspire')}\n")
+            handle.write(f"Alignment on {self._mri1_filename_label()}: {alignment}\n")
+            planning_mri = transform.get("planning_mri_path")
+            if planning_mri:
+                handle.write(f"Planning MRI: {planning_mri}\n")
+            handle.write("=" * 40 + "\n")
+
+            for traj in trajectories:
+                name = str(traj.get("name", "") or "?")
+                reference = str(traj.get("reference_key") or traj.get("reference") or "")
+                entry = traj.get("entry_t1_lps") or traj.get("entry_mm") or []
+                target = traj.get("target_t1_lps") or traj.get("target_mm") or []
+
+                hemisphere = traj.get("hemisphere") or ""
+                if not hemisphere and target:
+                    try:
+                        hemisphere = hemisphere_from_lps_x(float(target[0]))
+                    except (TypeError, ValueError, IndexError):
+                        hemisphere = ""
+
+                handle.write(f"\n[{name}]")
+                if reference:
+                    handle.write(f" | reference={reference}")
+                if hemisphere:
+                    handle.write(f" | hemisphere={hemisphere}")
+                handle.write("\n")
+
+                if entry:
+                    handle.write("  entry  | " + self._lps_fields(entry) + "\n")
+                if target:
+                    handle.write("  target | " + self._lps_fields(target) + "\n")
+
+                for index, point in enumerate(self._planned_contacts_lps(traj), start=1):
+                    handle.write(f"  contact={index:<3} | " + self._lps_fields(point) + "\n")
+                    written += 1
+        return written
+
+    @staticmethod
+    def _lps_fields(point) -> str:
+        """``x=... | y=... | z=...`` for one point.
+
+        ``strict`` on purpose: a point that is not three dimensional means the
+        plan is malformed, and a coordinates file silently missing an axis would
+        be worse than a save that fails and says so.
+        """
+        return " | ".join(
+            f"{axis}={float(value):.2f}" for axis, value in zip("xyz", point, strict=True)
+        )
+
+    def save_plan_mri_and_electrodes(self) -> None:
+        """Save the registered planning MRI and the planned trajectories.
+
+        The registered image is what the whole plan rests on: writing it to disk
+        is what lets its alignment be reviewed again after the project is closed,
+        so its location is recorded in the project file.
+        """
+        plan = getattr(self.state, "plan", None)
+        planning_in_t1 = getattr(self.state, "plan_mri_in_t1", None)
+
+        if not plan:
+            NeuXelecMessageDialog.warning(
+                self._dialog_parent(),
+                "Save planning",
+                "No implantation plan is loaded. Use Load Planning first.",
+            )
+            return
+
+        out_dir = QFileDialog.getExistingDirectory(
+            self._dialog_parent(),
+            "Select folder to save the planning MRI and the planned trajectories",
+            self._t1_preferred_dir(),
+        )
+        if not out_dir:
+            return
+
+        fixed_label = self._mri1_filename_label()
+        saved: list[str] = []
+        try:
+            if planning_in_t1 is not None:
+                image_path = str(
+                    Path(out_dir)
+                    / self._default_filename(f"planningMRI_to_{fixed_label}", ".nii.gz")
+                )
+                save_nifti(planning_in_t1, image_path)
+                self.state.plan_mri_in_t1_path = image_path
+                saved.append(image_path)
+
+            text_path = str(Path(out_dir) / self._default_filename("plan_trajectories_LPS", ".txt"))
+            contacts = self._write_planned_trajectories(Path(text_path))
+            saved.append(f"{text_path}  ({contacts} planned contacts)")
+        except Exception as error:
+            NeuXelecMessageDialog.critical(
+                self._dialog_parent(), "Save planning failed", str(error)
+            )
+            return
+
+        try:
+            self.state.last_browse_dir = str(Path(out_dir))
+        except Exception:
+            pass
+        self._update_buttons()
+
+        note = ""
+        if planning_in_t1 is None:
+            note = (
+                "\n\nThe plan was imported without a planning MRI, so there is no "
+                "registered image to save."
+            )
+        NeuXelecMessageDialog.information(
+            self._dialog_parent(),
+            "Save planning",
+            "Saved:\n" + "\n".join(saved) + note,
+        )
+
+    #: The file name ANTs writes the mask under while it works. Only a file with
+    #: exactly this name, and that NeuXelec itself recorded as generated, is ever
+    #: removed by :meth:`_discard_generated_brainmask`.
+    _GENERATED_BRAINMASK_NAME = "t1_brainmask.nii.gz"
+
+    def _discard_generated_brainmask(self, kept_path: str) -> None:
+        """Drop the working copy of the mask once the user has saved the real one.
+
+        Generating writes ``T1_brainmask.nii.gz`` into the transforms folder.
+        Saving then wrote a second, byte-for-byte identical copy under the
+        patient's own name, and both stayed on disk for the same mask. The saved
+        copy is the one that matters, so the working copy goes with it.
+
+        Nothing else is ever touched: a mask the user loaded themselves has no
+        recorded generated path, and a file under any other name is left alone.
+        """
+        generated = getattr(self.state, "brainmask_generated_path", None)
+        if not generated:
+            return
+        try:
+            source = Path(str(generated))
+            if not source.is_file():
+                return
+            if source.name.lower() != self._GENERATED_BRAINMASK_NAME:
+                return
+            destination = Path(str(kept_path))
+            if destination.is_file() and source.samefile(destination):
+                return
+            source.unlink()
+            logging.getLogger(__name__).info(
+                "Removed the working brain mask %s, kept %s", source, destination
+            )
+        except OSError:
+            # Leaving the working copy behind is harmless; failing the save is not.
+            logging.getLogger(__name__).warning(
+                "Could not remove the working brain mask %s", generated, exc_info=True
+            )
+
     def save_brainmask(self) -> None:
         bm_img = getattr(self.state, "brainmask_sitk", None)
         bm_path = getattr(self.state, "brainmask_path", None)
@@ -3351,12 +3856,11 @@ class FilesPage:
             self.state.last_browse_dir = str(Path(out_path).parent)
         except Exception:
             pass
+        self._discard_generated_brainmask(out_path)
         self.state.brainmask_path = out_path
         self.state.brainmask_generated = True
         self.state.brainmask_saved = True
-        self.state.brainmask_generated_path = (
-            getattr(self.state, "brainmask_generated_path", None) or out_path
-        )
+        self.state.brainmask_generated_path = out_path
 
         try:
             if getattr(self, "le_load_brainmask", None) is not None:
@@ -4651,6 +5155,7 @@ class FilesPage:
                     self.state.siscom_path = out_path
 
                 elif modality == "Brain mask":
+                    self._discard_generated_brainmask(out_path)
                     self.state.brainmask_path = out_path
                     self.state.brainmask_generated = True
                     self.state.brainmask_saved = True
@@ -4691,26 +5196,56 @@ class FilesPage:
     # ------------------------------------------------------------------
     # Enable / disable rules
     # ------------------------------------------------------------------
-    def _set_busy(self, busy: bool):
-        if self.btn_perform is not None:
-            self.btn_perform.setEnabled(not busy)
-        if self.btn_check_coreg is not None:
-            self.btn_check_coreg.setEnabled(not busy and self.btn_check_coreg.isEnabled())
+    #: The buttons a long operation takes away and must give back.
+    _BUSY_BUTTONS = (
+        "btn_perform",
+        "btn_check_coreg",
+        "btn_save_t2",
+        "btn_save_fmri",
+        "btn_save_ct",
+        "btn_save_pet",
+        "btn_save_ictal",
+        "btn_save_interictal",
+        "btn_save_siscom",
+        "btn_save_plan",
+        "btn_save_all",
+        "btn_save_brainmask",
+        "btn_save_iso_surface",
+    )
 
-        for b in (
-            self.btn_save_t2,
-            getattr(self, "btn_save_fmri", None),
-            self.btn_save_ct,
-            self.btn_save_pet,
-            self.btn_save_ictal,
-            self.btn_save_interictal,
-            self.btn_save_siscom,
-            getattr(self, "btn_save_all", None),
-            self.btn_save_brainmask,
-            self.btn_save_iso_surface,
-        ):
-            if b is not None:
-                b.setEnabled((not busy) and b.isEnabled())
+    def _set_busy(self, busy: bool):
+        """Disable the action buttons while something long runs, then give them back.
+
+        This used to read ``setEnabled((not busy) and b.isEnabled())``, which can
+        only ever turn a button off: by the time it ran with ``busy=False`` the
+        button was already disabled, so the expression stayed false and the
+        button was lost for good. Every caller happened to follow with
+        ``_update_buttons()``, which rebuilt the states from scratch and hid the
+        trap, until one did not. The state before the operation is now recorded
+        and restored, so the method is correct on its own.
+        """
+        remembered = getattr(self, "_busy_enabled_before", None)
+
+        if busy:
+            # Nested calls must not overwrite the state of the outermost one.
+            if remembered is None:
+                self._busy_enabled_before = {
+                    name: button.isEnabled()
+                    for name in self._BUSY_BUTTONS
+                    if (button := getattr(self, name, None)) is not None
+                }
+            for name in self._BUSY_BUTTONS:
+                button = getattr(self, name, None)
+                if button is not None:
+                    button.setEnabled(False)
+            return
+
+        for name in self._BUSY_BUTTONS:
+            button = getattr(self, name, None)
+            if button is None:
+                continue
+            button.setEnabled(bool((remembered or {}).get(name, button.isEnabled())))
+        self._busy_enabled_before = None
 
     def load_brainmask(self) -> None:
         """Load an existing brain mask file and push it to state + 3D view."""
@@ -5221,6 +5756,15 @@ class FilesPage:
             self.btn_save_interictal.setEnabled(
                 bool(getattr(self.state, "interictal_spect_validated", False))
             )
+        if getattr(self, "btn_save_plan", None) is not None:
+            # A plan alone can already be written: the trajectories are in MRI 1
+            # space whatever brought them there. The registered image joins them
+            # when the plan came with its own MRI.
+            plan = getattr(self.state, "plan", None)
+            self.btn_save_plan.setEnabled(
+                bool(plan and (plan.get("trajectories_t1") or plan.get("trajectories")))
+            )
+
         if getattr(self, "btn_save_all", None) is not None:
             has_any_validated_modality = any(
                 [
@@ -5604,6 +6148,7 @@ class FilesPage:
         if plan_loaded:
             try:
                 from ..utils.plan_import import summarize_plan
+
                 tip = f"{summarize_plan(plan)}\n{plan.get('source_path', '')}"
             except Exception:
                 tip = str(plan.get("source_path", ""))

@@ -140,6 +140,12 @@ class AppState:
         # Imported implantation plan (NeuroInspire .nip) expressed in MRI 1 space,
         # see utils.plan_import / pages.files_page.load_planning_bundle.
         self.plan: dict | None = None
+        # Planning MRI resampled into MRI 1 space, kept so the alignment the
+        # whole plan depends on can be reviewed.
+        self.plan_mri_in_t1 = None
+        # Where that registered image was saved, so reopening the project can
+        # load it back and the alignment can be reviewed again days later.
+        self.plan_mri_in_t1_path: str | None = None
 
         # Brain mask (optional, generated on demand)
         self.brainmask_path: str | None = None

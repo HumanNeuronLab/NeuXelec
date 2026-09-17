@@ -125,7 +125,6 @@ def make_base_menu() -> QMenu:
     return menu
 
 
-
 def add_menu_section(menu: QMenu, text: str) -> None:
     """Add a non-clickable section header to a NeuXelec context menu.
 
@@ -142,8 +141,8 @@ def add_menu_section(menu: QMenu, text: str) -> None:
     )
     action = QWidgetAction(menu)
     action.setDefaultWidget(label)
-    action.setText(str(text))           # introspection only; the widget is drawn
-    action.setEnabled(False)            # never selectable, skipped by the keyboard
+    action.setText(str(text))  # introspection only; the widget is drawn
+    action.setEnabled(False)  # never selectable, skipped by the keyboard
     menu.addAction(action)
 
 
@@ -177,11 +176,14 @@ def exec_3d_view_menu(
     plan_visible: bool = False,
     show_cortex_only_option: bool = False,
     cortex_only: bool = False,
+    show_grey_matter_option: bool = False,
+    grey_matter_only: bool = False,
     show_fmri_color: bool = False,
     show_fmri_surface: bool = False,
     fmri_blob_on: bool = False,
     fmri_pial_on: bool = False,
     fmri_keep_on: bool = False,
+    background_is_custom: bool = False,
 ) -> str | None:
 
     menu = make_base_menu()
@@ -237,14 +239,10 @@ def exec_3d_view_menu(
 
     if show_fmri_surface:
         add_menu_section(menu, "fMRI")
-        act_fmri_blob = menu.addAction(
-            "Hide fMRI blob" if fmri_blob_on else "Plot fMRI blob"
-        )
+        act_fmri_blob = menu.addAction("Hide fMRI blob" if fmri_blob_on else "Plot fMRI blob")
         if fmri_blob_on:
             act_fmri_keep = menu.addAction(
-                "Crop fMRI blob through slices"
-                if fmri_keep_on
-                else "Keep fMRI blob through slices"
+                "Crop fMRI blob through slices" if fmri_keep_on else "Keep fMRI blob through slices"
             )
         act_fmri_pial = menu.addAction(
             "Hide fMRI on surface" if fmri_pial_on else "Project fMRI on surface"
@@ -254,19 +252,22 @@ def exec_3d_view_menu(
     act_toggle_color_scale = None
     act_toggle_slice_plane_frames = None
     act_cortex_only = None
+    act_grey_matter_only = None
     act_keep_electrodes_through_slices = None
     act_siscom_dont_crop = None
     act_render_brain = None
 
-    if (
-        show_color_scale_option
-        or show_slice_plane_frames_option
-        or show_cortex_only_option
-        or show_keep_electrodes_through_slices_option
-        or show_siscom_crop_option
-        or native_actions_enabled
-    ):
-        add_menu_section(menu, "DISPLAY")
+    # The background entries are always offered, so DISPLAY always opens.
+    add_menu_section(menu, "DISPLAY")
+
+    act_background = menu.addAction("Background color...")
+    act_background.setToolTip(
+        "The colour behind the scene. Useful to match the slide a screenshot "
+        "or an animation will sit on."
+    )
+    act_background_reset = (
+        menu.addAction("Reset background") if background_is_custom else None
+    )
 
     if show_color_scale_option:
         act_toggle_color_scale = menu.addAction(
@@ -283,6 +284,11 @@ def exec_3d_view_menu(
             "Functional overlays: whole brain"
             if cortex_only
             else "Functional overlays: cortex only"
+        )
+
+    if show_grey_matter_option:
+        act_grey_matter_only = menu.addAction(
+            "Contacts: all" if grey_matter_only else "Contacts: grey matter only"
         )
 
     if show_keep_electrodes_through_slices_option:
@@ -345,6 +351,12 @@ def exec_3d_view_menu(
     if action is None:
         return None
 
+    if action == act_background:
+        return "background_color"
+
+    if act_background_reset is not None and action == act_background_reset:
+        return "background_reset"
+
     if act_marker_list is not None and action == act_marker_list:
         return "marker_list"
 
@@ -402,6 +414,9 @@ def exec_3d_view_menu(
     if act_cortex_only is not None and action == act_cortex_only:
         return "toggle_cortex_only"
 
+    if act_grey_matter_only is not None and action == act_grey_matter_only:
+        return "toggle_grey_matter_only"
+
     if act_load_mni_electrodes is not None and action == act_load_mni_electrodes:
         return "load_mni_electrodes"
 
@@ -444,7 +459,10 @@ def exec_oblique_slice_menu(
     show_interictal_color: bool = False,
     show_cortex_only_option: bool = False,
     cortex_only: bool = False,
+    show_grey_matter_option: bool = False,
+    grey_matter_only: bool = False,
     show_fmri_color: bool = False,
+    background_is_custom: bool = False,
 ) -> str | None:
     menu = make_base_menu()
 
@@ -453,15 +471,14 @@ def exec_oblique_slice_menu(
     act_siscom = menu.addAction("Color SISCOM")
     act_fmri_color = menu.addAction("Color fMRI") if show_fmri_color else None
     act_ictal = menu.addAction("Color Ictal SPECT") if show_ictal_color else None
-    act_interictal = (
-        menu.addAction("Color Inter-ictal SPECT") if show_interictal_color else None
-    )
+    act_interictal = menu.addAction("Color Inter-ictal SPECT") if show_interictal_color else None
 
     act_toggle_color_scale = None
     act_cortex_only = None
+    act_grey_matter_only = None
 
-    if show_color_scale_option or show_cortex_only_option:
-        add_menu_section(menu, "DISPLAY")
+    # The background entries are always offered, so DISPLAY always opens.
+    add_menu_section(menu, "DISPLAY")
 
     if show_color_scale_option:
         act_toggle_color_scale = menu.addAction(
@@ -475,10 +492,30 @@ def exec_oblique_slice_menu(
             else "Functional overlays: cortex only"
         )
 
+    if show_grey_matter_option:
+        act_grey_matter_only = menu.addAction(
+            "Contacts: all" if grey_matter_only else "Contacts: grey matter only"
+        )
+
+    act_background = menu.addAction("Background color...")
+    act_background.setToolTip(
+        "Fill the frame with a chosen colour instead of black. The air around "
+        "the head fades into it, so the slice can sit on a coloured slide "
+        "without a black box around it."
+    )
+    act_background_reset = (
+        menu.addAction("Reset background") if background_is_custom else None
+    )
+
     action = menu.exec(global_pos)
 
     if action is None:
         return None
+
+    if action == act_background:
+        return "background_color"
+    if act_background_reset is not None and action == act_background_reset:
+        return "background_reset"
 
     if action == act_pet:
         return "pet"
@@ -496,6 +533,9 @@ def exec_oblique_slice_menu(
 
     if act_cortex_only is not None and action == act_cortex_only:
         return "toggle_cortex_only"
+
+    if act_grey_matter_only is not None and action == act_grey_matter_only:
+        return "toggle_grey_matter_only"
 
     return None
 

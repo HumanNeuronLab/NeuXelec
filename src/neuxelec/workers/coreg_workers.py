@@ -7,7 +7,18 @@ from PySide6.QtCore import QThread, Signal
 
 from ..coregistration import ants_generate_brainmask_t1, rigid_coreg_to_fixed
 
-Modality = Literal["T2", "CT", "PET", "ictalSPECT", "interictalSPECT", "fMRI"]
+Modality = Literal[
+    "T2", "CT", "PET", "ictalSPECT", "interictalSPECT", "fMRI", "planningMRI"
+]
+
+#: How each modality is announced to the registration engine. The planning
+#: MRI is an anatomical MR like any other; only the CT gets its own
+#: rigid-only strategy inside the engine.
+_ENGINE_MODALITY = {
+    "ictalSPECT": "SPECT",
+    "interictalSPECT": "SPECT",
+    "planningMRI": "MR",
+}
 
 
 class CoregWorker(QThread):
@@ -43,11 +54,7 @@ class CoregWorker(QThread):
                 moving_path=self.moving_path,
                 progress_cb=self.progress.emit,
                 initial_transform=self.initial_transform,
-                moving_modality=(
-                    self.modality
-                    if self.modality not in ("ictalSPECT", "interictalSPECT")
-                    else "SPECT"
-                ),
+                moving_modality=_ENGINE_MODALITY.get(self.modality, self.modality),
                 transforms_dir=self.transforms_dir,
                 apply_to_path=self.apply_to_path,
             )

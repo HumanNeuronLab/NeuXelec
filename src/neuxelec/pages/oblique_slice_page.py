@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pyvista as pv
 import scipy.io as sio
@@ -39,6 +41,7 @@ from scipy.ndimage import map_coordinates
 
 from neuxelec.ui.context_menus import exec_oblique_slice_menu
 from neuxelec.ui.export_coordinates_dialog import ExportCoordinatesDialog
+from neuxelec.ui.neuxelec_color_dialog import NeuXelecColorDialog
 from neuxelec.ui.neuxelec_message_dialog import (
     NeuXelecMessageDialog,
     NeuXelecSelectionDialog,
@@ -402,6 +405,10 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         # make black pixels transparent.
         self._display_rotation1 = 0.0
         self._display_rotation2 = 0.0
+        #: Colour filling the slice frame, or None for the default black.
+        self._slice_background = None
+        #: (cache key of the slice, its alpha version), see _slice_background_alpha.
+        self._slice_background_cache = None
         self._slice_background_removed1 = False
         self._slice_background_removed2 = False
         self._rotation_dragging_slot = None
@@ -2170,6 +2177,16 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 contacts_visible = [True] * contacts.shape[0]
                 elec["contacts_visible"] = contacts_visible
 
+            # This path keeps its own visibility list, so the grey matter filter
+            # is applied here too, on the way out and without touching it.
+            try:
+                _elec_id = int((getattr(self.state, "electrodes", []) or []).index(elec))
+            except Exception:
+                _elec_id = None
+            contacts_visible = self._narrow_to_grey_matter(
+                _elec_id, contacts, list(contacts_visible)
+            )
+
             contact_labels_visible = elec.get("contact_labels_visible")
             if contact_labels_visible is None or len(contact_labels_visible) != contacts.shape[0]:
                 contact_labels_visible = [False] * contacts.shape[0]
@@ -2925,6 +2942,137 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         if refresh:
             self.render_slice_slot(slot)
 
+    # ------------------------------------------------------------------
+    # Background of the slice frame
+    #
+    # The point that matters: the black around the head is not a canvas, it is
+    # the air of the scan. Cutting it at a hard threshold, as the existing
+    # "background removed" mode does, leaves the skin/air transition - values
+    # around 20 to 40 - standing as a dark halo against any colour that is not
+    # black. So the alpha follows the intensity instead: air fully transparent,
+    # skin progressively opaque. The ramp is applied only outside the head, so
+    # that dark structures inside it stay dark rather than turning into holes.
+    BACKGROUND_AIR_LEVEL = 12          # at or below this, pure air
+    BACKGROUND_OPAQUE_LEVEL = 55.0     # at or above this, fully opaque
+    BACKGROUND_RAMP_MARGIN = 6         # pixels of head edge the ramp may touch
+
+    def _slice_background_alpha(self, pixmap: QPixmap) -> QPixmap:
+        """The same picture with its air transparent, computed once per slice.
+
+        The alpha depends only on the slice itself, never on the zoom, the pan
+        or the rotation, but the frame is repainted on every one of those. So
+        the result is kept and handed back until the slice changes, which the
+        pixmap's own cache key tells us.
+        """
+        if pixmap is None or pixmap.isNull():
+            return pixmap
+        try:
+            key = int(pixmap.cacheKey())
+        except Exception:
+            return self._slice_background_alpha_pixmap(pixmap)
+
+        kept = getattr(self, "_slice_background_cache", None)
+        if kept is not None and kept[0] == key:
+            return kept[1]
+
+        out = self._slice_background_alpha_pixmap(pixmap)
+        self._slice_background_cache = (key, out)
+        return out
+
+    def _slice_background_alpha_pixmap(self, pixmap: QPixmap) -> QPixmap:
+        """Make the air around the head transparent, softly."""
+        if pixmap is None or pixmap.isNull():
+            return pixmap
+
+        try:
+            from scipy.ndimage import binary_dilation, label
+
+            img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+            width, height = img.width(), img.height()
+            if width < 2 or height < 2:
+                return pixmap
+
+            # QImage rows can be padded, so the stride is read, never assumed.
+            stride = img.bytesPerLine()
+            raw = np.frombuffer(img.constBits(), dtype=np.uint8, count=stride * height)
+            pixels = raw.reshape(height, stride)[:, : width * 4].reshape(height, width, 4)
+
+            # max(axis=2) over an interleaved 4-channel view costs three
+            # times as much as two explicit maximums on its planes.
+            level = np.maximum(
+                np.maximum(pixels[:, :, 0], pixels[:, :, 1]), pixels[:, :, 2]
+            )
+            air = level <= self.BACKGROUND_AIR_LEVEL
+
+            # Only air connected to a border is background; air trapped inside
+            # the head - sinuses, orbits - is anatomy and stays black.
+            tags, count = label(air)
+            outside = np.zeros_like(air)
+            if count:
+                edges = np.concatenate([tags[0], tags[-1], tags[:, 0], tags[:, -1]])
+                # A lookup table indexed by label, rather than np.isin: same
+                # answer, a fraction of the time on a full-size slice.
+                touches_edge = np.zeros(count + 1, dtype=bool)
+                touches_edge[np.unique(edges)] = True
+                touches_edge[0] = False
+                outside = touches_edge[tags]
+
+            zone = binary_dilation(outside, iterations=self.BACKGROUND_RAMP_MARGIN)
+            alpha = np.full((height, width), 255, dtype=np.uint8)
+            # The ramp starts at the air level, not at zero: scanner air is
+            # rarely exactly 0, and a ramp from 0 would leave it faintly
+            # visible instead of gone.
+            span = max(1.0, self.BACKGROUND_OPAQUE_LEVEL - self.BACKGROUND_AIR_LEVEL)
+            ramp = np.clip((level.astype(np.float32) - self.BACKGROUND_AIR_LEVEL) / span, 0.0, 1.0)
+            alpha[zone] = (ramp[zone] * 255.0).astype(np.uint8)
+
+            out = np.ascontiguousarray(pixels.copy())
+            out[:, :, 3] = alpha
+            result = QImage(out.data, width, height, width * 4, QImage.Format_ARGB32)
+            return QPixmap.fromImage(result.copy())  # copy(): out is about to die
+
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Background transparency failed", exc_info=True
+            )
+            return pixmap
+
+    def _choose_slice_background(self) -> None:
+        """Ask for the colour of the frame, then repaint both slots."""
+        colour = NeuXelecColorDialog.get_color(
+            initial_color=str(getattr(self, "_slice_background", None) or "#404040"),
+            parent=self._slice_dialog_parent(),
+            title="Background color",
+        )
+        if not colour:
+            return
+        self._slice_background = str(colour)
+        self._refresh_slice_background()
+
+    def _clear_slice_background(self) -> None:
+        self._slice_background = None
+        self._refresh_slice_background()
+
+    def _slice_dialog_parent(self):
+        try:
+            return self.ui.window() if getattr(self, "ui", None) is not None else None
+        except Exception:
+            return None
+
+    def _refresh_slice_background(self) -> None:
+        """Redraw both slots with the new background.
+
+        render_slices_only() is the page's own "repaint what is displayed"
+        entry point; _render_slice() takes the label, the badge, the electrode
+        name and the angle, and is not callable with a slot number alone.
+        """
+        try:
+            self.render_slices_only()
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Background redraw failed", exc_info=True
+            )
+
     def _remove_black_background_from_pixmap(self, pixmap: QPixmap, threshold: int = 8) -> QPixmap:
         if pixmap is None or pixmap.isNull():
             return pixmap
@@ -3129,6 +3277,11 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             # drawing the contacts. Contact columns are mirrored too,
             # while text labels and PET/SISCOM scalar bars remain readable.
             # -----------------------------------------------------
+            # Before the flip and the crop, so the cache sees the slice itself
+            # rather than a fresh pixmap on every repaint.
+            if getattr(self, "_slice_background", None):
+                pm_source = self._slice_background_alpha(pm_source)
+
             source_for_display = QPixmap(pm_source)
             display_contact_cols = list(contact_cols)
 
@@ -3151,12 +3304,19 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 pan_xy=pan_xy,
             )
 
-            if remove_background:
+            # A chosen background takes precedence over the plain "background
+            # removed" mode, and uses a soft edge instead of a hard cut.
+            background = getattr(self, "_slice_background", None)
+
+            if not background and remove_background:
                 cropped = self._remove_black_background_from_pixmap(cropped)
 
             # 2) Final fixed canvas = full QLabel.
             canvas = QPixmap(target_w, target_h)
-            canvas.fill(Qt.transparent if remove_background else QColor(0, 0, 0))
+            if background:
+                canvas.fill(QColor(str(background)))
+            else:
+                canvas.fill(Qt.transparent if remove_background else QColor(0, 0, 0))
 
             # 3) Fit the cropped source into the final canvas.
             draw_x, draw_y, draw_w, draw_h, _scale = self._fit_source_rect_to_target(
@@ -3600,7 +3760,11 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 )
 
                 if pm_display is not None and not pm_display.isNull():
-                    if bool(state["remove_background"]):
+                    # With a chosen background the frame is already composited;
+                    # cutting it again would punch holes in it.
+                    if bool(state["remove_background"]) and not getattr(
+                        self, "_slice_background", None
+                    ):
                         pm_display = self._remove_black_background_from_pixmap(pm_display)
 
                     pm_display = self._overlay_scalar_bars_on_pixmap(pm_display)
@@ -5268,9 +5432,14 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 show_ictal_color=True,
                 show_interictal_color=True,
                 show_cortex_only_option=self._parcel1_img is not None,
+                show_grey_matter_option=self._grey_matter_available(),
+                grey_matter_only=bool(
+                    getattr(self.state, "contacts_grey_matter_only", False)
+                ),
                 cortex_only=bool(getattr(self.state, "functional_cortex_only", False)),
                 # Same rule as "Color PET" / "Color SISCOM" here: always offered.
                 show_fmri_color=True,
+                background_is_custom=bool(getattr(self, "_slice_background", None)),
             )
 
             if choice == "pet":
@@ -5287,6 +5456,12 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 self._toggle_color_scales()
             elif choice == "toggle_cortex_only":
                 self._toggle_functional_cortex_only()
+            elif choice == "toggle_grey_matter_only":
+                self._toggle_grey_matter_only()
+            elif choice == "background_color":
+                self._choose_slice_background()
+            elif choice == "background_reset":
+                self._clear_slice_background()
         except Exception:
             pass
 
@@ -5294,12 +5469,159 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         self._show_color_scales = not bool(getattr(self, "_show_color_scales", True))
         self._schedule_refresh(slices=True, brain=False)
 
+    # ------------------------------------------------------------------
+    # Contacts in grey matter
+    # ------------------------------------------------------------------
+    def _grey_matter_available(self) -> bool:
+        """The filter needs a parcellation that names grey regions."""
+        from ..utils.grey_matter import grey_matter_label_ids
+
+        if getattr(self, "_parcel1_img", None) is None:
+            return False
+        return bool(grey_matter_label_ids(getattr(self, "_parcel1_lut", {}) or {}))
+
+    def _grey_matter_volume(self):
+        """The labelling volume of the contacts table, cached.
+
+        Same volume as the BIDS export: the parcellation with the generic white
+        matter replaced by the detailed wmparc labels when one sits next to it,
+        so the filter and the table can never disagree.
+        """
+        import SimpleITK as _sitk
+
+        from ..seeg2parc import build_parcellation_volume
+        from ..utils.wmparc import find_sibling_wmparc
+
+        parcel = getattr(self, "_parcel1_img", None)
+        if parcel is None:
+            return None
+        path = str(getattr(self.state, "parcel1_path", "") or "")
+        key = (id(parcel), path)
+        # Same cache as the contacts table: one labelling volume per
+        # parcellation, not one per feature.
+        cache = getattr(self, "_parcel_conf_arr_cache", None)
+        if cache is None:
+            cache = {}
+            self._parcel_conf_arr_cache = cache
+        if key in cache:
+            return cache[key]
+        try:
+            raw = _sitk.GetArrayFromImage(parcel)
+            wm_img = find_sibling_wmparc(path, parcel)
+            wm_arr = _sitk.GetArrayFromImage(wm_img) if wm_img is not None else None
+            volume = build_parcellation_volume(raw, wm_arr)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Could not build the labelling volume", exc_info=True
+            )
+            volume = None
+        cache[key] = volume
+        return volume
+
+    def _grey_matter_contact_flags(self, elec_id: int, contacts_lps):
+        """One flag per contact of this electrode, cached per electrode."""
+        from ..utils.grey_matter import grey_matter_flags
+
+        parcel = getattr(self, "_parcel1_img", None)
+        volume = self._grey_matter_volume()
+        if parcel is None or volume is None:
+            return None
+        cache = getattr(self, "_grey_matter_flag_cache", None)
+        if cache is None or getattr(self, "_grey_matter_cache_key", None) != id(volume):
+            cache = {}
+            self._grey_matter_flag_cache = cache
+            self._grey_matter_cache_key = id(volume)
+        # Keyed on the coordinates themselves: editing a contact must not
+        # leave a stale answer behind.
+        key = (
+            int(elec_id),
+            tuple(
+                tuple(round(float(v), 3) for v in point) for point in contacts_lps
+            ),
+        )
+        flags = cache.get(key)
+        if flags is None:
+            flags = grey_matter_flags(
+                parcel, volume, getattr(self, "_parcel1_lut", {}) or {}, contacts_lps
+            )
+            cache[key] = flags
+        return flags
+
+    def _narrow_to_grey_matter(self, elec_id, contacts_lps, visible):
+        """Drop the contacts outside grey matter, when the filter is on.
+
+        Kept separate because this page projects the contacts through two
+        different paths, each holding its visibility in its own place.
+        """
+        if elec_id is None or not bool(
+            getattr(self.state, "contacts_grey_matter_only", False)
+        ):
+            return visible
+        flags = self._grey_matter_contact_flags(int(elec_id), contacts_lps)
+        if not flags:
+            return visible
+        return [bool(v and g) for v, g in zip(visible, flags)]
+
+    def _contacts_visible_for_draw(self, elec_id, contacts_lps):
+        """Stored visibility, narrowed to grey matter when the filter is on.
+
+        The filter never touches what the user chose contact by contact: it is
+        applied on the way out, so switching it off brings everything back.
+        """
+        count = len(contacts_lps)
+        if elec_id is None:
+            visible = [True] * count
+        else:
+            visible = list(self._get_local_contacts_visible(int(elec_id), count))
+        return self._narrow_to_grey_matter(elec_id, contacts_lps, visible)
+
     def _cortex_labels_available(self) -> bool:
         """True when parcellation 1 names cortical regions (see the 3D view)."""
         try:
             return bool(cortex_label_ids(getattr(self, "_parcel1_lut", {}) or {}))
         except Exception:
             return False
+
+    def _toggle_grey_matter_only(self) -> None:
+        """Show every contact, or only those whose region is grey matter.
+
+        Shared with the 3D View, like the cortex restriction.
+        """
+        turning_on = not bool(
+            getattr(self.state, "contacts_grey_matter_only", False)
+        )
+        if turning_on and not self._grey_matter_available():
+            NeuXelecMessageDialog.information(
+                self._dialog_parent(),
+                "Contacts in grey matter",
+                "Parcellation 1 does not name any grey matter region.\n\nThe filter reads FreeSurfer-style names and keeps every labelled region that is not white matter, ventricle or CSF. Load a FreeSurfer / FastSurfer parcellation, or its lookup table, to use it.",
+            )
+            return
+
+        self.state.contacts_grey_matter_only = turning_on
+        # The first switch builds the labelling volume and tests every contact,
+        # which takes a moment on a full parcellation.
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self._apply_grey_matter_change()
+        finally:
+            QApplication.restoreOverrideCursor()
+        vp = getattr(self.state, "view3d_page", None)
+        if vp is not None and hasattr(vp, "_apply_grey_matter_change"):
+            try:
+                vp._apply_grey_matter_change()
+            except Exception:
+                pass
+
+    def _apply_grey_matter_change(self) -> None:
+        """Redraw the slices and the contacts table after the filter changed."""
+        self._schedule_refresh(slices=True, brain=False)
+        try:
+            self._update_parcellation_contacts_table()
+        except Exception:
+            pass
 
     def _toggle_functional_cortex_only(self):
         # Shared with the 3D view via the app state.
@@ -6258,10 +6580,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         except Exception:
             elec_id = None
 
-        if elec_id is not None:
-            contacts_visible = self._get_local_contacts_visible(elec_id, contacts.shape[0])
-        else:
-            contacts_visible = [True] * contacts.shape[0]
+        contacts_visible = self._contacts_visible_for_draw(elec_id, contacts)
 
         try:
             elec_id = int(getattr(self.state, "electrodes", []).index(elec))
@@ -6443,10 +6762,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 continue
 
             contacts = elec.get("contacts_lps", []) or []
-            contacts_visible = self._get_local_contacts_visible(
-                elec_id,
-                len(contacts),
-            )
+            contacts_visible = self._contacts_visible_for_draw(elec_id, contacts)
 
             for i, p in enumerate(contacts):
                 if i >= len(contacts_visible) or not bool(contacts_visible[i]):

@@ -299,7 +299,7 @@ class View3DPage(
         # automatic levels must then stop overriding it.
         self._fmri_cmap_user_set = False
         self._fmri_threshold: float | None = None  # None = auto
-        self._fmri_vmax: float | None = None        # None = auto
+        self._fmri_vmax: float | None = None  # None = auto
         self._fmri_opacity = 0.85
         self._fmri_diverging = False
         self._fmri_controls_dialog = None
@@ -327,6 +327,8 @@ class View3DPage(
         self._siscom_color = (1.0, 0.0, 0.0)  # rouge
 
         self._brain_color = (0.83, 0.83, 0.83)  # light gray
+        # Ambient occlusion on the cortex: off by default because it costs
+        # render time on every frame.
         self.sld_3d_brainMaskOpacity: QSlider | None = None
         self.sld_3d_PialOpacity: QSlider | None = None
 
@@ -345,6 +347,8 @@ class View3DPage(
         # -------------------------
         # MNI atlas mode
         # -------------------------
+        #: Colour behind the 3D scene, or None for the page's own default.
+        self._view3d_background = None
         self.chk_mni_atlas = None
         self._mni_atlas_actor = None
         self._mni_electrode_actors = {}
@@ -806,7 +810,7 @@ class View3DPage(
 
             contacts_lps = elec.get("contacts_lps", []) or []
             contacts_idx = elec.get("contacts_idx", []) or []
-            contacts_visible = self._get_local_contacts_visible(elec_id, len(contacts_lps))
+            contacts_visible = self._contacts_visible_for_draw(elec_id, contacts_lps)
 
             pts = []
             for ci, p in enumerate(contacts_lps):
@@ -886,9 +890,7 @@ class View3DPage(
                     for ci, p in enumerate(contacts_lps):
                         if not bool(contacts_visible[ci]):
                             continue
-                        ras = np.array(
-                            [float(p[0]), float(p[1]), float(p[2])], dtype=np.float32
-                        )
+                        ras = np.array([float(p[0]), float(p[1]), float(p[2])], dtype=np.float32)
                         ras[0] *= -1.0
                         ras[1] *= -1.0
                         elec_label_pos = ras.copy()
@@ -1157,7 +1159,7 @@ class View3DPage(
         self.lbl_planes_info.hide()
 
         try:
-            self.plotter.set_background("black")
+            self._apply_view3d_background()
             self.plotter.show_axes()
             self._set_axes_widget_colored()
             self.plotter.enable_trackball_style()
@@ -4713,11 +4715,113 @@ class View3DPage(
     # ------------------------------------------------------------------
     # Cortex-only masking of the functional overlays (PET / SISCOM / fMRI)
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Contacts in grey matter
+    # ------------------------------------------------------------------
+    def _grey_matter_available(self) -> bool:
+        """The filter needs a parcellation that names grey regions."""
+        from ..utils.grey_matter import grey_matter_label_ids
+
+        if getattr(self, "_parcel1_img", None) is None:
+            return False
+        return bool(grey_matter_label_ids(getattr(self, "_parcel1_lut", {}) or {}))
+
+    def _grey_matter_volume(self):
+        """The labelling volume of the contacts table, cached.
+
+        Same volume as the BIDS export: the parcellation with the generic white
+        matter replaced by the detailed wmparc labels when one sits next to it,
+        so the filter and the table can never disagree.
+        """
+        import SimpleITK as _sitk
+
+        from ..seeg2parc import build_parcellation_volume
+        from ..utils.wmparc import find_sibling_wmparc
+
+        parcel = getattr(self, "_parcel1_img", None)
+        if parcel is None:
+            return None
+        path = str(getattr(self.state, "parcel1_path", "") or "")
+        key = (id(parcel), path)
+        # Same cache as the contacts table: one labelling volume per
+        # parcellation, not one per feature.
+        cache = getattr(self, "_parcel_conf_arr_cache", None)
+        if cache is None:
+            cache = {}
+            self._parcel_conf_arr_cache = cache
+        if key in cache:
+            return cache[key]
+        try:
+            raw = _sitk.GetArrayFromImage(parcel)
+            wm_img = find_sibling_wmparc(path, parcel)
+            wm_arr = _sitk.GetArrayFromImage(wm_img) if wm_img is not None else None
+            volume = build_parcellation_volume(raw, wm_arr)
+        except Exception:
+            logger.warning("Could not build the labelling volume", exc_info=True)
+            volume = None
+        cache[key] = volume
+        return volume
+
+    def _grey_matter_contact_flags(self, elec_id: int, contacts_lps):
+        """One flag per contact of this electrode, cached per electrode."""
+        from ..utils.grey_matter import grey_matter_flags
+
+        parcel = getattr(self, "_parcel1_img", None)
+        volume = self._grey_matter_volume()
+        if parcel is None or volume is None:
+            return None
+        cache = getattr(self, "_grey_matter_flag_cache", None)
+        if cache is None or getattr(self, "_grey_matter_cache_key", None) != id(volume):
+            cache = {}
+            self._grey_matter_flag_cache = cache
+            self._grey_matter_cache_key = id(volume)
+        # Keyed on the coordinates themselves: editing a contact must not
+        # leave a stale answer behind.
+        key = (
+            int(elec_id),
+            tuple(tuple(round(float(v), 3) for v in point) for point in contacts_lps),
+        )
+        flags = cache.get(key)
+        if flags is None:
+            flags = grey_matter_flags(
+                parcel, volume, getattr(self, "_parcel1_lut", {}) or {}, contacts_lps
+            )
+            cache[key] = flags
+        return flags
+
+    def _narrow_to_grey_matter(self, elec_id, contacts_lps, visible):
+        """Drop the contacts outside grey matter, when the filter is on.
+
+        Kept separate because the two drawing paths of the oblique page hold
+        their visibility in different places and both have to go through it.
+        """
+        if elec_id is None or not bool(getattr(self.state, "contacts_grey_matter_only", False)):
+            return visible
+        flags = self._grey_matter_contact_flags(int(elec_id), contacts_lps)
+        if not flags:
+            return visible
+        return [bool(v and g) for v, g in zip(visible, flags)]
+
+    def _contacts_visible_for_draw(self, elec_id, contacts_lps):
+        """Stored visibility, narrowed to grey matter when the filter is on.
+
+        The filter never touches what the user chose contact by contact: it is
+        applied on the way out, so switching it off brings everything back.
+        """
+        count = len(contacts_lps)
+        if elec_id is None:
+            visible = [True] * count
+        else:
+            visible = list(self._get_local_contacts_visible(int(elec_id), count))
+        return self._narrow_to_grey_matter(elec_id, contacts_lps, visible)
+
     def _has_parcellation(self) -> bool:
         return getattr(self, "_parcel1_img", None) is not None
 
     def _cortex_only_active(self) -> bool:
-        return bool(getattr(self.state, "functional_cortex_only", False)) and self._has_parcellation()
+        return (
+            bool(getattr(self.state, "functional_cortex_only", False)) and self._has_parcellation()
+        )
 
     def _cortex_mask_np_on(self, ref_img: sitk.Image | None):
         """Boolean cortical mask (z, y, x) resampled onto ``ref_img``'s grid.
@@ -4732,8 +4836,12 @@ class View3DPage(
             return self._cortex_mask_cache
         try:
             parc_on_ref = sitk.Resample(
-                parc, ref_img, sitk.Transform(3, sitk.sitkIdentity),
-                sitk.sitkNearestNeighbor, 0, parc.GetPixelID(),
+                parc,
+                ref_img,
+                sitk.Transform(3, sitk.sitkIdentity),
+                sitk.sitkNearestNeighbor,
+                0,
+                parc.GetPixelID(),
             )
             arr = sitk.GetArrayFromImage(parc_on_ref)
             mask = build_cortex_mask(arr, getattr(self, "_parcel1_lut", {}) or {})
@@ -4760,8 +4868,12 @@ class View3DPage(
         try:
             parc = self._parcel1_img
             parc_on = sitk.Resample(
-                parc, img, sitk.Transform(3, sitk.sitkIdentity),
-                sitk.sitkNearestNeighbor, 0, parc.GetPixelID(),
+                parc,
+                img,
+                sitk.Transform(3, sitk.sitkIdentity),
+                sitk.sitkNearestNeighbor,
+                0,
+                parc.GetPixelID(),
             )
             cortex = build_cortex_mask(
                 sitk.GetArrayFromImage(parc_on), getattr(self, "_parcel1_lut", {}) or {}
@@ -4788,6 +4900,47 @@ class View3DPage(
             return bool(cortex_label_ids(getattr(self, "_parcel1_lut", {}) or {}))
         except Exception:
             return False
+
+    def _toggle_grey_matter_only(self) -> None:
+        """Show every contact, or only those whose region is grey matter.
+
+        Shared with the Oblique Slice page, like the cortex restriction: the
+        setting describes the case, not one view.
+        """
+        turning_on = not bool(getattr(self.state, "contacts_grey_matter_only", False))
+        if turning_on and not self._grey_matter_available():
+            NeuXelecMessageDialog.information(
+                self._dialog_parent(),
+                "Contacts in grey matter",
+                "Parcellation 1 does not name any grey matter region.\n\nThe filter reads FreeSurfer-style names and keeps every labelled region that is not white matter, ventricle or CSF. Load a FreeSurfer / FastSurfer parcellation, or its lookup table, to use it.",
+            )
+            return
+
+        self.state.contacts_grey_matter_only = turning_on
+        # The first switch builds the labelling volume and tests every contact,
+        # which takes a moment on a full parcellation.
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self._apply_grey_matter_change()
+        finally:
+            QApplication.restoreOverrideCursor()
+        op = getattr(self.state, "oblique_page", None)
+        if op is not None and hasattr(op, "_apply_grey_matter_change"):
+            try:
+                op._apply_grey_matter_change()
+            except Exception:
+                pass
+
+    def _apply_grey_matter_change(self) -> None:
+        """Redraw the electrodes after the shared filter changed."""
+        try:
+            self.update_electrodes()
+        except Exception:
+            logger.warning("Could not redraw the electrodes", exc_info=True)
+        try:
+            self._refresh_visible_slice_electrode_overlays()
+        except Exception:
+            pass
 
     def _toggle_functional_cortex_only(self) -> None:
         turning_on = not bool(getattr(self.state, "functional_cortex_only", False))
@@ -5225,7 +5378,7 @@ class View3DPage(
 
                 contacts_lps = elec.get("contacts_lps", []) or []
                 contacts_idx = elec.get("contacts_idx", []) or []
-                contacts_visible = self._get_local_contacts_visible(elec_id, len(contacts_lps))
+                contacts_visible = self._contacts_visible_for_draw(elec_id, contacts_lps)
 
                 # ---------- points / shaft ----------
                 pts = []
@@ -8202,9 +8355,7 @@ class View3DPage(
                     getattr(self, "_keep_electrodes_visible_through_slices", False)
                 ),
                 show_siscom_crop_option=self._show_siscom_crop_option(),
-                siscom_dont_crop=bool(
-                    getattr(self, "_keep_siscom_blob_through_slices", False)
-                ),
+                siscom_dont_crop=bool(getattr(self, "_keep_siscom_blob_through_slices", False)),
                 show_slice_plane_frames_option=self._slice_plane_frames_option_available(),
                 slice_plane_frames_visible=bool(getattr(self, "_slice_plane_frames_visible", True)),
                 can_add_marker=bool(clicked_slice_ras is not None),
@@ -8215,15 +8366,24 @@ class View3DPage(
                 show_plan_option=self._has_plan_trajectories(),
                 plan_visible=bool(getattr(self, "_plan_traj_visible", False)),
                 show_cortex_only_option=self._has_parcellation(),
+                show_grey_matter_option=self._grey_matter_available(),
+                grey_matter_only=bool(getattr(self.state, "contacts_grey_matter_only", False)),
                 cortex_only=bool(getattr(self.state, "functional_cortex_only", False)),
                 # Same rule as "Color PET": always offered in native mode.
                 show_fmri_color=True,
+                background_is_custom=bool(getattr(self, "_view3d_background", None)),
                 show_fmri_surface=self._fmri_source_image() is not None,
                 fmri_blob_on=bool(getattr(self, "_fmri_surface_shown", False)),
                 fmri_pial_on=bool(getattr(self, "_fmri_pial_shown", False)),
                 fmri_keep_on=bool(getattr(self, "_keep_fmri_blob_through_slices", False)),
             )
-            if choice == "marker_list":
+            if choice == "background_color":
+                self._choose_view3d_background()
+
+            elif choice == "background_reset":
+                self._clear_view3d_background()
+
+            elif choice == "marker_list":
                 self._open_marker_list_dialog()
 
             elif choice == "add_marker" and clicked_slice_ras is not None:
@@ -8282,6 +8442,9 @@ class View3DPage(
 
             elif choice == "toggle_cortex_only":
                 self._toggle_functional_cortex_only()
+
+            elif choice == "toggle_grey_matter_only":
+                self._toggle_grey_matter_only()
 
             elif choice == "load_mni_electrodes":
                 self.open_mni_electrodes_files()
@@ -8476,6 +8639,55 @@ class View3DPage(
         except Exception:
             pass
 
+    #: The scene's background when the user has not chosen one. The
+    #: brain-render lighting used to repaint it #2b2d31 behind the user's
+    #: back; black everywhere is both prettier and predictable, and it is what
+    #: "Reset background" now returns to.
+    VIEW3D_DEFAULT_BACKGROUND = "black"
+
+    def _view3d_default_background(self) -> str:
+        return self.VIEW3D_DEFAULT_BACKGROUND
+
+    def _apply_view3d_background(self) -> None:
+        """Paint the scene: the user's colour if there is one, else black.
+
+        Every place that sets a background goes through here - the initial
+        setup and the brain-render lighting both - so a colour the user picked
+        is never quietly overwritten.
+        """
+        if self.plotter is None:
+            return
+        try:
+            colour = getattr(self, "_view3d_background", None) or self.VIEW3D_DEFAULT_BACKGROUND
+            self.plotter.set_background(str(colour))
+        except Exception:
+            pass
+
+    def _choose_view3d_background(self) -> None:
+        """Ask for a background colour and apply it.
+
+        Useful for a screenshot or an animation that has to sit on a slide:
+        painting the scene in the colour of the slide reads as no background
+        at all, which no amount of transparency can do in a GIF.
+        """
+        colour = NeuXelecColorDialog.get_color(
+            initial_color=str(
+                getattr(self, "_view3d_background", None) or self._view3d_default_background()
+            ),
+            parent=self._dialog_parent(),
+            title="Background color",
+        )
+        if not colour:
+            return
+        self._view3d_background = str(colour)
+        self._apply_view3d_background()
+        self._render()
+
+    def _clear_view3d_background(self) -> None:
+        self._view3d_background = None
+        self._apply_view3d_background()
+        self._render()
+
     def _open_brain_render_dialog(self):
         try:
             if self._brain_render_dialog is None:
@@ -8494,10 +8706,10 @@ class View3DPage(
 
         p = getattr(self, "_brain_render_params", {})
 
-        try:
-            self.plotter.set_background("#2b2d31")
-        except Exception:
-            pass
+        # Through the setter, so a colour the user picked is not silently
+        # undone the next time the lighting is rebuilt - and so the lighting
+        # no longer imposes its own grey on a scene meant to be black.
+        self._apply_view3d_background()
 
         try:
             self.plotter.remove_all_lights()
@@ -10332,8 +10544,12 @@ class View3DPage(
             return
         rgba = self._build_fmri_plane_rgba_highres(geom)
         self._render_textured_plane_actor(
-            "_coronal_fmri_actor", "coronal_fmri", "_coronal_fmri_source_mesh",
-            "coronal", geom, rgba,
+            "_coronal_fmri_actor",
+            "coronal_fmri",
+            "_coronal_fmri_source_mesh",
+            "coronal",
+            geom,
+            rgba,
         )
 
     def _render_axial_fmri_overlay(self) -> None:
@@ -10347,8 +10563,12 @@ class View3DPage(
             return
         rgba = self._build_fmri_plane_rgba_highres(geom)
         self._render_textured_plane_actor(
-            "_axial_fmri_actor", "axial_fmri", "_axial_fmri_source_mesh",
-            "axial", geom, rgba,
+            "_axial_fmri_actor",
+            "axial_fmri",
+            "_axial_fmri_source_mesh",
+            "axial",
+            geom,
+            rgba,
         )
 
     def _render_sagittal_fmri_overlay(self) -> None:
@@ -10362,8 +10582,12 @@ class View3DPage(
             return
         rgba = self._build_fmri_plane_rgba_highres(geom)
         self._render_textured_plane_actor(
-            "_sagittal_fmri_actor", "sagittal_fmri", "_sagittal_fmri_source_mesh",
-            "sagittal", geom, rgba,
+            "_sagittal_fmri_actor",
+            "sagittal_fmri",
+            "_sagittal_fmri_source_mesh",
+            "sagittal",
+            geom,
+            rgba,
         )
 
     def _render_visible_fmri_overlays_only(self) -> None:
@@ -12002,6 +12226,14 @@ class View3DPage(
 
                     event.accept()
                     return True
+
+        except RuntimeError as e:
+            # On shutdown Qt destroys the electrode tree before its event
+            # filter is removed, so the next event reaches a C++ object that
+            # is already gone. Nothing is wrong and nothing can be done: the
+            # window is closing. Any other RuntimeError is still reported.
+            if "already deleted" not in str(e):
+                print("[MNI bulk check] event failed:", e)
 
         except Exception as e:
             print("[MNI bulk check] event failed:", e)

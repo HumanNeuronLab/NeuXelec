@@ -1107,9 +1107,7 @@ class ExportCoordinatesDialog(QDialog):
         lay_bids.addLayout(bids_options_row)
 
         # Optional defacing for the native BIDS export (anonymization).
-        self.chk_deface = QCheckBox(
-            "Deface exported images (anonymize) - native BIDS only"
-        )
+        self.chk_deface = QCheckBox("Deface exported images (anonymize) - native BIDS only")
         self.chk_deface.setToolTip(
             "Remove the whole facial region - front of the face (skin, eyes, nose, "
             "mouth) and the ears - from the exported T1, CT, PET and SISCOM images, "
@@ -1154,16 +1152,12 @@ class ExportCoordinatesDialog(QDialog):
         self.chk_inc_ct.setToolTip("Add the CT coregistered to the T1.")
         self.chk_inc_pet.setToolTip("Add the PET coregistered to the T1.")
         self.chk_inc_fmri.setToolTip("Add the fMRI activation map coregistered to the T1.")
-        self.chk_inc_spect.setToolTip(
-            "Add the ictal and interictal SPECT coregistered to the T1."
-        )
+        self.chk_inc_spect.setToolTip("Add the ictal and interictal SPECT coregistered to the T1.")
         self.chk_inc_siscom.setToolTip("Add the SISCOM map in T1 space.")
         self.chk_inc_parc.setToolTip(
             "Add the loaded parcellation volume(s) in T1 space (derivatives/)."
         )
-        self.chk_inc_brainmask.setToolTip(
-            "Add the subject brain mask in T1 space (derivatives/)."
-        )
+        self.chk_inc_brainmask.setToolTip("Add the subject brain mask in T1 space (derivatives/).")
         include_grid = QGridLayout()
         include_grid.setContentsMargins(0, 0, 0, 0)
         for i, chk in enumerate(self._bids_include_checks):
@@ -1722,9 +1716,7 @@ class ExportCoordinatesDialog(QDialog):
             lut = lut or {}
 
             def sampler(lps_xyz):
-                idx = parc_img.TransformPhysicalPointToIndex(
-                    tuple(float(v) for v in lps_xyz)
-                )
+                idx = parc_img.TransformPhysicalPointToIndex(tuple(float(v) for v in lps_xyz))
                 # SITK index is (x, y, z); the numpy array is [z, y, x].
                 return label_contact((idx[2], idx[1], idx[0]), parc_vol, lut)
 
@@ -2682,8 +2674,7 @@ class ExportCoordinatesDialog(QDialog):
         (TXT/CSV/TSV/JSON) is selected. Cartool ELS and BIDS ignore it."""
         try:
             tabular_on = any(
-                chk.isChecked()
-                for chk in (self.chk_txt, self.chk_csv, self.chk_tsv, self.chk_json)
+                chk.isChecked() for chk in (self.chk_txt, self.chk_csv, self.chk_tsv, self.chk_json)
             )
         except Exception:
             tabular_on = True
@@ -2729,6 +2720,7 @@ class ExportCoordinatesDialog(QDialog):
 
     def _parcellation_names(self):
         """Return (name1, name2): the loaded parcellation file names, or ''."""
+
         def _name(path):
             try:
                 return Path(path).name if path else ""
@@ -2963,6 +2955,7 @@ class ExportCoordinatesDialog(QDialog):
         The T1 is always exported; everything here is opt-in (default off) and
         written under derivatives/neuxelec/.
         """
+
         def _on(name: str) -> bool:
             chk = getattr(self, name, None)
             try:
@@ -3019,7 +3012,14 @@ class ExportCoordinatesDialog(QDialog):
 
             from neuxelec.coregistration import subject_face_blur_region
 
-            outd = tempfile.mkdtemp(prefix="neuxelec_deface_")
+            # Work in the session's transforms folder when there is one. The
+            # defacing needs the same T1 to template registration as the brain
+            # mask and the MNI coordinates, and that folder is where it is kept:
+            # working there reuses it instead of spending three minutes
+            # recomputing it into a temporary folder that is then thrown away.
+            outd = getattr(self.state, "transforms_dir", None) or tempfile.mkdtemp(
+                prefix="neuxelec_deface_"
+            )
 
             # Reuse the already-computed brain mask if the session has one, to
             # skip a redundant ANTs brain-extraction run.
@@ -3058,8 +3058,12 @@ class ExportCoordinatesDialog(QDialog):
             img = sitk.ReadImage(str(src))
             # Region resampled onto this image's grid (linear, then thresholded).
             a = sitk.Resample(
-                deface_img, img, sitk.Transform(3, sitk.sitkIdentity),
-                sitk.sitkLinear, 0.0, sitk.sitkFloat32,
+                deface_img,
+                img,
+                sitk.Transform(3, sitk.sitkIdentity),
+                sitk.sitkLinear,
+                0.0,
+                sitk.sitkFloat32,
             )
             arr = sitk.GetArrayFromImage(img)
             m = sitk.GetArrayViewFromImage(a) >= 0.5
@@ -3162,8 +3166,7 @@ class ExportCoordinatesDialog(QDialog):
 
             # The T1 is always included (anat/).
             _put(
-                getattr(self.state, "t1_path", None)
-                or getattr(self.state, "t1_source_path", None),
+                getattr(self.state, "t1_path", None) or getattr(self.state, "t1_source_path", None),
                 anat_dir / f"{sub}_T1w.nii.gz",
             )
             # Everything else is opt-in and goes under derivatives/.
@@ -3300,9 +3303,7 @@ class ExportCoordinatesDialog(QDialog):
             bids_fields += ["tissueLabel2"] + [f"tissueWeights2_{i + 1}" for i in range(n2)]
 
         with open(electrodes_tsv, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(
-                f, fieldnames=bids_fields, delimiter="\t", restval="n/a"
-            )
+            writer = csv.DictWriter(f, fieldnames=bids_fields, delimiter="\t", restval="n/a")
             writer.writeheader()
             for r in bids_rows:
                 writer.writerow(r)

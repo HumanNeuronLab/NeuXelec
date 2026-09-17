@@ -6,7 +6,8 @@ NeuXelec logo on the cover, a table of contents, figures and page numbers.
 
     python scripts/build_manual.py [output.pdf]
 
-Default output: ``docs/NeuXelec_User_Guide_<version>.pdf``.
+Default output: ``installer/NeuXelec_User_Guide_<version>.pdf``,
+beside the setup executables rather than in docs/, which is for text.
 """
 
 from __future__ import annotations
@@ -462,6 +463,6 @@ if __name__ == "__main__":
     target = (
         Path(sys.argv[1])
         if len(sys.argv) > 1
-        else ROOT / "docs" / f"NeuXelec_User_Guide_{__version__}.pdf"
+        else ROOT / "installer" / f"NeuXelec_User_Guide_{__version__}.pdf"
     )
     build(target)

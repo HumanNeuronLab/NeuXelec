@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .project_paths import annotate_paths
+
 logger = logging.getLogger(__name__)
 
 PROJECT_SCHEMA_VERSION = 1
@@ -132,6 +134,12 @@ def build_project_dict_from_state(state) -> dict[str, Any]:
                     getattr(state, "t1_to_mni_warped_path", None)
                 ),
             },
+            "plan_mri": {
+                # The planning MRI resampled into MRI 1 space. Saving it is what
+                # lets the alignment the whole plan rests on be reviewed again
+                # after the project is closed.
+                "path": _as_str_or_none(getattr(state, "plan_mri_in_t1_path", None)),
+            },
             "parcel1": {
                 "path": _as_str_or_none(getattr(state, "parcel1_path", None)),
             },
@@ -170,13 +178,27 @@ def build_project_dict_from_state(state) -> dict[str, Any]:
     }
 
 
-def save_project_json(state, project_path: str | Path) -> Path:
+def write_project_dict(data: dict[str, Any], project_path: str | Path) -> Path:
+    """Write a project dict to disk, portability keys refreshed.
+
+    Every stored path gets its ``_rel`` and ``_fp`` companions here, so a project
+    can be found again after its folder moves. See :mod:`neuxelec.project_paths`.
+    """
     project_path = Path(project_path)
     project_path.parent.mkdir(parents=True, exist_ok=True)
 
-    data = build_project_dict_from_state(state)
+    try:
+        annotate_paths(data, project_path)
+    except Exception:
+        # Portability is a convenience; never let it stop a project from saving.
+        logger.warning("Could not annotate project paths", exc_info=True)
+
     project_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return project_path
+
+
+def save_project_json(state, project_path: str | Path) -> Path:
+    return write_project_dict(build_project_dict_from_state(state), project_path)
 
 
 def create_empty_project_file(project_path: str | Path, patient_id: str) -> Path:
@@ -244,6 +266,7 @@ def create_empty_project_file(project_path: str | Path, patient_id: str) -> Path
                 "t1_to_mni_inverse_warp_path": None,
                 "t1_to_mni_warped_path": None,
             },
+            "plan_mri": {"path": None},
             "parcel1": {"path": None},
             "parcel2": {"path": None},
             "lh_pial": {"path": None},
@@ -263,8 +286,7 @@ def create_empty_project_file(project_path: str | Path, patient_id: str) -> Path
             "saved_views": {},
         },
     }
-    project_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    return project_path
+    return write_project_dict(data, project_path)
 
 
 def load_project_json(project_path: str | Path) -> dict[str, Any]:
@@ -313,6 +335,7 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
     )
     brainmask = files.get("brainmask", {}) if isinstance(files.get("brainmask"), dict) else {}
     mni = files.get("mni", {}) if isinstance(files.get("mni"), dict) else {}
+    plan_mri = files.get("plan_mri", {}) if isinstance(files.get("plan_mri"), dict) else {}
     parcel1 = files.get("parcel1", {}) if isinstance(files.get("parcel1"), dict) else {}
     parcel2 = files.get("parcel2", {}) if isinstance(files.get("parcel2"), dict) else {}
 
@@ -361,6 +384,8 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
     state.t1_to_mni_warp_path = _as_str_or_none(mni.get("t1_to_mni_warp_path"))
     state.t1_to_mni_inverse_warp_path = _as_str_or_none(mni.get("t1_to_mni_inverse_warp_path"))
     state.t1_to_mni_warped_path = _as_str_or_none(mni.get("t1_to_mni_warped_path"))
+
+    state.plan_mri_in_t1_path = _as_str_or_none(plan_mri.get("path"))
     state.parcel1_path = _as_str_or_none(parcel1.get("path"))
     state.parcel2_path = _as_str_or_none(parcel2.get("path"))
     state.lh_pial_path = _as_str_or_none(lh_pial.get("path"))

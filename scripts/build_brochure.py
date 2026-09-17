@@ -6,7 +6,8 @@ background, the logo on top.
 
     python scripts/build_brochure.py [output.pdf]
 
-Default output: ``docs/NeuXelec_Brochure_<version>.pdf``.
+Default output: ``installer/NeuXelec_Brochure_<version>.pdf``,
+beside the setup executables rather than in docs/, which is for text.
 """
 
 from __future__ import annotations
@@ -133,7 +134,8 @@ PAGE_TWO = f"""
       "Oblique slices cut along the axis of an electrode show every contact of "
       "a shaft at once, turn around it and travel millimetre by millimetre "
       "beside it. The 3D scene puts electrodes, brain surface, slice planes and "
-      "functional maps in one picture.")}
+      "functional maps in one picture, and one click narrows the display to "
+      "the contacts sitting in grey matter.")}
 
 {step("7", "Export to whatever comes next",
       "Contact coordinates as TXT, CSV, TSV, JSON, Cartool ELS or iELVIS, in "
@@ -155,9 +157,10 @@ that matter.</p>
 it, never behind your back.</p>
 <p><b>Nothing is written without you.</b> A validated coregistration lives in
 the session until you save it, and NeuXelec says so if you leave it behind.</p>
-<p><b>A project reopens as you left it.</b> Images, electrodes, colours and
-display settings come back in one click, and a read-only mode lets you hand the
-case over without any risk of changing it.</p>
+<p><b>A project reopens as you left it, on any machine.</b> Images, electrodes,
+colours and display settings come back in one click, and a project moved to
+another computer finds its images again on its own. A read-only mode lets you
+hand the case over without any risk of changing it.</p>
 <p><b>Nothing to configure, nothing to learn by heart.</b> A Windows installer
 with the registration tools included, an update notice when a new version is
 out, a guided tour on the first launch and the whole user guide behind F1.</p>
@@ -319,6 +322,6 @@ if __name__ == "__main__":
     target = (
         Path(sys.argv[1])
         if len(sys.argv) > 1
-        else ROOT / "docs" / f"NeuXelec_Brochure_{__version__}.pdf"
+        else ROOT / "installer" / f"NeuXelec_Brochure_{__version__}.pdf"
     )
     build(target)

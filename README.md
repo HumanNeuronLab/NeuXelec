@@ -46,6 +46,31 @@ Website and documentation: **https://neuxelec.com**
 
 ---
 
+## What is new in 1.2.1
+
+- **A project opens on another computer.** Image paths are stored both as they
+  were and relative to the project file, with a fingerprint of each file, so a
+  project carried to another machine, another drive letter or another network
+  share finds its data again on its own. When a file has genuinely moved,
+  NeuXelec walks the neighbouring folders for it, and learns from a folder you
+  point at once to resolve every other file that moved with it. Only what is
+  still missing is asked for, and a fingerprint keeps another patient's
+  same-named scan from being bound by mistake.
+- **One registration to the template instead of several.** The brain mask,
+  the defacing and the MNI normalization shared the same MRI-to-template
+  registration and each recomputed it. It is now computed once and reused,
+  which removes the bulk of the files the brain mask used to leave behind.
+- **Planning MRI and electrodes can be saved together**, and a reopened
+  project finds the registered planning MRI again.
+- **Contacts restricted to grey matter**, in the contact table and in both
+  views.
+- **A background colour for the 3D view and for the oblique slices**, so a
+  screenshot or an animation drops straight onto a coloured slide. In the
+  oblique view the air around the head fades into the colour instead of being
+  cut, leaving no dark outline.
+
+---
+
 ## What is new in 1.2.0
 
 - **NeuroInspire plan import.** `.nip` files are read by a pure-Python reader

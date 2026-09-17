@@ -23,6 +23,75 @@ if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
 from .ui.project_loading_window import ProjectLoadingWindow
 
 
+def _resolve_project_files(
+    data: dict,
+    project_path: str,
+    mode: str,
+    project_loader: ProjectLoadingWindow | None = None,
+) -> bool:
+    """Find the project's files again before a single image is read.
+
+    A project stores absolute paths. Moving the patient folder, changing a drive
+    letter or opening the project on another machine invalidates all of them, and
+    until now every failed read was swallowed silently: the project opened with
+    its electrodes but no images, and said nothing.
+
+    Everything that can be resolved on its own is, quietly. The user is asked
+    only when a file the project actually needs is still missing. Returns False
+    when they chose not to open the project at all.
+    """
+    from PySide6.QtWidgets import QDialog
+
+    from .project_paths import apply_resolutions, resolve_project_paths
+
+    try:
+        report = resolve_project_paths(data, project_path)
+    except Exception:
+        logger.warning("Could not check the project files", exc_info=True)
+        return True
+
+    update_project = False
+    if report.needs_user_input:
+        from .ui.relocate_files_dialog import RelocateFilesDialog
+
+        accepted = True
+        if project_loader is not None:
+            project_loader.hide()
+        try:
+            dialog = RelocateFilesDialog(
+                report,
+                offer_project_update=(str(mode).lower().strip() == "edit"),
+            )
+            accepted = dialog.exec() == QDialog.Accepted
+            update_project = accepted and dialog.update_project_requested
+        except Exception:
+            # A broken dialog must not make the project unopenable.
+            logger.warning("Could not ask where the missing files went", exc_info=True)
+        finally:
+            if project_loader is not None:
+                project_loader.show()
+                QApplication.processEvents()
+
+        if not accepted:
+            return False
+
+    changed = apply_resolutions(data, report)
+    if changed:
+        logger.info("Project paths resolved: %s", report.summary())
+
+    # The project file is only rewritten when the user asked for it in the
+    # dialog. A silent relocation needs no rewrite: the relative paths keep
+    # working, and the next ordinary save records the new locations anyway.
+    if changed and update_project:
+        try:
+            from .project_io import write_project_dict
+
+            write_project_dict(data, project_path)
+        except Exception:
+            logger.warning("Could not update the project file", exc_info=True)
+    return True
+
+
 def _set_windows_app_id() -> None:
     """
     Give NeuXelec its own Windows AppUserModelID.
@@ -199,6 +268,16 @@ def main() -> int:
                 "Reading project data",
             )
             data = load_project_json(project_path)
+
+            project_loader.set_progress(
+                0.30,
+                "Checking project files",
+            )
+            if not _resolve_project_files(data, project_path, mode, project_loader):
+                # The user preferred not to open a project whose files are
+                # missing: back to the project selection, nothing was loaded.
+                project_loader.close()
+                continue
 
             project_loader.set_progress(
                 0.36,

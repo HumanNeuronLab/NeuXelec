@@ -35,6 +35,10 @@ hiddenimports = [
     "neuxelec.help.content",
     "neuxelec.help.tour",
     "neuxelec.help.user_guide_dialog",
+    # Same reason: the relocation dialog is imported inside the project-opening
+    # function, only when a file is missing.
+    "neuxelec.project_paths",
+    "neuxelec.ui.relocate_files_dialog",
 ]
 binaries = []
 for package_name in (

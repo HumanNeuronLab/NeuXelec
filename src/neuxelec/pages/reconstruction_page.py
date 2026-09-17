@@ -833,9 +833,7 @@ class ReconstructionPage:
             self.combo_ref.currentTextChanged.connect(lambda _: self._update_estimate_enabled())
             # Right-click the reference selector to delete a user reference.
             self.combo_ref.setContextMenuPolicy(Qt.CustomContextMenu)
-            self.combo_ref.customContextMenuRequested.connect(
-                self._show_ref_list_context_menu
-            )
+            self.combo_ref.customContextMenuRequested.connect(self._show_ref_list_context_menu)
         if self.edit_nb_contacts is not None:
             self.edit_nb_contacts.textChanged.connect(lambda _: self._update_estimate_enabled())
 
@@ -1402,9 +1400,7 @@ class ReconstructionPage:
 
     def _ordered_ref_names(self) -> list[str]:
         """Reference names sorted alphabetically, with 'Other' always last."""
-        rest = sorted(
-            (n for n in self._refs if not self._is_other_ref(n)), key=str.lower
-        )
+        rest = sorted((n for n in self._refs if not self._is_other_ref(n)), key=str.lower)
         others = [n for n in self._refs if self._is_other_ref(n)]
         return rest + others
 
@@ -1526,9 +1522,7 @@ class ReconstructionPage:
             return
         from ..ui.context_menus import make_base_menu
 
-        user_refs = [
-            n for n in self._ordered_ref_names() if _is_user_electrode_ref(n)
-        ]
+        user_refs = [n for n in self._ordered_ref_names() if _is_user_electrode_ref(n)]
         menu = make_base_menu()
         if not user_refs:
             act = menu.addAction("No custom reference to delete")
@@ -2148,7 +2142,6 @@ class ReconstructionPage:
         except Exception:
             pass
 
-
     # ------------------------------------------------------------------
     # Automatic detection from the implantation plan
     # ------------------------------------------------------------------
@@ -2224,14 +2217,40 @@ class ReconstructionPage:
         t = max(0.0, min(1.0, float((p - a) @ ab) / denom))
         return float(np.linalg.norm(p - (a + t * ab)))
 
+    def _reconstructed_plan_names(self) -> set[str]:
+        """Normalised names of the electrodes that are already reconstructed.
+
+        The electrode currently being edited is not one of them: re-picking its
+        axis must still be able to match its own planned trajectory. Same rule,
+        and same normalisation, as the duplicate name check.
+        """
+        done: set[str] = set()
+        editing = getattr(self, "_editing_elec_id", None)
+        for elec_id, elec in enumerate(self._electrodes or []):
+            if editing is not None and int(elec_id) == int(editing):
+                continue
+            name = str(elec.get("name", "")).strip()
+            if name:
+                done.add(self._normalize_electrode_name(name))
+        return done
+
     def _rank_plan_trajectories(
-        self, lps, restrict_hemi: str | None = None
+        self,
+        lps,
+        restrict_hemi: str | None = None,
+        skip_reconstructed: bool = True,
     ) -> list[tuple[float, dict]]:
+        done = self._reconstructed_plan_names() if skip_reconstructed else set()
         ranked = []
         for tr in self._plan_trajectories():
             # Hemisphere firewall: never propose an electrode from the opposite
             # side of the one the user clicked in.
             if restrict_hemi is not None and self._plan_hemi(tr) != restrict_hemi:
+                continue
+            # An electrode that is already reconstructed is not a candidate any
+            # more: proposing it would only offer a name the reconstruction
+            # would then refuse as a duplicate.
+            if done and self._normalize_electrode_name(str(tr.get("name", "")).strip()) in done:
                 continue
             d = self._point_to_segment_mm(lps, tr["target_t1_lps"], tr["entry_t1_lps"])
             ranked.append((d, tr))
@@ -2311,9 +2330,7 @@ class ReconstructionPage:
         if self.edit_elec_name is not None and self.edit_elec_name.text().strip():
             return  # do not override a name the user already typed
         # Hemisphere firewall: a left click only matches left-side plan electrodes.
-        ranked = self._rank_plan_trajectories(
-            deep_lps, restrict_hemi=self._point_hemi(deep_lps)
-        )
+        ranked = self._rank_plan_trajectories(deep_lps, restrict_hemi=self._point_hemi(deep_lps))
         if not ranked:
             return
         d0, tr0 = ranked[0]
@@ -2335,7 +2352,9 @@ class ReconstructionPage:
             self._apply_plan_traj(tr0)
         elif res == "other":
             self._pick_plan_traj_from_list(
-                ranked, parent, "Choose the planned electrode",
+                ranked,
+                parent,
+                "Choose the planned electrode",
                 "Pick the electrode this deep contact belongs to:",
             )
 
@@ -2357,9 +2376,7 @@ class ReconstructionPage:
         if tr is None or self._deep_lps is None or self._second_lps is None:
             return
         drawn = np.asarray(self._second_lps, float) - np.asarray(self._deep_lps, float)
-        planned = np.asarray(tr["entry_t1_lps"], float) - np.asarray(
-            tr["target_t1_lps"], float
-        )
+        planned = np.asarray(tr["entry_t1_lps"], float) - np.asarray(tr["target_t1_lps"], float)
         nd = float(np.linalg.norm(drawn))
         npd = float(np.linalg.norm(planned))
         if nd < 1e-6 or npd < 1e-6:
