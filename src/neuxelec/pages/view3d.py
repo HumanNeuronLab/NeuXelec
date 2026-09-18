@@ -1389,7 +1389,7 @@ class View3DPage(
         self.sld_brain_iso_pct = self.ui.findChild(QSlider, "sld_3d_brainIsoPerct")
 
         # Opacity values are later divided by 100.0, so these sliders must
-        # explicitly use a 0–100 range.
+        # explicitly use a 0-100 range.
         if self.sld_3d_brainMaskOpacity is not None:
             self.sld_3d_brainMaskOpacity.setRange(0, 100)
             self.sld_3d_brainMaskOpacity.setSingleStep(1)
