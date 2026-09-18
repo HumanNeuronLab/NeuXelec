@@ -244,8 +244,8 @@ def normalize_image(
 
     # Reorient to the canonical orientation NeuXelec's viewers are built around
     # (RAS: ix -> patient Right, 3rd axis -> Superior). A correctly-oriented
-    # study such as PAT_6980 is already RAS and passes through unchanged; a
-    # non-canonical study such as EL046 (LIP) is brought into the same frame so
+    # study already stored in RAS passes through unchanged; one stored in a
+    # different convention, LIP for instance, is brought into the same frame so
     # it displays identically. Pure axis permutation/flip, physical coordinates
     # preserved.
     src_orient = orientation_code(img)

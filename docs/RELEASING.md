@@ -45,10 +45,15 @@ python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()
 
 Upload to `neuxelec.com/downloads/` (FTP). Example:
 
+> `<ftp_host>`, `<ftp_user>` and `<ftp_pass>` are the FTP credentials of the
+> hosting account. They are deliberately not written down here: this repository
+> is public. Find them in the Infomaniak manager, under the hosting's FTP
+> accounts, or use SSH instead if a key is installed.
+
 ```bash
 curl --ftp-ssl --ftp-create-dirs -u "<ftp_user>:<ftp_pass>" \
   -T "installer/NeuXelec_Setup_X.Y.Z.exe" \
-  "ftp://146wkx.ftp.infomaniak.com/sites/neuxelec.com/downloads/NeuXelec_Setup_X.Y.Z.exe"
+  "ftp://<ftp_host>/sites/neuxelec.com/downloads/NeuXelec_Setup_X.Y.Z.exe"
 ```
 
 ## 6. Update and upload `latest.json`
@@ -70,7 +75,7 @@ Upload it to the site root:
 ```bash
 curl --ftp-ssl -u "<ftp_user>:<ftp_pass>" \
   -T "Neuxelec_site/latest.json" \
-  "ftp://146wkx.ftp.infomaniak.com/sites/neuxelec.com/latest.json"
+  "ftp://<ftp_host>/sites/neuxelec.com/latest.json"
 ```
 
 ## 7. Verify
