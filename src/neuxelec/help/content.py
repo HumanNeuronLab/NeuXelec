@@ -363,7 +363,7 @@ click or Esc gives up. The marker remembers which slice it was dropped on.</p>
 <p><b>Move marker</b>, on a marker, picks it back up: the same cross follows
 the slice, and the click puts it down, on the same slice or another one. It
 keeps its name, colour and size, so moving one is not filling it in again.</p>
-<p>A marker can then be renamed, hidden or exported from the marker list.
+<p>A marker can then be renamed or hidden from the marker list.
 <b>Export all</b>, beside <i>Close</i> in that list, writes every marker of the
 list into one text file, with the coordinates and the slice each was dropped
 on.</p>
@@ -481,8 +481,9 @@ corrected, deleted, or a new one added.</p>
 without being closed, resized by their edges and corners, and switched between
 English and French in their title bar.</p>
 <h3>Taking them out</h3>
-<p><b>Export</b>, in the cards tab, writes the stimulations in the format the
-file name asks for. A <b>.csv</b> or <b>.tsv</b> carries one row per stimulated
+<p><b>Export all</b>, beside <i>Close</i> in the window bar, writes every
+stimulation of the patient into one file, in the format the file name asks
+for. A <b>.csv</b> or <b>.tsv</b> carries one row per stimulated
 pair, with the responses joined into one cell, which is what a spreadsheet or
 a colleague's script expects. A <b>.txt</b> prints the cards one after another,
 for the patient file. A <b>.json</b> keeps the records exactly as the project
@@ -584,7 +585,8 @@ delete</i>.</p>
 <h3>Marker list</h3>
 <p><i>Show on axial slice</i>, <i>Show on coronal slice</i>, <i>Show on sagittal
 slice</i>; <i>Edit marker</i>; <i>Hide marker</i> or <i>Show marker</i>;
-<i>Export marker</i>; <i>Delete marker</i>.</p>
+<i>Delete marker</i>. Exporting is the <i>Export all</i> button of the window,
+not an entry of this menu.</p>
 
 <h3>MNI electrodes, in the MNI list</h3>
 <p>On an imported patient: <i>Color</i>, <i>Add</i> or <i>Remove electrode
