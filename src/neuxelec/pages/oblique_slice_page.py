@@ -6,7 +6,7 @@ import numpy as np
 import pyvista as pv
 import scipy.io as sio
 import SimpleITK as sitk
-from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, Qt, QTimer
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -16,12 +16,14 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QPolygonF,
     QTransform,
 )
 from PySide6.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -31,6 +33,8 @@ from PySide6.QtWidgets import (
     QScrollBar,
     QSlider,
     QSpinBox,
+    QStyle,
+    QStyleOptionSlider,
     QTableWidget,
     QTreeWidget,
     QVBoxLayout,
@@ -46,11 +50,18 @@ from neuxelec.ui.neuxelec_message_dialog import (
     NeuXelecMessageDialog,
     NeuXelecSelectionDialog,
 )
+from neuxelec.ui.overlay_color_dialog import OverlayColorDialog
+from neuxelec.ui.overlay_layer_list import (
+    LAYERS_OBLIQUE,
+    TOGGLES_OBLIQUE,
+    OverlayLayerList,
+)
 from neuxelec.ui.page_loading_overlay import PageLoadingOverlay
 from neuxelec.ui.pyvista_quick_tools import PyVistaQuickTools
 from neuxelec.ui.slice_quick_tools import SliceQuickTools
 
 from ..utils.cortex_mask import build_cortex_mask, cortex_label_ids
+from ..utils.micro_tetrodes import ring_points, tetrode_ring
 from ..utils.pet_visualization import (
     blend_pet_on_rgb,
     compute_pet_reference,
@@ -94,6 +105,20 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         (CT in T1 space, contacts_lps in LPS mm)
       - frame_visuBrain is left as a placeholder for the next step
     """
+
+    #: Rayon d'un contact dessine sur une coupe, en pixels.
+    #:
+    #: Il valait 1, et non les 4 qu'annoncait le repli du code. Le
+    #: reglage retire sortait du .ui a 0, puis ``setRange(1, 20)`` le
+    #: ramenait a 1 avant que le garde-fou ``si <= 0`` ne puisse jamais
+    #: poser 4 : ce ``setValue(4)`` n'a jamais servi. La valeur ci-dessous
+    #: est donc celle qui etait reellement dessinee.
+    CONTACT_RADIUS_PX = 1
+
+    #: Fond de l'apercu 3D du cerveau, le meme que celui de la vue 3D.
+    #: Il etait gris ardoise ici et noir la-bas, pour la meme scene vue
+    #: de deux pages.
+    BRAIN_PREVIEW_BACKGROUND = "black"
 
     def __init__(self, ui, state):
         super().__init__()
@@ -267,6 +292,10 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
 
         self.spn_ct: QSpinBox | None = ui.findChild(QSpinBox, "spinBox_obliqueSlice_CT")
         self.spn_mri: QSpinBox | None = ui.findChild(QSpinBox, "spinBox_obliqueSlice_MRI")
+        #: Which MRI the slider and the spin box edit. Added beside the layer
+        #: name, because the two check boxes now say what is drawn rather than
+        #: which of the two is the source.
+        self.cmb_mri: QComboBox | None = ui.findChild(QComboBox, "comboBox_obliqueSlice_MRI")
 
         self.chk_siscom: QCheckBox | None = ui.findChild(QCheckBox, "chk_obliqueSlice_SISCOM")
         if self.chk_siscom is None:
@@ -351,6 +380,13 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         # Current MRI source for oblique slices: "T1" or "T2"
         self._oblique_mri_source = "T1"
 
+        #: Which MRI the slider and the spin box are editing right now. The
+        #: check boxes say what is drawn; this says what is being adjusted.
+        self._oblique_mri_edited = "T1"
+        #: Each MRI keeps its own opacity, so switching what the slider edits
+        #: does not lose the other setting.
+        self._oblique_mri_opacity = {"T1": 100, "T2": 50}
+
         self.sld_pet_min: QSlider | None = ui.findChild(
             QSlider, "horizontalSlider_obliqueSlice_petMin"
         )
@@ -427,8 +463,8 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         self._pet_cache_1 = None
         self._pet_cache_2 = None
 
-        self.spn_contact_size: QSpinBox | None = ui.findChild(
-            QSpinBox, "spinBox_obliqueSlice_SizeContacts"
+        self.chk_micro_tetrodes: QCheckBox | None = ui.findChild(
+            QCheckBox, "checkBox_obliqueSlice_microTetrodes"
         )
 
         self._pan1 = [0.0, 0.0]  # x, y in source-pixmap pixels
@@ -507,7 +543,9 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
 
         # -------- Connections --------
         self._connect_opacity(self.sld_ct, self.spn_ct)
-        self._connect_opacity(self.sld_mri, self.spn_mri)
+        # The MRI pair is wired on its own: its value belongs to whichever MRI
+        # the combo box designates, not to a single layer.
+        self._connect_mri_opacity()
         self._connect_opacity(self.sld_pet_opacity, self.spn_pet_opacity)
         self._connect_opacity(self.sld_pet_min, self.spn_pet_min)
         self._connect_opacity(self.sld_pet_max, self.spn_pet_max)
@@ -605,14 +643,10 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 lambda _=None: self._schedule_refresh(slices=True, brain=False)
             )
 
-        if self.spn_contact_size is not None:
-            try:
-                self.spn_contact_size.setRange(1, 20)
-                if self.spn_contact_size.value() <= 0:
-                    self.spn_contact_size.setValue(4)
-            except Exception:
-                pass
-            self.spn_contact_size.valueChanged.connect(
+        if self.chk_micro_tetrodes is not None:
+            # Decochee au depart : cet anneau est calcule, pas reconstruit.
+            self.chk_micro_tetrodes.setChecked(False)
+            self.chk_micro_tetrodes.toggled.connect(
                 lambda _=None: self._schedule_refresh(slices=True, brain=False)
             )
 
@@ -672,6 +706,61 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
 
         # Same default orientation as Reconstruction.
         self.set_orientation_mode("research", refresh=False)
+
+        # En dernier : la colonne prend les cases a cocher elles-memes
+        # dans leurs cartes, donc elle suppose que findChild les a
+        # trouvees et que leurs signaux sont branches.
+        self._build_overlay_layer_list()
+
+    #: Le titre de la carte des IRM, selon celle que l'on regle.
+    MRI_CARD_TITLES = {"T1": "MRI 1", "T2": "MRI 2"}
+
+    def _on_overlay_layer_selected(self, key: str) -> None:
+        """Le calque choisi dans la colonne designe l'IRM a regler.
+
+        Les deux IRM partagent une carte parce qu'elles partagent un
+        reglage, une opacite. Une liste deroulante y choisissait
+        laquelle : deux gestes pour une seule question, et un choix de
+        plus que les autres calques n'en demandent. La colonne repond
+        deja a cette question.
+        """
+        if key not in ("mri1", "mri2"):
+            return
+        self._oblique_mri_edited = "T1" if key == "mri1" else "T2"
+        try:
+            titre = self.ui.findChild(QLabel, "lblObliqueMRICard")
+            if titre is not None:
+                titre.setText(self.MRI_CARD_TITLES[self._oblique_mri_edited])
+        except Exception:
+            pass
+        self._sync_oblique_mri_opacity_widgets()
+
+    def _build_overlay_layer_list(self) -> None:
+        """Monter la colonne des calques de l'onglet Overlay.
+
+        Meme colonne qu'en vue 3D, avec les noms de widgets d'ici : les
+        deux pages posaient le meme probleme, une pile de cartes dont on
+        ne voyait qu'une partie, et une seule reponse vaut mieux que deux
+        a corriger separement.
+        """
+        self._overlay_layers = None
+        try:
+            liste = OverlayLayerList(
+                self.ui,
+                on_selected=self._on_overlay_layer_selected,
+                layers=LAYERS_OBLIQUE,
+                frame_name="cardObliqueLayerList",
+                toggles=TOGGLES_OBLIQUE,
+            )
+            if liste.build():
+                self._overlay_layers = liste
+        except Exception:
+            # Une colonne manquante laisse les cartes empilees comme
+            # avant, ce qui reste utilisable. Une exception ici tuerait
+            # la page.
+            logging.getLogger(__name__).exception(
+                "Could not build the oblique overlay layer list"
+            )
 
     def _dialog_parent(self):
         """
@@ -946,6 +1035,54 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             return 2
         return None
 
+    def _rotation_arrow_at(self, sb: QScrollBar, event) -> int:
+        """Quelle fleche se trouve sous le clic : -1, +1, ou 0 pour aucune.
+
+        Le style de Qt sait seul ou il a dessine ses sous-controles, et
+        la barre en porte deux de plus depuis qu'elle montre ses
+        fleches. Les deviner d'apres la hauteur les ferait glisser au
+        premier changement de feuille.
+        """
+        try:
+            option = QStyleOptionSlider()
+            sb.initStyleOption(option)
+            try:
+                point = event.position().toPoint()
+            except Exception:
+                point = event.pos()
+            sous = sb.style().hitTestComplexControl(
+                QStyle.CC_ScrollBar, option, point, sb
+            )
+            if sous == QStyle.SC_ScrollBarSubLine:
+                return -1
+            if sous == QStyle.SC_ScrollBarAddLine:
+                return 1
+        except Exception:
+            pass
+        return 0
+
+    def _step_rotation(self, sb: QScrollBar, slot_index: int, pas: int) -> None:
+        """Tourner le plan d'un degre, et redessiner.
+
+        L'angle boucle : une barre s'arreterait a 359, un plan non. Un
+        degre de plus a 359 ramene donc a 0, et un de moins a 0 mene a
+        359, ce qui est le meme plan vu de l'autre bout de la course.
+        """
+        try:
+            bas, haut = int(sb.minimum()), int(sb.maximum())
+            etendue = haut - bas + 1
+            if etendue <= 0:
+                return
+            valeur = bas + (int(sb.value()) - bas + int(pas)) % etendue
+
+            sb.blockSignals(True)
+            sb.setValue(valeur)
+            sb.blockSignals(False)
+
+            self._on_rotation_changed(slot_index=int(slot_index))
+        except Exception:
+            logging.getLogger(__name__).exception("Could not step the slice rotation")
+
     def _set_rotation_scrollbar_from_mouse(self, sb: QScrollBar, event) -> None:
         """
         Set the scrollbar value directly from mouse position.
@@ -1058,6 +1195,14 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             if event.type() == QEvent.MouseButtonPress:
                 try:
                     if event.button() == Qt.LeftButton:
+                        # Les deux fleches d'abord : sans cela le clic
+                        # serait lu comme une position, et viser la
+                        # fleche du haut ramenerait le plan a 0.
+                        pas = self._rotation_arrow_at(obj, event)
+                        if pas:
+                            self._step_rotation(obj, rot_slot, pas)
+                            return True
+
                         self._rot_dragging_slot = int(rot_slot)
                         self._rot_drag_pending_slot = int(rot_slot)
                         self._set_rotation_scrollbar_from_mouse(obj, event)
@@ -1564,19 +1709,51 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
 
         return None
 
+    def _oblique_mri_sources(self) -> list[tuple[str, object, int]]:
+        """The MRIs to draw, as (name, image, opacity), in stacking order.
+
+        THE CHECK BOX IS THE TRUTH, and nothing else. A parallel dictionary of
+        what is shown looked tidier and desynchronised within a day: several
+        places tick these boxes silently, with signals blocked, so a mirror of
+        their state goes stale without a sound and the page draws something
+        other than what is on screen.
+
+        MRI 1 is the base and MRI 2 goes over it, so the second one's opacity
+        reads as a fade between the two, which is the gesture people use to
+        compare a pre and a post.
+        """
+        opacity = getattr(self, "_oblique_mri_opacity", {"T1": 100, "T2": 50})
+        out = []
+        for name, box, getter in (
+            ("T1", self.chk_mri_t1, self._get_t1_image),
+            ("T2", self.chk_mri_t2, self._get_t2_image),
+        ):
+            if box is None or not box.isChecked():
+                continue
+            img = getter()
+            if img is not None:
+                out.append((name, img, int(opacity.get(name, 100))))
+        return out
+
     def _get_active_mri_image(self):
-        """
-        Return the MRI image selected in the Oblique Slice page.
-        T1 is default. T2 is used only if selected and available.
-        """
-        source = getattr(self, "_oblique_mri_source", "T1")
+        """The MRI layer: one image, or two blended into one.
 
-        if source == "T2":
-            t2 = self._get_t2_image()
-            if t2 is not None:
-                return t2
+        The blending itself lives in :mod:`neuxelec.utils.mri_blend`, shared
+        with the 3D view so the two pages cannot drift apart.
+        """
+        from ..utils.mri_blend import blend_mri_volumes
 
-        return self._get_t1_image()
+        sources = self._oblique_mri_sources()
+        if not sources:
+            # Nothing ticked: fall back to MRI 1, which is what every caller
+            # expects to find when it asks for the anatomy.
+            return self._get_t1_image()
+        # Normalised even for a single layer, because the compositors are told
+        # below not to normalise again: that second stretch is what used to
+        # undo the opacity entirely.
+        return blend_mri_volumes(
+            [(img, pct) for _name, img, pct in sources], always_normalise=True
+        )
 
     def _invalidate_oblique_image_caches(self):
         self._slice_cache_1 = None
@@ -1589,42 +1766,98 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         self._pet_cache_2 = None
 
     def _on_oblique_mri_source_toggled(self, source: str, checked: bool):
-        if not checked:
-            # Prevent both T1 and T2 from being unchecked while MRI is active.
-            try:
-                if self.chk_mri is not None and self.chk_mri.isChecked():
-                    if source == "T1" and not (
-                        self.chk_mri_t2 is not None and self.chk_mri_t2.isChecked()
-                    ):
-                        self._set_checkbox_checked_silent(self.chk_mri_t1, True)
-                        self._oblique_mri_source = "T1"
-                    elif source == "T2" and not (
-                        self.chk_mri_t1 is not None and self.chk_mri_t1.isChecked()
-                    ):
-                        self._set_checkbox_checked_silent(self.chk_mri_t1, True)
-                        self._set_checkbox_checked_silent(self.chk_mri_t2, False)
-                        self._oblique_mri_source = "T1"
-            except Exception:
-                pass
+        """A box says whether that MRI is drawn, and nothing more.
+
+        The two used to be a source selector dressed as check boxes: ticking
+        one unticked the other, there was a single MRI layer, and
+        ``_oblique_mri_source`` held whichever of the two fed it. Neither could
+        therefore be adjusted on its own, and the two could not be compared on
+        one screen. They are now two layers, each with its own opacity, and the
+        combo box below says which one the slider is editing.
+        """
+        if checked and source == "T2" and self._get_t2_image() is None:
+            # Nothing to draw: MRI 2 is only available once coregistered into
+            # MRI 1 space, and an empty layer would look like a bug.
+            self._set_checkbox_checked_silent(self.chk_mri_t2, False)
             return
 
-        if source == "T1":
-            self._oblique_mri_source = "T1"
-            self._set_checkbox_checked_silent(self.chk_mri_t2, False)
+        # Kept in step for everything still reading the old single source: it
+        # now names the first MRI actually drawn.
+        drawn = [n for n, _img, _o in self._oblique_mri_sources()]
+        self._oblique_mri_source = "T2" if drawn == ["T2"] else "T1"
+        logging.getLogger(__name__).info(
+            "Oblique MRI layers: %s (MRI 2 available: %s)",
+            drawn or "none", self._get_t2_image() is not None,
+        )
 
-        elif source == "T2":
-            # Only allow T2 if a T2 in T1 space exists.
-            if self._get_t2_image() is None:
-                self._set_checkbox_checked_silent(self.chk_mri_t2, False)
-                self._set_checkbox_checked_silent(self.chk_mri_t1, True)
-                self._oblique_mri_source = "T1"
-                return
-
-            self._oblique_mri_source = "T2"
-            self._set_checkbox_checked_silent(self.chk_mri_t1, False)
-
+        self._sync_oblique_mri_opacity_widgets()
         self._invalidate_oblique_image_caches()
         self._update_modality_controls_enabled_states()
+        self._schedule_refresh(slices=True, brain=False)
+
+    def _connect_mri_opacity(self) -> None:
+        """Apparier le curseur d'opacite et sa boite.
+
+        Chaque IRM garde sa propre valeur ; celle que ces deux widgets
+        ecrivent est designee par le calque choisi dans la colonne, et
+        non plus par une liste deroulante.
+        """
+        for widget in (self.sld_mri, self.spn_mri):
+            if widget is not None:
+                try:
+                    widget.setRange(0, 100)
+                except Exception:
+                    pass
+        if self.sld_mri is not None and self.spn_mri is not None:
+            self.sld_mri.valueChanged.connect(self.spn_mri.setValue)
+            self.spn_mri.valueChanged.connect(self.sld_mri.setValue)
+        for widget in (self.sld_mri, self.spn_mri):
+            if widget is not None:
+                widget.valueChanged.connect(self._on_oblique_mri_opacity_changed)
+        self._sync_oblique_mri_opacity_widgets()
+
+    def _oblique_mri_layer_opacity(self) -> int:
+        """Opacity of the MRI layer as the compositor sees it: always full.
+
+        Each MRI already carries its own opacity, applied when the two volumes
+        are blended, so dimming the result again here would apply it twice.
+        What the spin box shows is the opacity of ONE of the two, not of the
+        layer, and the two must not be confused.
+        """
+        return 100
+
+    def _on_oblique_mri_edited_changed(self, name: str) -> None:
+        """Point the slider and the spin box at one MRI or the other.
+
+        What is drawn does not change here. Only what the two opacity widgets
+        are editing, and each MRI keeps the value it had.
+        """
+        self._oblique_mri_edited = "T2" if str(name).strip().endswith("2") else "T1"
+        self._sync_oblique_mri_opacity_widgets()
+
+    def _sync_oblique_mri_opacity_widgets(self) -> None:
+        """Show the opacity of the MRI being edited, without redrawing.
+
+        Signals are blocked on the way in, or setting the widget would be read
+        back as the user moving it and would overwrite the other MRI's value.
+        """
+        opacity = getattr(self, "_oblique_mri_opacity", {"T1": 100, "T2": 50})
+        value = int(opacity.get(getattr(self, "_oblique_mri_edited", "T1"), 100))
+        for widget in (self.sld_mri, self.spn_mri):
+            if widget is None:
+                continue
+            widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(False)
+
+    def _on_oblique_mri_opacity_changed(self, value: int) -> None:
+        """Record the new opacity against the MRI the combo box designates."""
+        opacity = getattr(self, "_oblique_mri_opacity", None)
+        if opacity is None:
+            opacity = {"T1": 100, "T2": 50}
+            self._oblique_mri_opacity = opacity
+        opacity[getattr(self, "_oblique_mri_edited", "T1")] = int(value)
+        self._invalidate_oblique_image_caches()
         self._schedule_refresh(slices=True, brain=False)
 
     def _update_modality_controls_enabled_states(self):
@@ -1655,21 +1888,12 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             if not mri_on:
                 pass
 
-            # If T2 selected but no T2 available anymore, fallback to T1
-            if mri_on and getattr(self, "_oblique_mri_source", "T1") == "T2" and not t2_loaded:
-                self._oblique_mri_source = "T1"
-                self._set_checkbox_checked_silent(self.chk_mri_t1, True)
+            # MRI 2 gone from the project: untick it, there is nothing to draw.
+            # MRI 1 is NOT ticked back on in its place. The two are independent
+            # layers now, and forcing one on would fight whatever the user just
+            # chose, silently, from a function whose job is to enable widgets.
+            if not t2_loaded and self.chk_mri_t2 is not None and self.chk_mri_t2.isChecked():
                 self._set_checkbox_checked_silent(self.chk_mri_t2, False)
-
-            # If MRI is on and neither source is checked, default to T1
-            if mri_on:
-                t1_checked = bool(self.chk_mri_t1 is not None and self.chk_mri_t1.isChecked())
-                t2_checked = bool(self.chk_mri_t2 is not None and self.chk_mri_t2.isChecked())
-
-                if not t1_checked and not t2_checked:
-                    self._oblique_mri_source = "T1"
-                    self._set_checkbox_checked_silent(self.chk_mri_t1, True)
-                    self._set_checkbox_checked_silent(self.chk_mri_t2, False)
 
             # MRI opacity slider controls whichever MRI source is active: T1 or T2
             active_mri_available = bool(self._get_active_mri_image() is not None)
@@ -2282,11 +2506,14 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
 
         # MRI/T1 base in grayscale
         if arr_t1 is not None:
-            n = _norm(arr_t1)
-            if n is not None:
-                a = float(np.clip(t1_opacity_pct, 0, 100)) / 100.0
-                gray = n[..., None] * 255.0
-                img += gray * a
+            # NOT renormalised, unlike every other layer below. The MRI layer
+            # arrives already between 0 and 1, with each MRI's opacity baked in
+            # by blend_mri_volumes. Stretching it again on its own percentiles
+            # cancelled that opacity exactly: a layer dimmed to 40 % came back
+            # at full scale, and the slider looked dead until the slice changed.
+            a = float(np.clip(t1_opacity_pct, 0, 100)) / 100.0
+            gray = np.clip(np.nan_to_num(arr_t1, nan=0.0), 0.0, 1.0)[..., None] * 255.0
+            img += gray * a
 
         # CT overlay in grayscale
         if arr_ct is not None:
@@ -2624,10 +2851,15 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             W,
         )
 
+        ring_rc = self._project_tetrode_ring_for_cached_slice(
+            elec, center, u, w, s_min, s_max, t_min, t_max, H, W
+        )
+
         gif_contacts = {
             "rows": list(contact_rows),
             "cols": list(contact_cols),
             "names": list(contact_names),
+            "ring": list(ring_rc),
             "elec_name": elec_name,
         }
 
@@ -2636,7 +2868,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         else:
             self._last_gif_contacts_2 = gif_contacts
 
-        t1_opacity = int(self.spn_mri.value()) if self.spn_mri is not None else 100
+        t1_opacity = self._oblique_mri_layer_opacity()
         ct_opacity = int(self.spn_ct.value()) if self.spn_ct is not None else 100
         pet_opacity = int(self.spn_pet_opacity.value()) if self.spn_pet_opacity is not None else 100
         sis_opacity = int(self.spn_siscom.value()) if self.spn_siscom is not None else 100
@@ -2786,6 +3018,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 contact_rows=contact_rows,
                 contact_cols=contact_cols,
                 contact_names=contact_names,
+                ring_rc=ring_rc,
                 elec_name=elec_name,
             )
         else:
@@ -2985,7 +3218,11 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             return pixmap
 
         try:
-            from scipy.ndimage import binary_dilation, label
+            from scipy.ndimage import (
+                binary_closing,
+                binary_dilation,
+                binary_fill_holes,
+            )
 
             img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
             width, height = img.width(), img.height()
@@ -3002,22 +3239,27 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             level = np.maximum(
                 np.maximum(pixels[:, :, 0], pixels[:, :, 1]), pixels[:, :, 2]
             )
-            air = level <= self.BACKGROUND_AIR_LEVEL
-
-            # Only air connected to a border is background; air trapped inside
-            # the head - sinuses, orbits - is anatomy and stays black.
-            tags, count = label(air)
-            outside = np.zeros_like(air)
-            if count:
-                edges = np.concatenate([tags[0], tags[-1], tags[:, 0], tags[:, -1]])
-                # A lookup table indexed by label, rather than np.isin: same
-                # answer, a fraction of the time on a full-size slice.
-                touches_edge = np.zeros(count + 1, dtype=bool)
-                touches_edge[np.unique(edges)] = True
-                touches_edge[0] = False
-                outside = touches_edge[tags]
-
-            zone = binary_dilation(outside, iterations=self.BACKGROUND_RAMP_MARGIN)
+            # The head is outlined, rather than the air being followed.
+            #
+            # Following the air was the first idea: label it, keep what
+            # touches a border, call the rest anatomy. It leaks. At an oblique
+            # angle the dark space around the brain reaches the outside
+            # through the skull base, so it was taken for background and made
+            # transparent. Measured on three real slices, that left about 2000
+            # pixels of holes inside the head; the plain threshold this
+            # replaces left up to 16000.
+            #
+            # Outlining cannot leak by construction: everything that carries
+            # signal is taken, the gaps in the contour are closed, the inside
+            # is filled. Sinuses and orbits are inside the outline, so they
+            # keep their black, whatever they connect to.
+            present = binary_closing(
+                level >= self.BACKGROUND_AIR_LEVEL, structure=np.ones((7, 7))
+            )
+            head = binary_fill_holes(present)
+            # The ramp is allowed a few pixels inside the outline, so the skin
+            # fades out instead of being cut along a hard line.
+            zone = binary_dilation(~head, iterations=self.BACKGROUND_RAMP_MARGIN)
             alpha = np.full((height, width), 255, dtype=np.uint8)
             # The ramp starts at the air level, not at zero: scanner air is
             # rarely exactly 0, and a ramp from 0 would leave it faintly
@@ -3073,25 +3315,27 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 "Background redraw failed", exc_info=True
             )
 
-    def _remove_black_background_from_pixmap(self, pixmap: QPixmap, threshold: int = 8) -> QPixmap:
-        if pixmap is None or pixmap.isNull():
-            return pixmap
+    def _remove_black_background_from_pixmap(
+        self, pixmap: QPixmap, threshold: int = 8
+    ) -> QPixmap:
+        """Kept for its callers; the work belongs to _slice_background_alpha.
 
-        try:
-            img = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
-            w, h = img.width(), img.height()
+        This used to be a second, weaker implementation of the same idea. It
+        walked every pixel in Python, built a QColor for each one, and cut the
+        alpha on a plain threshold. Two consequences, both measured on a real
+        644x438 slice:
 
-            for y in range(h):
-                for x in range(w):
-                    c = QColor(img.pixel(x, y))
-                    if c.red() <= threshold and c.green() <= threshold and c.blue() <= threshold:
-                        c.setAlpha(0)
-                        img.setPixelColor(x, y, c)
+          - 268 ms per frame against 6 ms vectorised, so 19 s for a 72-frame
+            GIF against half a second;
+          - the threshold knew nothing of where a pixel sat, so the sinuses
+            and the orbits were punched out along with the background, up to
+            16000 pixels of holes inside the head.
 
-            return QPixmap.fromImage(img)
-
-        except Exception:
-            return pixmap
+        The remaining implementation outlines the head, ramps the edge and
+        caches its result per slice. ``threshold`` is ignored and kept only so
+        existing calls do not have to change.
+        """
+        return self._slice_background_alpha(pixmap)
 
     def _fit_source_rect_to_target(
         self, src_w: float, src_h: float, target_w: float, target_h: float
@@ -3184,6 +3428,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         draw_w: float,
         draw_h: float,
         zoom: float,
+        ring_rc=None,
     ) -> None:
         """
         Draw contacts in the same painter coordinate system as the slice.
@@ -3195,12 +3440,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         try:
             contact_color = self._get_electrode_rgb(elec_name)
 
-            radius = 4
-            if self.spn_contact_size is not None:
-                try:
-                    radius = max(1, int(self.spn_contact_size.value()))
-                except Exception:
-                    pass
+            radius = self.CONTACT_RADIUS_PX
 
             scale_x = float(draw_w) / max(1.0, float(crop_w))
             scale_y = float(draw_h) / max(1.0, float(crop_h))
@@ -3216,6 +3456,31 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             font = QFont()
             font.setPointSize(max(8, int(8 + 2 * float(zoom))))
             painter.setFont(font)
+
+            # L'anneau d'abord, en trait seul : un disque plein se lirait
+            # comme un contact reconstruit, or cette position est calculee.
+            # Les contacts passent ensuite par-dessus et restent lisibles.
+            if ring_rc:
+                polygone = QPolygonF(
+                    [
+                        QPointF(
+                            float(draw_x) + (float(c) - float(x0)) * scale_x,
+                            float(draw_y) + (float(r) - float(y0)) * scale_y,
+                        )
+                        for r, c in ring_rc
+                    ]
+                )
+                painter.save()
+                anneau_pen = QPen(
+                    QColor(
+                        int(contact_color[0]), int(contact_color[1]), int(contact_color[2])
+                    )
+                )
+                anneau_pen.setWidth(max(1, int(round(min(scale_x, scale_y)))))
+                painter.setPen(anneau_pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawPolygon(polygone)
+                painter.restore()
 
             for r, c, txt in zip(contact_rows, contact_cols, contact_names):
                 dx = float(draw_x) + (float(c) - float(x0)) * scale_x
@@ -3247,6 +3512,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         contact_cols,
         contact_names,
         elec_name: str | None,
+        ring_rc=None,
     ) -> QPixmap:
         """
         Render the oblique slice into the final QLabel canvas.
@@ -3284,6 +3550,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
 
             source_for_display = QPixmap(pm_source)
             display_contact_cols = list(contact_cols)
+            display_ring_rc = list(ring_rc or [])
 
             if bool(getattr(self, "_flip_lr_oblique", True)):
                 flip_transform = QTransform()
@@ -3296,6 +3563,9 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
 
                 source_width = int(source_for_display.width())
                 display_contact_cols = [source_width - 1 - int(col) for col in contact_cols]
+                display_ring_rc = [
+                    (int(r), source_width - 1 - int(c)) for r, c in (ring_rc or [])
+                ]
 
             # 1) Crop source for zoom/pan BEFORE visual rotation.
             cropped, x0, y0, crop_w, crop_h = self._crop_source_pixmap_for_zoom(
@@ -3369,6 +3639,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 contact_rows=contact_rows,
                 contact_cols=display_contact_cols,
                 contact_names=contact_names,
+                ring_rc=display_ring_rc,
                 elec_name=elec_name,
                 x0=x0,
                 y0=y0,
@@ -3566,15 +3837,20 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 W,
             )
 
+            ring_rc = self._project_tetrode_ring_for_cached_slice(
+                elec, center, u, w, s_min, s_max, t_min, t_max, H, W
+            )
+
             gif_contacts = {
                 "rows": list(contact_rows),
                 "cols": list(contact_cols),
                 "names": list(contact_names),
+                "ring": list(ring_rc),
                 "elec_name": str(elec_name),
             }
 
             # Current opacities
-            t1_opacity = int(self.spn_mri.value()) if self.spn_mri is not None else 100
+            t1_opacity = self._oblique_mri_layer_opacity()
             ct_opacity = int(self.spn_ct.value()) if self.spn_ct is not None else 100
             pet_opacity = (
                 int(self.spn_pet_opacity.value()) if self.spn_pet_opacity is not None else 100
@@ -3627,6 +3903,34 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         except Exception:
             return None, None
 
+    def _warn_gif_cannot_be_transparent(self) -> bool:
+        """Explain why a GIF cannot be exported without its background.
+
+        The format has no alpha channel: it can name one colour transparent,
+        in full or not at all, and the air fades gradually around the head. A
+        soft edge cannot survive that, so the animation would come back laid
+        on black, which is exactly what the button seemed to promise against.
+
+        Rather than produce that quietly, the export stops here and says what
+        to do instead. Transparency stays available where it is real: on
+        screen, and in a PNG.
+
+        Always returns False: the export does not go on.
+        """
+        NeuXelecMessageDialog.warning(
+            self._slice_dialog_parent(),
+            "GIF and transparency",
+            "A GIF cannot be exported without its background: the format "
+            "carries no transparency.\n\n"
+            "Only images can. Use the screenshot button, which writes a PNG "
+            "and keeps the background truly transparent.\n\n"
+            "For an animation on a slide, right-click the slice, choose "
+            "Background color and pick the colour of your slide. The air "
+            "around the head will fade into it, and the GIF will look as if "
+            "it had no background at all.",
+        )
+        return False
+
     def _export_oblique_slice_gif(
         self,
         slot_index: int,
@@ -3645,6 +3949,13 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 "GIF export",
                 "A GIF export is already in progress.",
             )
+            return
+
+        # A GIF has no alpha. Asking for one without a background is asking
+        # for something the format cannot give, so the export stops and says
+        # so. See _warn_gif_cannot_be_transparent.
+        if bool(remove_background) and not getattr(self, "_slice_background", None):
+            self._warn_gif_cannot_be_transparent()
             return
 
         try:
@@ -3753,6 +4064,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                     contact_rows=gif_contacts.get("rows", []),
                     contact_cols=gif_contacts.get("cols", []),
                     contact_names=gif_contacts.get("names", []),
+                    ring_rc=gif_contacts.get("ring", []),
                     elec_name=gif_contacts.get(
                         "elec_name",
                         None,
@@ -3760,13 +4072,11 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 )
 
                 if pm_display is not None and not pm_display.isNull():
-                    # With a chosen background the frame is already composited;
-                    # cutting it again would punch holes in it.
-                    if bool(state["remove_background"]) and not getattr(
-                        self, "_slice_background", None
-                    ):
-                        pm_display = self._remove_black_background_from_pixmap(pm_display)
-
+                    # No alpha is cut here any more. A frame reaching this
+                    # point either has a chosen background, and is already
+                    # composited on it, or has the default black. The case
+                    # that used to be handled here is refused upstream, in
+                    # _export_oblique_slice_gif.
                     pm_display = self._overlay_scalar_bars_on_pixmap(pm_display)
 
                     frame_array = self._qimage_to_rgba_array(pm_display.toImage())
@@ -3796,6 +4106,40 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         except Exception as e:
             self._fail_oblique_gif_export(str(e))
 
+    def _flatten_gif_frame(self, frame):
+        """Lay one RGBA frame on the background colour, fully opaque.
+
+        A GIF carries one transparent colour, not an alpha channel. Handing it
+        a soft ramp leaves the encoder to decide: the fade around the head
+        comes back as a hard, jagged cut, over whatever colour the encoder
+        picked. So the frame is composited here, deliberately, on the colour
+        the user chose, or on black, which is what the view shows by default.
+
+        Transparency remains real where the format supports it: on screen and
+        in a PNG.
+        """
+        try:
+            arr = np.asarray(frame)
+            if arr.ndim != 3 or arr.shape[2] != 4:
+                return arr
+
+            colour = QColor(str(getattr(self, "_slice_background", None) or "#000000"))
+            if not colour.isValid():
+                colour = QColor(0, 0, 0)
+            fond = np.array(
+                [colour.red(), colour.green(), colour.blue()], dtype=np.float32
+            )
+
+            rgb = arr[:, :, :3].astype(np.float32)
+            a = (arr[:, :, 3].astype(np.float32) / 255.0)[:, :, None]
+            return np.clip(rgb * a + fond * (1.0 - a), 0, 255).astype(np.uint8)
+
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "GIF frame flattening failed", exc_info=True
+            )
+            return np.asarray(frame)[:, :, :3]
+
     def _encode_oblique_gif(self) -> None:
         """
         Encode all prepared RGBA frames into the final GIF.
@@ -3818,6 +4162,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 )
 
             filename = str(state["filename"])
+            frames = [self._flatten_gif_frame(f) for f in frames]
 
             try:
                 import imageio.v2 as imageio
@@ -3832,7 +4177,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             except Exception:
                 from PIL import Image
 
-                pil_frames = [Image.fromarray(frame, mode="RGBA") for frame in frames]
+                pil_frames = [Image.fromarray(frame, mode="RGB") for frame in frames]
 
                 pil_frames[0].save(
                     filename,
@@ -4428,7 +4773,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             except Exception:
                 pass
 
-            self._brain_plotter.set_background("#2b2d31")
+            self._brain_plotter.set_background(self.BRAIN_PREVIEW_BACKGROUND)
             self._brain_plotter.setFocusPolicy(Qt.StrongFocus)
             self._brain_plotter.show_axes()
             try:
@@ -5262,7 +5607,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             return
 
         try:
-            self._brain_plotter.set_background("#2b2d31")
+            self._brain_plotter.set_background(self.BRAIN_PREVIEW_BACKGROUND)
         except Exception:
             pass
 
@@ -5378,22 +5723,15 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         except Exception:
             pass
 
-        # If MRI is turned on, default to T1 unless T2 is already selected and available.
+        # Turning the MRI card on must leave at least one layer visible, and
+        # must not touch the other. This used to force T1 on and T2 off every
+        # time, which fought whatever the user had just ticked: the two were
+        # exclusive then, and they are not any more.
         try:
-            if cb is self.chk_mri:
-                if checked:
-                    if (
-                        getattr(self, "_oblique_mri_source", "T1") == "T2"
-                        and self._get_t2_image() is not None
-                    ):
-                        self._set_checkbox_checked_silent(self.chk_mri_t1, False)
-                        self._set_checkbox_checked_silent(self.chk_mri_t2, True)
-                    else:
-                        self._oblique_mri_source = "T1"
-                        self._set_checkbox_checked_silent(self.chk_mri_t1, True)
-                        self._set_checkbox_checked_silent(self.chk_mri_t2, False)
+            if cb is self.chk_mri and checked and not self._oblique_mri_sources():
+                self._set_checkbox_checked_silent(self.chk_mri_t1, True)
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Could not restore an MRI layer")
 
         self._invalidate_oblique_image_caches()
         self._update_modality_controls_enabled_states()
@@ -5429,29 +5767,17 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 global_pos,
                 color_scale_visible=bool(getattr(self, "_show_color_scales", True)),
                 show_color_scale_option=bool(self._is_pet_or_siscom_checked()),
-                show_ictal_color=True,
-                show_interictal_color=True,
                 show_cortex_only_option=self._parcel1_img is not None,
                 show_grey_matter_option=self._grey_matter_available(),
                 grey_matter_only=bool(
                     getattr(self.state, "contacts_grey_matter_only", False)
                 ),
                 cortex_only=bool(getattr(self.state, "functional_cortex_only", False)),
-                # Same rule as "Color PET" / "Color SISCOM" here: always offered.
-                show_fmri_color=True,
                 background_is_custom=bool(getattr(self, "_slice_background", None)),
             )
 
-            if choice == "pet":
-                self._choose_pet_colormap()
-            elif choice == "siscom":
-                self._choose_siscom_colormap()
-            elif choice == "fmri_color":
-                self._choose_oblique_fmri_colormap()
-            elif choice == "ictal_color":
-                self._choose_oblique_spect_colormap("ictal")
-            elif choice == "interictal_color":
-                self._choose_oblique_spect_colormap("interictal")
+            if choice == "overlay_color":
+                self._open_overlay_color_dialog()
             elif choice == "toggle_color_scale":
                 self._toggle_color_scales()
             elif choice == "toggle_cortex_only":
@@ -5464,6 +5790,86 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                 self._clear_slice_background()
         except Exception:
             pass
+
+    #: Les echelles proposees. Le fMRI a la sienne : elle ajoute des
+    #: echelles divergentes, puisqu'il porte des valeurs signees.
+    OVERLAY_COLORMAPS = ("hot", "inferno", "plasma", "jet", "turbo", "viridis", "gray")
+    FMRI_COLORMAPS = (
+        "hot", "inferno", "plasma", "jet", "turbo", "viridis", "coolwarm", "RdBu_r",
+    )
+
+    def _overlay_color_layers(self) -> list[dict]:
+        """Les calques que la fenetre propose, dans l'ordre des anciennes entrees.
+
+        Aucune couleur unie ici : la coupe oblique ne surimprime pas le CT,
+        et les cinq calques portent tous une valeur par voxel.
+        """
+        spect = getattr(self, "_ospect_colormap", {}) or {}
+        try:
+            fmri_courant = self._ofmri_cmap(self._ofmri_img())
+        except Exception:
+            fmri_courant = "hot"
+        return [
+            {
+                "key": "pet",
+                "label": "PET",
+                "kind": "colormap",
+                "options": list(self.OVERLAY_COLORMAPS),
+                "current": getattr(self, "_pet_colormap_name", "hot"),
+            },
+            {
+                "key": "siscom",
+                "label": "SISCOM",
+                "kind": "colormap",
+                "options": list(self.OVERLAY_COLORMAPS),
+                "current": getattr(self, "_siscom_colormap_name", "hot"),
+            },
+            {
+                "key": "fmri",
+                "label": "fMRI",
+                "kind": "colormap",
+                "options": list(self.FMRI_COLORMAPS),
+                "current": fmri_courant,
+            },
+            {
+                "key": "ictal",
+                "label": "Ictal SPECT",
+                "kind": "colormap",
+                "options": list(self.OVERLAY_COLORMAPS),
+                "current": spect.get("ictal", "hot"),
+            },
+            {
+                "key": "interictal",
+                "label": "Inter-ictal SPECT",
+                "kind": "colormap",
+                "options": list(self.OVERLAY_COLORMAPS),
+                "current": spect.get("interictal", "hot"),
+            },
+        ]
+
+    def _open_overlay_color_dialog(self) -> None:
+        """Une fenetre pour les cinq calques, au lieu de cinq entrees de menu."""
+        try:
+            choix = OverlayColorDialog.choose(
+                self._dialog_parent(),
+                self._overlay_color_layers(),
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Could not open the overlay colour dialog")
+            return
+
+        if not choix:
+            return
+
+        cle, valeur = choix
+        if cle == "pet":
+            self._apply_pet_colormap(valeur)
+        elif cle == "siscom":
+            self._apply_siscom_colormap(valeur)
+        elif cle == "fmri":
+            self._apply_oblique_fmri_colormap(valeur)
+        elif cle in ("ictal", "interictal"):
+            self._apply_oblique_spect_colormap(cle, valeur)
 
     def _toggle_color_scales(self):
         self._show_color_scales = not bool(getattr(self, "_show_color_scales", True))
@@ -5655,33 +6061,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         self._slice_cache_2 = None
         self._schedule_refresh(slices=True, brain=False)
 
-    def _choose_siscom_colormap(self) -> None:
-        options = [
-            "hot",
-            "inferno",
-            "plasma",
-            "jet",
-            "turbo",
-            "viridis",
-            "gray",
-        ]
-
-        current_index = (
-            options.index(self._siscom_colormap_name)
-            if self._siscom_colormap_name in options
-            else 0
-        )
-
-        cmap = NeuXelecSelectionDialog.select_item(
-            self._dialog_parent(),
-            "SISCOM colormap",
-            "Choose the color scale used for the SISCOM overlay:",
-            options=options,
-            current_index=current_index,
-            accept_text="Apply",
-            reject_text="Cancel",
-        )
-
+    def _apply_siscom_colormap(self, cmap: str) -> None:
         if not cmap:
             return
 
@@ -5696,31 +6076,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
 
         self._schedule_refresh(slices=True, brain=False)
 
-    def _choose_pet_colormap(self) -> None:
-        options = [
-            "hot",
-            "inferno",
-            "plasma",
-            "jet",
-            "turbo",
-            "viridis",
-            "gray",
-        ]
-
-        current_index = (
-            options.index(self._pet_colormap_name) if self._pet_colormap_name in options else 0
-        )
-
-        cmap = NeuXelecSelectionDialog.select_item(
-            self._dialog_parent(),
-            "PET colormap",
-            "Choose the color scale used for the PET overlay:",
-            options=options,
-            current_index=current_index,
-            accept_text="Apply",
-            reject_text="Cancel",
-        )
-
+    def _apply_pet_colormap(self, cmap: str) -> None:
         if not cmap:
             return
 
@@ -6118,12 +6474,7 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
 
         contact_color = self._get_electrode_rgb(elec_name)
 
-        radius = 4
-        if self.spn_contact_size is not None:
-            try:
-                radius = max(1, int(self.spn_contact_size.value()))
-            except Exception:
-                pass
+        radius = self.CONTACT_RADIUS_PX
 
         painter = QPainter(out)
 
@@ -6343,11 +6694,14 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             return np.clip(out, 0.0, 1.0)
 
         if arr_t1 is not None:
-            n = _norm(arr_t1)
-            if n is not None:
-                a = float(np.clip(t1_opacity_pct, 0, 100)) / 100.0
-                gray = n[..., None] * 255.0
-                img += gray * a
+            # NOT renormalised, unlike every other layer below. The MRI layer
+            # arrives already between 0 and 1, with each MRI's opacity baked in
+            # by blend_mri_volumes. Stretching it again on its own percentiles
+            # cancelled that opacity exactly: a layer dimmed to 40 % came back
+            # at full scale, and the slider looked dead until the slice changed.
+            a = float(np.clip(t1_opacity_pct, 0, 100)) / 100.0
+            gray = np.clip(np.nan_to_num(arr_t1, nan=0.0), 0.0, 1.0)[..., None] * 255.0
+            img += gray * a
 
         if arr_ct is not None:
             n = _norm(arr_ct)
@@ -6640,6 +6994,62 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
                     contact_names.append("")
 
         return contact_rows, contact_cols, contact_names
+
+    def _project_tetrode_ring_for_cached_slice(
+        self,
+        elec: dict,
+        center: np.ndarray,
+        u: np.ndarray,
+        w: np.ndarray,
+        s_min: float,
+        s_max: float,
+        t_min: float,
+        t_max: float,
+        H: int,
+        W: int,
+    ):
+        """Where the tetrodes land, as a closed polyline in slice pixels.
+
+        L'anneau entier est projete, et non sa seule intersection avec le
+        plan. Un cercle coupe un plan en deux points au plus : les dessiner
+        seuls donnerait deux taches sans rapport visible avec l'electrode,
+        alors que l'ellipse projetee dit d'un coup d'oeil ou sont les
+        tetrodes et sous quelle obliquite la coupe les traverse.
+        """
+        case = getattr(self, "chk_micro_tetrodes", None)
+        if case is None or not case.isChecked():
+            return []
+
+        try:
+            ring = tetrode_ring(
+                elec.get("ref"),
+                elec.get("d_mm"),
+                elec.get("contacts_lps", []) or [],
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Could not place the tetrode ring")
+            return []
+
+        if ring is None:
+            return []
+
+        try:
+            normal = np.cross(u, w)
+            norm = float(np.linalg.norm(normal))
+            if norm > 1e-9:
+                # Le meme seuil que les contacts, pour que l'anneau
+                # apparaisse et disparaisse avec le contact 1.
+                away = abs(float((ring.center - center) @ (normal / norm)))
+                if away > 2.0:
+                    return []
+
+            rel = np.asarray(ring_points(ring, n=96), dtype=np.float64) - center[None, :]
+            rows = np.round((rel @ u - s_min) / max(1e-9, (s_max - s_min)) * (H - 1))
+            cols = np.round((rel @ w - t_min) / max(1e-9, (t_max - t_min)) * (W - 1))
+            return [(int(r), int(c)) for r, c in zip(rows, cols, strict=True)]
+        except Exception:
+            logging.getLogger(__name__).exception("Could not project the tetrode ring")
+            return []
 
     def _update_parcellation_contacts_table(self):
         tbl = getattr(self, "tbl_parcellation_contacts", None)

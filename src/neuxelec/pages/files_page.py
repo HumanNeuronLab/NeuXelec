@@ -129,6 +129,7 @@ class FilesPage:
             "SISCOM": self.ui.findChild(QLabel, "pill_FilesCoreg_SISCOM"),
             "Parcel1": self.ui.findChild(QLabel, "pill_FilesCoreg_Parcel1"),
             "Parcel2": self.ui.findChild(QLabel, "pill_FilesCoreg_Parcel2"),
+            "MniParcel2": self.ui.findChild(QLabel, "pill_FilesCoreg_MniParcel2"),
             "LHPial": self.ui.findChild(QLabel, "pill_FilesCoreg_LHPial"),
             "RHPial": self.ui.findChild(QLabel, "pill_FilesCoreg_RHPial"),
             "BrainMask": self.ui.findChild(QLabel, "pill_FilesCoreg_BrainMask"),
@@ -145,6 +146,7 @@ class FilesPage:
             "SISCOM": self.ui.findChild(QLabel, "status_FilesCoreg_SISCOM"),
             "Parcel1": self.ui.findChild(QLabel, "status_FilesCoreg_Parcel1"),
             "Parcel2": self.ui.findChild(QLabel, "status_FilesCoreg_Parcel2"),
+            "MniParcel2": self.ui.findChild(QLabel, "status_FilesCoreg_MniParcel2"),
             "LHPial": self.ui.findChild(QLabel, "status_FilesCoreg_LHPial"),
             "RHPial": self.ui.findChild(QLabel, "status_FilesCoreg_RHPial"),
             "BrainMask": self.ui.findChild(QLabel, "status_FilesCoreg_BrainMask"),
@@ -1103,8 +1105,11 @@ class FilesPage:
 
     @staticmethod
     def _guess_parcellation_role(path: str) -> str:
-        """
-        Suggest only Parcellation 1 or Parcellation 2.
+        """La case que ce seul nom de fichier designe, ou une chaine vide.
+
+        Vide et non "PARCEL1" par defaut : un nom qui ne dit rien ne
+        designe aucune case, et le faire croire est ce qui envoyait
+        deux fichiers dans la premiere.
 
         LUT files are no longer assigned manually in the bulk-import popup.
         FreeSurfer LUTs are detected and loaded automatically when possible.
@@ -1117,10 +1122,57 @@ class FilesPage:
         if "parcel1" in name or "parcellation1" in name or "_p1" in name or "p1_" in name:
             return "PARCEL1"
 
-        if "aparc" in name or "aseg" in name or "wmparc" in name:
+        # Les deux sorties habituelles de FreeSurfer vont ensemble :
+        # l'aparc decoupe le cortex, le wmparc la substance blanche. Les
+        # charger toutes deux est le cas courant, et elles n'occupent
+        # pas la meme case.
+        if "wmparc" in name:
+            return "PARCEL2"
+
+        if "aparc" in name or "aseg" in name:
             return "PARCEL1"
 
-        return "PARCEL1"
+        return ""
+
+    @classmethod
+    def _guess_parcellation_roles(cls, paths) -> dict:
+        """Repartir les fichiers entre les deux cases, sans collision.
+
+        La suggestion ne peut pas se faire fichier par fichier : prise
+        isolement, chacune des deux sorties de FreeSurfer se lit comme
+        une parcellation, et les deux atterrissaient dans la case 1, la
+        seconde effacant la premiere sans un mot.
+
+        Les noms explicites sont servis d'abord, puis les conventions
+        FreeSurfer, puis ce qui reste prend les cases libres dans
+        l'ordre ou les fichiers ont ete choisis.
+        """
+        chemins = list(paths or [])
+        suggestions: dict[str, str] = {}
+        prises: set[str] = set()
+
+        EXPLICITES = ("parcel1", "parcellation1", "_p1", "p1_",
+                      "parcel2", "parcellation2", "_p2", "p2_")
+        for tour in (True, False):
+            for chemin in chemins:
+                if chemin in suggestions:
+                    continue
+                nom = Path(chemin).name.lower()
+                if any(marque in nom for marque in EXPLICITES) != tour:
+                    continue
+                role = cls._guess_parcellation_role(chemin)
+                if role and role not in prises:
+                    suggestions[chemin] = role
+                    prises.add(role)
+
+        for chemin in chemins:
+            if chemin in suggestions:
+                continue
+            libre = next((r for r in ("PARCEL1", "PARCEL2") if r not in prises), "PARCEL1")
+            suggestions[chemin] = libre
+            prises.add(libre)
+
+        return suggestions
 
     @staticmethod
     def _guess_surface_role(path: str) -> str:
@@ -1247,7 +1299,46 @@ class FilesPage:
             QTimer.singleShot(350, self._cancel_files_loading)
             self._update_buttons()
 
+    #: Le repere MNI vers lequel NeuXelec normalise.
+    MNI_SPACE_NAME = "MNI152NLin2009cAsym"
+
+    #: L'atlas deja en place dans la case 1 de ce repere.
+    MNI_BUNDLED_PARCELLATION = "Schaefer 2018, 400 regions, 7 networks"
+
+    def _ask_parcellation_space(self) -> str | None:
+        """Natif ou MNI, en disant ce que chacun recouvre deja.
+
+        La question se pose avant le choix des fichiers : les deux
+        reperes n'attendent pas la meme chose, et laisser charger un
+        atlas MNI comme une parcellation du patient le poserait a cote
+        du cerveau sans que rien ne le dise.
+        """
+        return NeuXelecMessageDialog.choice(
+            self._dialog_parent(),
+            "Parcellation space",
+            (
+                "Which space is this parcellation in?\n\n"
+                "Native space holds the FreeSurfer parcellations of this "
+                "patient, in Parcellation 1 and 2.\n\n"
+                f"MNI space is {self.MNI_SPACE_NAME}. Its Parcellation 1 is "
+                f"already the bundled {self.MNI_BUNDLED_PARCELLATION}, so a "
+                "file loaded here becomes MNI parcellation 2."
+            ),
+            choices=[
+                ("native", "Native space (patient MRI 1)", True),
+                ("mni", f"MNI space ({self.MNI_SPACE_NAME})", False),
+            ],
+            cancel_text="Cancel",
+        )
+
     def load_parcellation_bundle(self) -> None:
+        espace = self._ask_parcellation_space()
+        if espace is None:
+            return
+        if espace == "mni":
+            self.load_mni_parcellation2()
+            return
+
         paths = self._pick_multiple_files(
             "Load parcellation / atlas files",
             ("Parcellations (*.nii *.nii.gz *.mgz *.mgh);;" "All files (*.*)"),
@@ -1261,7 +1352,7 @@ class FilesPage:
             ("PARCEL1", "Parcellation 1"),
             ("PARCEL2", "Parcellation 2"),
         ]
-        suggestions = {p: self._guess_parcellation_role(p) for p in paths}
+        suggestions = self._guess_parcellation_roles(paths)
         assignments = FileAssignmentDialog.get_assignments(
             paths,
             roles,
@@ -1283,6 +1374,32 @@ class FilesPage:
         ]
 
         if not valid_assignments:
+            self._update_buttons()
+            return
+
+        # Deux fichiers pour une meme case : le second effacerait le
+        # premier sans rien dire. La fenetre les laisse choisir, c'est
+        # donc ici qu'on le signale.
+        par_case: dict[str, list[str]] = {}
+        for item in valid_assignments:
+            par_case.setdefault(str(item.get("role", "")), []).append(
+                Path(str(item.get("path", ""))).name
+            )
+        doublons = {role: noms for role, noms in par_case.items() if len(noms) > 1}
+        if doublons:
+            detail = "\n".join(
+                "%s : %s" % (role.replace("PARCEL", "Parcellation "), ", ".join(noms))
+                for role, noms in sorted(doublons.items())
+            )
+            NeuXelecMessageDialog.warning(
+                self._dialog_parent(),
+                "Two files for one parcellation",
+                (
+                    "These files were given the same slot, and only the last "
+                    "one would be kept:\n\n%s\n\nAssign them to different "
+                    "slots." % detail
+                ),
+            )
             self._update_buttons()
             return
 
@@ -1361,12 +1478,15 @@ class FilesPage:
             "Load surfaces / derived masks",
             (
                 "Surfaces and masks "
-                "(*.pial *.surf *.stl *.ply *.vtp *.npz *.nii *.nii.gz);;"
+                "(*.pial *.surf *.stl *.ply *.vtp *.npz "
+                "*.nii *.nii.gz *.mgz *.mgh);;"
                 "FreeSurfer pial surfaces (*.pial);;"
                 "All files (*.*)"
             ),
             allow_dicom_folders=False,
-            files_button_text=("Files (.pial / .surf / .stl / .ply / .vtp / .npz / .nii)"),
+            files_button_text=(
+                "Files (.pial / .surf / .stl / .ply / .npz / .nii / .mgz)"
+            ),
         )
         if not paths:
             return
@@ -1649,6 +1769,92 @@ class FilesPage:
         sitk.WriteImage(img, out)
         return out
 
+    #: En deca de cette part de points tombant dans MRI 1, le fichier
+    #: decrit probablement une autre serie.
+    PLAN_INSIDE_WARN = 0.90
+
+    def _load_planned_trajectories_file(self, path: str) -> None:
+        """Relire un export de trajectoires, deja exprime en MRI 1.
+
+        Le chemin court de Load Planning : ces coordonnees sont celles
+        que NeuXelec a calculees, il n'y a ni .nip a retrouver, ni IRM
+        de planification a recaler, ni alignement a revoir.
+
+        La fenetre dit combien d'electrodes ont ete lues et si leurs
+        coordonnees tombent dans MRI 1. Un fichier calcule contre une
+        autre serie se lit sans erreur et poserait les electrodes a
+        cote : seul ce comptage le montre.
+        """
+        from ..ui.neuxelec_message_dialog import NeuXelecMessageDialog
+        from ..utils.plan_import import (
+            read_planned_trajectories,
+            trajectories_inside_fraction,
+        )
+
+        parent = self._dialog_parent()
+        if not getattr(self.state, "t1_path", None):
+            NeuXelecMessageDialog.warning(
+                parent,
+                "MRI 1 required",
+                "Load MRI 1 first: these coordinates are expressed in MRI 1 space.",
+            )
+            return
+
+        try:
+            plan = read_planned_trajectories(path)
+        except Exception as e:
+            NeuXelecMessageDialog.critical(
+                parent,
+                "Plan import failed",
+                f"Could not read the trajectories:\n{path}\nDetails:\n{e}",
+            )
+            return
+
+        trajs = plan.get("trajectories_t1") or []
+        contacts = sum(len(t.get("contacts_t1_lps") or []) for t in trajs)
+        part = trajectories_inside_fraction(trajs, getattr(self.state, "t1_sitk", None))
+
+        etiquette = str(plan.get("coordinate_label") or "")
+        attendue = self._mri1_filename_label()
+        lignes = [
+            "%d electrodes, %d planned contacts." % (len(trajs), contacts),
+            "",
+            "%d%% of their coordinates fall inside MRI 1."
+            % round(100 * part),
+        ]
+        if etiquette:
+            accord = "matches" if etiquette == attendue else "does not match"
+            lignes.append(
+                "The file was written against %r, which %s the MRI 1 loaded here (%r)."
+                % (etiquette, accord, attendue)
+            )
+
+        if part < self.PLAN_INSIDE_WARN:
+            lignes += [
+                "",
+                "That is little: this file was probably computed against "
+                "another series, and the electrodes would sit beside the "
+                "brain.",
+                "",
+                "Load it anyway?",
+            ]
+            if not NeuXelecMessageDialog.question(
+                parent, "Trajectories outside MRI 1", "\n".join(lignes)
+            ):
+                return
+        else:
+            NeuXelecMessageDialog.information(
+                parent, "Planned trajectories loaded", "\n".join(lignes)
+            )
+
+        self.state.plan = plan
+        self.state.plan_trajectories_path = str(path)
+        try:
+            self._sync_files_status_overview()
+        except Exception:
+            pass
+        self._update_buttons()
+
     def load_planning_bundle(self) -> None:
         """Import a NeuroInspire .nip implantation plan and express it in MRI 1 space."""
         from pathlib import Path as _Path
@@ -1671,7 +1877,13 @@ class FilesPage:
         parent = self._dialog_parent()
         start = getattr(self.state, "last_browse_dir", "") or ""
         path, _ = QFileDialog.getOpenFileName(
-            parent, "Load implantation plan", start, "NeuroInspire plan (*.nip);;All files (*.*)"
+            parent,
+            "Load implantation plan",
+            start,
+            "Plans and trajectories (*.nip *.txt);;"
+            "NeuroInspire plan (*.nip);;"
+            "NeuXelec trajectories (*.txt);;"
+            "All files (*.*)",
         )
         if not path:
             return
@@ -1679,6 +1891,15 @@ class FilesPage:
             self.state.last_browse_dir = str(_Path(path).parent)
         except Exception:
             pass
+
+        # Un export de NeuXelec porte deja ses coordonnees dans
+        # l'espace de MRI 1 : rien a recaler, rien a revoir. Reconnu a
+        # sa premiere ligne, pas a son extension.
+        from ..utils.plan_import import is_planned_trajectories_file
+
+        if is_planned_trajectories_file(path):
+            self._load_planned_trajectories_file(path)
+            return
 
         QApplication.setOverrideCursor(_Qt.WaitCursor)
         try:
@@ -1970,6 +2191,52 @@ class FilesPage:
                 pass
 
     @staticmethod
+    def _world_bounding_box(im: sitk.Image):
+        """Les deux coins de la boite physique d'une image.
+
+        Les huit sommets du volume sont passes en coordonnees du monde,
+        et non les seuls origine et taille : une direction oblique
+        ferait mentir le calcul en indices.
+        """
+        sx, sy, sz = im.GetSize()
+        coins = []
+        for i in (0, sx - 1):
+            for j in (0, sy - 1):
+                for k in (0, sz - 1):
+                    coins.append(im.TransformIndexToPhysicalPoint((i, j, k)))
+        arr = np.asarray(coins, dtype=float)
+        return arr.min(axis=0), arr.max(axis=0)
+
+    @staticmethod
+    def _physical_containment_fraction(img, autre) -> float:
+        """Quelle part du plus petit des deux volumes tient dans l'autre.
+
+        POURQUOI PAS L'INTERSECTION SUR L'UNION
+
+        Celle-ci punit une difference de champ de vue, meme quand les
+        deux images sont parfaitement alignees. Une parcellation
+        FreeSurfer conformee couvre un cube de 256 mm ; un T1 clinique
+        en couvre souvent moins. Le T1 tient alors entierement dans la
+        parcellation, donc rien ne cloche, et pourtant leur rapport
+        d'union tombe vers 0,68 et declenchait un avertissement a chaque
+        chargement.
+
+        Ce qui importe est la question posee : ces deux images
+        decrivent-elles le meme endroit du monde. Un volume entierement
+        contenu dans l'autre y repond oui, quelle que soit la taille de
+        la boite qui l'entoure.
+        """
+        amin, amax = FilesPage._world_bounding_box(img)
+        bmin, bmax = FilesPage._world_bounding_box(autre)
+
+        inter = np.maximum(0.0, np.minimum(amax, bmax) - np.maximum(amin, bmin))
+        inter_vol = float(np.prod(inter))
+        plus_petit = min(float(np.prod(amax - amin)), float(np.prod(bmax - bmin)))
+        if plus_petit <= 0:
+            return 0.0
+        return min(1.0, inter_vol / plus_petit)
+
+    @staticmethod
     def _physical_overlap_fraction(img: sitk.Image, t1: sitk.Image) -> float:
         """
         Intersection-over-union of the two images' physical (world) bounding
@@ -1982,18 +2249,8 @@ class FilesPage:
         live in different world spaces and the overlay would be misplaced.
         """
 
-        def _world_aabb(im: sitk.Image):
-            sx, sy, sz = im.GetSize()
-            corners = []
-            for i in (0, sx - 1):
-                for j in (0, sy - 1):
-                    for k in (0, sz - 1):
-                        corners.append(im.TransformIndexToPhysicalPoint((i, j, k)))
-            arr = np.asarray(corners, dtype=float)
-            return arr.min(axis=0), arr.max(axis=0)
-
-        amin, amax = _world_aabb(img)
-        bmin, bmax = _world_aabb(t1)
+        amin, amax = FilesPage._world_bounding_box(img)
+        bmin, bmax = FilesPage._world_bounding_box(t1)
 
         inter = np.maximum(0.0, np.minimum(amax, bmax) - np.maximum(amin, bmin))
         inter_vol = float(np.prod(inter))
@@ -2003,6 +2260,112 @@ class FilesPage:
         if union <= 0:
             return 0.0
         return inter_vol / union
+
+    def _mni_template_image(self):
+        """Le gabarit MNI fourni, repere de la verification de geometrie."""
+        from ..utils.resources import resource_path
+
+        for nom in ("template_T1w.nii.gz", "template_T1.nii"):
+            chemin = resource_path("tools/templates") / nom
+            if chemin.exists():
+                try:
+                    return sitk.ReadImage(str(chemin))
+                except Exception:
+                    continue
+        return None
+
+    def load_mni_parcellation2(self) -> None:
+        """Poser un atlas MNI dans la case 2, apres l'avoir situe.
+
+        Un seul fichier, et une seule case : la premiere porte le
+        Schaefer fourni. La verification compare la boite englobante
+        **physique** du fichier a celle du gabarit, et non les grilles :
+        deux atlas du meme repere peuvent avoir des champs de vue
+        differents sans se contredire. C'est ce qui separe un atlas de
+        ce repere d'un atlas d'une autre variante de MNI, qui se poserait
+        a cote du cerveau sans que rien ne le dise.
+        """
+        browse_dir = self.state.last_browse_dir or str(Path.home())
+        path, _ = QFileDialog.getOpenFileName(
+            self._dialog_parent(),
+            f"Select the MNI parcellation ({self.MNI_SPACE_NAME})",
+            browse_dir,
+            "Parcellations (*.nii *.nii.gz *.mgz *.mgh);;All files (*.*)",
+        )
+        if not path:
+            return
+        self.state.last_browse_dir = str(Path(path).parent)
+
+        try:
+            img = read_image_any(path)
+        except Exception as e:
+            NeuXelecMessageDialog.critical(
+                self._dialog_parent(),
+                "Load MNI parcellation failed",
+                f"Could not read:\n\n{path}\n\nDetails:\n{e}",
+            )
+            return
+        if img is None:
+            NeuXelecMessageDialog.critical(
+                self._dialog_parent(),
+                "Load MNI parcellation failed",
+                f"Could not read:\n\n{path}",
+            )
+            return
+
+        if not self._warn_mni_parcellation_geometry(img, path):
+            return
+
+        self.state.mni_parcel2_path = path
+        vp = self._view3d()
+        if vp is not None and hasattr(vp, "set_mni_parcellation2"):
+            try:
+                vp.set_mni_parcellation2(img, path)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Could not hand the MNI parcellation to the 3D view"
+                )
+
+        self._sync_files_status_overview()
+        self._update_buttons()
+
+    def _warn_mni_parcellation_geometry(self, img, path: str) -> bool:
+        """Prevenir si l'atlas n'occupe pas l'espace du gabarit.
+
+        Rend ``False`` quand l'utilisateur renonce. Prevenir, et non
+        refuser : lui seul sait si son fichier est bien dans ce repere,
+        et un atlas au champ de vue different y est parfaitement
+        legitime.
+        """
+        gabarit = self._mni_template_image()
+        if gabarit is None:
+            return True
+        try:
+            recouvrement = self._physical_containment_fraction(img, gabarit)
+        except Exception:
+            return True
+
+        if recouvrement >= 0.80:
+            return True
+
+        reponse = NeuXelecMessageDialog.question(
+            self._dialog_parent(),
+            "MNI geometry mismatch",
+            (
+                f"{Path(path).name} does not occupy the same physical space "
+                f"as the {self.MNI_SPACE_NAME} template.\n\n"
+                f"Template: {gabarit.GetSize()} voxels, origin "
+                f"{tuple(round(v, 1) for v in gabarit.GetOrigin())}\n\n"
+                f"This file: {img.GetSize()} voxels, origin "
+                f"{tuple(round(v, 1) for v in img.GetOrigin())}\n\n"
+                "They overlap by "
+                f"{round(100 * recouvrement)}%. This usually means the atlas "
+                "belongs to another MNI variant, and it will be drawn beside "
+                "the brain rather than on it.\n\n"
+                "Load it anyway?"
+            ),
+        )
+        return bool(reponse)
 
     def _warn_geometry_mismatch_against_t1(self, img: sitk.Image, label: str) -> None:
         t1 = getattr(self.state, "t1_sitk", None)
@@ -2022,15 +2385,20 @@ class FilesPage:
             if not mismatch:
                 return
 
-            # The raw voxel grids differ, but that alone does not mean the
-            # overlay is wrong: overlays are sampled by physical position, so
-            # what matters is whether the two images share the same world
-            # space. FreeSurfer/FastSurfer parcellations use a conformed grid
-            # (256^3, axis-aligned) that never matches an obliquely-acquired
-            # T1, yet they are correctly aligned in world coordinates. Only
-            # warn when the physical bounding boxes genuinely disagree.
+            # Les grilles different, ce qui ne dit rien de l'alignement :
+            # une surcouche est echantillonnee par position physique, donc
+            # seule compte la question de savoir si les deux images
+            # decrivent le meme endroit. Une parcellation FreeSurfer est
+            # conformee en 256^3 et ne ressemble jamais a un T1 clinique,
+            # tout en etant exactement a sa place.
+            #
+            # La mesure est la contenance du plus petit volume dans
+            # l'autre, et non leur intersection sur leur union : celle-ci
+            # tombait a 0,68 pour un T1 au champ de vue plus serre que le
+            # cube conforme, et l'avertissement partait a chaque
+            # chargement alors que tout allait bien.
             try:
-                overlap = self._physical_overlap_fraction(img, t1)
+                overlap = self._physical_containment_fraction(img, t1)
             except Exception:
                 overlap = 0.0
 
@@ -2043,7 +2411,7 @@ class FilesPage:
                 f"Warning: {label} does not match the T1 geometry.\n"
                 "Overlay may be incorrect unless it is already in T1 space.\n\n"
                 + "\n".join(mismatch)
-                + f"\n\nPhysical-space overlap with T1: {overlap * 100:.0f}%",
+                + f"\n\nIt lies {overlap * 100:.0f}% inside the T1 volume.",
             )
         except Exception:
             pass
@@ -2191,7 +2559,9 @@ class FilesPage:
         self.state.brainmask_generated = True
         self.state.brainmask_saved = True
         self.state.brainmask_generated_path = None
-        self.state.brainmask_sitk = sitk.ReadImage(path)
+        # read_image_any et non sitk.ReadImage : un brainmask arrive
+        # souvent en .mgz de FreeSurfer, que SimpleITK ne sait pas lire.
+        self.state.brainmask_sitk = read_image_any(path)
         if getattr(self, "le_load_brainmask", None) is not None:
             self.le_load_brainmask.setText(path)
             self.le_load_brainmask.setCursorPosition(0)
@@ -2368,8 +2738,8 @@ class FilesPage:
         except Exception as e:
             NeuXelecMessageDialog.critical(
                 self._dialog_parent(),
-                f"Load {modality} failed",
-                f"The {modality} could not be read or normalized.\n\nDetails:\n{e}",
+                f"Load {self._display_modality_name(modality)} failed",
+                f"The {self._display_modality_name(modality)} could not be read or normalized.\n\nDetails:\n{e}",
             )
             return None, None, None
 
@@ -3744,6 +4114,7 @@ class FilesPage:
 
             text_path = str(Path(out_dir) / self._default_filename("plan_trajectories_LPS", ".txt"))
             contacts = self._write_planned_trajectories(Path(text_path))
+            self.state.plan_trajectories_path = text_path
             saved.append(f"{text_path}  ({contacts} planned contacts)")
         except Exception as error:
             NeuXelecMessageDialog.critical(
@@ -3813,7 +4184,7 @@ class FilesPage:
 
         if bm_img is None and bm_path:
             try:
-                bm_img = sitk.ReadImage(bm_path)
+                bm_img = read_image_any(bm_path)
                 self.state.brainmask_sitk = bm_img
             except Exception:
                 bm_img = None
@@ -4370,7 +4741,7 @@ class FilesPage:
 
             self.coreg_bar.setValue(value)
             self.coreg_bar.setFormat(
-                f"{modality} → MRI 1: {self._coreg_progress_stage_text(value)}... %p%"
+                f"{self._display_modality_name(modality)} → MRI 1: {self._coreg_progress_stage_text(value)}... %p%"
             )
 
         except Exception:
@@ -4427,12 +4798,28 @@ class FilesPage:
             )
             return
 
-        # Ask where to save ONLY the transform matrix
-        matrix_save_path = self._ask_transform_save_path(modality)
-        if not matrix_save_path:
+        # Before anything: are the two volumes already in the same space, and
+        # is a transform perhaps already known? Both save three minutes of ANTs
+        # and, in the first case, a silent 30 mm error.
+        choix = self._coreg_choice_before_starting(modality, fixed_path, moving_path)
+        if choix is None:
             return
+        decision, existing_matrix = choix
+        if decision == "identity":
+            existing_matrix = self._identity_transform_file(modality)
+            if existing_matrix is None:
+                return
 
-        self._pending_matrix_save_path = matrix_save_path
+        if existing_matrix:
+            # The matrix exists already, so there is nothing to save and
+            # nowhere to ask for: leaving this empty skips the copy.
+            self._pending_matrix_save_path = None
+        else:
+            # Ask where to save ONLY the transform matrix
+            matrix_save_path = self._ask_transform_save_path(modality)
+            if not matrix_save_path:
+                return
+            self._pending_matrix_save_path = matrix_save_path
 
         self._start_coreg_progress_animation(modality)
 
@@ -4456,11 +4843,141 @@ class FilesPage:
             moving_path=moving_path,
             transforms_dir=None,
             apply_to_path=apply_to_path,
+            existing_affine_mat=existing_matrix,
         )
         self.worker.progress.connect(self._on_progress)
         self.worker.finished_ok.connect(self._on_coreg_ok)
         self.worker.failed.connect(self._on_coreg_fail)
         self.worker.start()
+
+
+    def _coreg_choice_before_starting(
+        self, modality: str, fixed_path: str, moving_path: str
+    ) -> tuple[str, str | None] | None:
+        """What to do before estimating anything: identity, reuse, estimate, cancel.
+
+        Two questions, in this order, and the first is usually skipped.
+
+        THE SPACES MAY ALREADY COINCIDE. A statistical map and the anatomy it
+        came from come out on the same grid, and so do a segmentation and its
+        source. Registering those against each other asks an optimiser to
+        rediscover the identity, which it does not do: measured on a z-score
+        map and its own T1, affines rigorously identical, ANTs returned a 56
+        degree rotation, a scaling of 0.77 and a 4 mm shift, over 30 mm of error
+        at the edge of the brain. Nothing failed and nothing warned, because a
+        statistical map has no intensity correspondence with an anatomy, so the
+        metric has no maximum to find and the search stops wherever chance
+        takes it. This question therefore only appears when the two volumes do
+        coincide, which is rare and worth interrupting for.
+
+        THE TRANSFORM MAY ALREADY EXIST. Several modalities of one examination
+        share a position, so the transform estimated for the first serves the
+        others. Reusing it costs a second instead of three minutes, and it is
+        exactly reproducible, which estimating again is not.
+
+        Returns (decision, matrix) where decision is "identity", "apply" or
+        "estimate", or None when the user backs out.
+        """
+        from ..coregistration import same_physical_space
+
+        name = self._display_modality_name(modality)
+        try:
+            partage = same_physical_space(fixed_path, moving_path)
+        except Exception:
+            logging.getLogger(__name__).exception("Could not compare the two spaces")
+            partage = False
+
+        # Both questions are asked with choice() rather than question(), which
+        # answers only yes or no: closing a window would then be indistinguish-
+        # able from pressing the second button. Someone who shut the first one
+        # was asked the second, having asked for nothing at all. choice()
+        # returns None when the window is closed, so shutting any of these
+        # abandons the whole operation, which is what shutting a window means.
+        if partage:
+            # Short, and deliberately not a warning. Nothing is wrong when this
+            # appears: the two volumes are already aligned, so the answer is
+            # simply that there is nothing to do. What a pointless estimation
+            # costs, a 56 degree rotation and 30 mm at the edge of the brain,
+            # is written in this file rather than put in front of someone whose
+            # coregistration is perfectly fine.
+            reponse = NeuXelecMessageDialog.choice(
+                self._dialog_parent(),
+                "Already aligned",
+                f"MRI 1 and {name} are already in the same space, voxel for "
+                "voxel. There is nothing to estimate.",
+                choices=[
+                    ("identity", "Use as it is", True),
+                    ("estimate", "Coregister anyway", False),
+                ],
+                cancel_text=None,
+            )
+            if reponse is None:
+                return None
+            if reponse == "identity":
+                return ("identity", None)
+
+        # One line. This appears before every coregistration, so it has to be
+        # read in a glance; the buttons already say what each choice does.
+        reponse = NeuXelecMessageDialog.choice(
+            self._dialog_parent(),
+            "Transformation matrix",
+            f"Do you already have a transformation matrix for {name}?",
+            choices=[
+                ("apply", "I have one", True),
+                ("estimate", "Estimate a new one", False),
+            ],
+            cancel_text=None,
+        )
+        if reponse is None:
+            return None
+        if reponse == "estimate":
+            return ("estimate", None)
+
+        chemin = self._ask_existing_matrix()
+        if not chemin:
+            # Backing out of the file dialog means backing out of the whole
+            # thing, not silently falling back to a three minute estimation.
+            return None
+        return ("apply", chemin)
+
+    def _identity_transform_file(self, modality: str) -> str | None:
+        """An identity .mat, so "use as it is" takes the ordinary path.
+
+        Writing the identity and applying it beats a special case: the image
+        goes through the same resampling as any registered one, lands on the
+        fixed grid, and a transform file is produced like for any other
+        modality, which keeps the project description uniform.
+        """
+        from ..coregistration import write_identity_affine
+
+        import tempfile
+
+        try:
+            stored = getattr(self.state, "transforms_dir", None)
+            folder = Path(str(stored)) if stored else Path(tempfile.mkdtemp(prefix="neuxelec_id_"))
+            folder.mkdir(parents=True, exist_ok=True)
+            return write_identity_affine(
+                str(folder / f"{modality}_identity_0GenericAffine.mat")
+            )
+        except Exception as error:
+            NeuXelecMessageDialog.critical(
+                self._dialog_parent(),
+                "Coregistration",
+                f"Could not prepare the identity transform.\n\n{error}",
+            )
+            return None
+
+    def _ask_existing_matrix(self) -> str | None:
+        """Let the user hand over a transform instead of estimating one."""
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(
+            self._dialog_parent(),
+            "Transform to apply",
+            str(getattr(self.state, "transforms_dir", "") or ""),
+            "ANTs transform (*.mat);;All files (*.*)",
+        )
+        return path or None
 
     def _refresh_coreg_progress_ui(self) -> None:
         if self.coreg_bar is None:
@@ -4511,7 +5028,7 @@ class FilesPage:
                 modality = self._display_modality_name(
                     getattr(self, "_coreg_progress_modality", None) or "Image"
                 )
-                self.coreg_bar.setFormat(f"{modality} → MRI 1: Finalizing registration... %p%")
+                self.coreg_bar.setFormat(f"{self._display_modality_name(modality)} → MRI 1: Finalizing registration... %p%")
             elif v > 0:
                 self.coreg_bar.setValue(max(int(self.coreg_bar.value()), v))
             return
@@ -4581,7 +5098,7 @@ class FilesPage:
         self._set_busy(False)
         self._update_buttons()
         NeuXelecMessageDialog.critical(
-            self._dialog_parent(), f"Coregistration failed ({modality})", msg
+            self._dialog_parent(), f"Coregistration failed ({self._display_modality_name(modality)})", msg
         )
 
     # ------------------------------------------------------------------
@@ -4644,7 +5161,12 @@ class FilesPage:
             return
 
         moving_img = self._coreg_image_for(modality)
-        moving_name = modality
+        # The name the review window and the manual console print everywhere,
+        # in their title, their subtitle and half a dozen labels. It used to be
+        # the internal key, so a user who had just loaded "MRI 2" was then told
+        # to adjust "T2". The keys stay T1 and T2 in the code; only what is
+        # shown becomes MRI 1 and MRI 2.
+        moving_name = self._display_modality_name(modality)
 
         if moving_img is None:
             moving_path = self._moving_path_for(modality)
@@ -4665,7 +5187,7 @@ class FilesPage:
                     0.0,
                     sitk.sitkFloat32,
                 )
-                moving_name = f"{modality} (not coregistered)"
+                moving_name = f"{self._display_modality_name(modality)} (not coregistered)"
             except Exception as e:
                 NeuXelecMessageDialog.critical(
                     self._dialog_parent(), "Review coregistration", f"Failed to load image:\n{e}"
@@ -4902,7 +5424,7 @@ class FilesPage:
                 pass
 
             NeuXelecMessageDialog.information(
-                self._dialog_parent(), "Validated", f"{modality} validated."
+                self._dialog_parent(), "Validated", f"{self._display_modality_name(modality)} validated."
             )
 
     # ------------------------------------------------------------------
@@ -4923,7 +5445,7 @@ class FilesPage:
 
         if not moving_path:
             NeuXelecMessageDialog.warning(
-                self._dialog_parent(), f"Save {modality}", f"No {modality} loaded."
+                self._dialog_parent(), f"Save {self._display_modality_name(modality)}", f"No {self._display_modality_name(modality)} loaded."
             )
             return
 
@@ -4955,7 +5477,7 @@ class FilesPage:
 
             out_path, _ = QFileDialog.getSaveFileName(
                 self._dialog_parent(),
-                f"Save {modality} (raw, not coregistered)",
+                f"Save {self._display_modality_name(modality)} (raw, not coregistered)",
                 default_path,
                 "NIfTI (*.nii *.nii.gz);;All files (*.*)",
             )
@@ -4970,7 +5492,7 @@ class FilesPage:
                 return
 
             NeuXelecMessageDialog.information(
-                self._dialog_parent(), f"Save {modality}", "Saved (raw):\n" + out_path
+                self._dialog_parent(), f"Save {self._display_modality_name(modality)}", "Saved (raw):\n" + out_path
             )
             return
 
@@ -5022,7 +5544,7 @@ class FilesPage:
 
         NeuXelecMessageDialog.information(
             None,
-            f"Save {modality}",
+            f"Save {self._display_modality_name(modality)}",
             "Saved:\n" + out_path,
         )
 
@@ -5106,7 +5628,7 @@ class FilesPage:
             )
             if brainmask_source_path:
                 try:
-                    brainmask_img = sitk.ReadImage(str(brainmask_source_path))
+                    brainmask_img = read_image_any(str(brainmask_source_path))
                 except Exception:
                     brainmask_img = None
 
@@ -5166,10 +5688,10 @@ class FilesPage:
                         self.le_load_brainmask.setCursorPosition(0)
                         self.le_load_brainmask.setToolTip(out_path)
 
-                saved.append(f"{modality}: {out_path}")
+                saved.append(f"{self._display_modality_name(modality)}: {out_path}")
 
             except Exception as e:
-                failed.append(f"{modality}: {e}")
+                failed.append(f"{self._display_modality_name(modality)}: {e}")
 
         try:
             self.state.last_browse_dir = out_dir
@@ -5254,18 +5776,28 @@ class FilesPage:
             self._dialog_parent(),
             "Select Brain Mask file",
             start_dir,
-            "NIfTI files (*.nii *.nii.gz);;All files (*.*)",
+            "Brain masks (*.nii *.nii.gz *.mgz *.mgh);;All files (*.*)",
         )
         if not path:
             return
+        try:
+            image = read_image_any(path)
+        except Exception as e:
+            # Un echec muet retenait le chemin, posait l'image a None et
+            # ne disait rien : le fichier paraissait charge et rien ne
+            # s'affichait. L'etat reste donc celui d'avant.
+            NeuXelecMessageDialog.critical(
+                self._dialog_parent(),
+                "Load brain mask failed",
+                f"Could not read:\n\n{path}\n\nDetails:\n{e}",
+            )
+            return
+
         self.state.brainmask_path = path
         self.state.brainmask_generated = True
         self.state.brainmask_saved = True
         self.state.brainmask_generated_path = None
-        try:
-            self.state.brainmask_sitk = sitk.ReadImage(path)
-        except Exception:
-            self.state.brainmask_sitk = None
+        self.state.brainmask_sitk = image
 
         if getattr(self, "le_load_brainmask", None) is not None:
             try:
@@ -5880,6 +6412,49 @@ class FilesPage:
 
         widget.update()
 
+    #: Ce qu'il faut avoir ecrit pour qu'un bouton porte le contour rose.
+    #:
+    #: Le contour n'est pas un style : il dit qu'un fichier existe sur
+    #: le disque. La regle vit donc ici, a l'ecart de la recherche des
+    #: widgets, pour se lire et se verifier d'un coup d'oeil.
+    SAVED_PATHS = {
+        "btn_save_t2": ("t2_coreg_path",),
+        "btn_save_fmri": ("fmri_coreg_path",),
+        "btn_save_ct": ("ct_coreg_path",),
+        "btn_save_pet": ("pet_coreg_path",),
+        "btn_save_ictal": ("ictal_spect_coreg_path",),
+        "btn_save_interictal": ("interictal_spect_coreg_path",),
+        "btn_save_siscom": ("siscom_coreg_path",),
+        "btn_save_brainmask": ("brainmask_path",),
+        # Enregistrer le plan ecrit deux fichiers, et parfois un seul :
+        # l'IRM de planification recalee n'existe pas quand le plan est
+        # deja dans l'espace de MRI 1.
+        "btn_save_plan": ("plan_mri_in_t1_path", "plan_trajectories_path"),
+    }
+
+    #: Save all s'allume des qu'une seule de ces sorties existe.
+    SAVED_ALL_PATHS = (
+        "t2_coreg_path",
+        "fmri_coreg_path",
+        "ct_coreg_path",
+        "pet_coreg_path",
+        "ictal_spect_coreg_path",
+        "interictal_spect_coreg_path",
+        "siscom_coreg_path",
+        "brainmask_path",
+    )
+
+    def _saved_flags(self) -> dict:
+        """Quels boutons ont reellement ecrit quelque chose, par nom."""
+        etat = self.state
+
+        def ecrit(chemins) -> bool:
+            return any(bool(getattr(etat, nom, None)) for nom in chemins)
+
+        drapeaux = {nom: ecrit(chemins) for nom, chemins in self.SAVED_PATHS.items()}
+        drapeaux["btn_save_all"] = ecrit(self.SAVED_ALL_PATHS)
+        return drapeaux
+
     def _cockpit_path_for(self, key: str) -> str | None:
         """Full path of the file backing a cockpit row, or None if not loaded."""
         attr = {
@@ -5893,6 +6468,7 @@ class FilesPage:
             "SISCOM": "siscom_path",
             "Parcel1": "parcel1_path",
             "Parcel2": "parcel2_path",
+            "MniParcel2": "mni_parcel2_path",
             "LHPial": "lh_pial_path",
             "RHPial": "rh_pial_path",
             "BrainMask": "brainmask_path",
@@ -6106,6 +6682,17 @@ class FilesPage:
             "validated" if parcel2_loaded else "missing",
         )
 
+        # La case 2 du repere MNI. NeuXelec n'en fournit pas : la ligne
+        # dit donc "Not loaded" et non "Missing", qui laisserait croire
+        # a un fichier egare.
+        mni_parcel2_loaded = bool(getattr(self.state, "mni_parcel2_path", None))
+        self._set_status_item(
+            "MniParcel2",
+            mni_parcel2_loaded,
+            "Available" if mni_parcel2_loaded else "Not loaded",
+            "validated" if mni_parcel2_loaded else "missing",
+        )
+
         lh_loaded = bool(getattr(self.state, "lh_pial_path", None))
         rh_loaded = bool(getattr(self.state, "rh_pial_path", None))
         pials_available = bool(getattr(self.state, "pial_surfaces_available", False))
@@ -6280,56 +6867,8 @@ class FilesPage:
 
         # Outputs receive a permanent pink outline only after they
         # have actually been written to disk.
-        save_states = (
-            (
-                getattr(self, "btn_save_t2", None),
-                bool(getattr(self.state, "t2_coreg_path", None)),
-            ),
-            (
-                getattr(self, "btn_save_fmri", None),
-                bool(getattr(self.state, "fmri_coreg_path", None)),
-            ),
-            (
-                getattr(self, "btn_save_ct", None),
-                bool(getattr(self.state, "ct_coreg_path", None)),
-            ),
-            (
-                getattr(self, "btn_save_pet", None),
-                bool(getattr(self.state, "pet_coreg_path", None)),
-            ),
-            (
-                getattr(self, "btn_save_ictal", None),
-                bool(getattr(self.state, "ictal_spect_coreg_path", None)),
-            ),
-            (
-                getattr(self, "btn_save_interictal", None),
-                bool(getattr(self.state, "interictal_spect_coreg_path", None)),
-            ),
-            (
-                getattr(self, "btn_save_siscom", None),
-                bool(getattr(self.state, "siscom_coreg_path", None)),
-            ),
-            (
-                getattr(self, "btn_save_brainmask", None),
-                bool(getattr(self.state, "brainmask_path", None)),
-            ),
-            (
-                getattr(self, "btn_save_all", None),
-                bool(
-                    getattr(self.state, "t2_coreg_path", None)
-                    or getattr(self.state, "fmri_coreg_path", None)
-                    or getattr(self.state, "ct_coreg_path", None)
-                    or getattr(self.state, "pet_coreg_path", None)
-                    or getattr(self.state, "ictal_spect_coreg_path", None)
-                    or getattr(self.state, "interictal_spect_coreg_path", None)
-                    or getattr(self.state, "siscom_coreg_path", None)
-                    or getattr(self.state, "brainmask_path", None)
-                ),
-            ),
-        )
-
-        for button, is_saved in save_states:
-            self._set_dynamic_property(button, "saved", is_saved)
+        for nom, enregistre in self._saved_flags().items():
+            self._set_dynamic_property(getattr(self, nom, None), "saved", enregistre)
 
         t1_loaded = bool(getattr(self.state, "t1_path", None))
         self._set_dynamic_property(getattr(self, "chk_t1", None), "referenceLoaded", t1_loaded)
@@ -6483,7 +7022,7 @@ class FilesPage:
 
         out_path, _ = QFileDialog.getSaveFileName(
             self._dialog_parent(),
-            f"Save {modality} transform matrix",
+            f"Save {self._display_modality_name(modality)} transform matrix",
             default_name,
             "ANTs affine matrix (*.mat);;All files (*.*)",
         )

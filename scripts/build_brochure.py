@@ -60,7 +60,7 @@ p.kicker {
 }
 h2 {
     color: #12131A; font-size: 14pt; font-weight: 600;
-    margin-top: 16px; margin-bottom: 7px;
+    margin-top: 13px; margin-bottom: 5px;
 }
 h3 { color: #B01E4E; font-size: 11pt; font-weight: 600;
      margin-top: 14px; margin-bottom: 2px; }
@@ -68,6 +68,7 @@ b { color: #12131A; font-weight: 600; }
 i { color: #23252F; }
 td { color: #23252F; font-size: 10pt; line-height: 133%; }
 td.step { color: #FF487D; font-size: 12pt; font-weight: 600; }
+p.point { margin-top: 6px; margin-bottom: 0px; }
 table { margin-top: 11px; }
 p.quote {
     color: #B01E4E; font-size: 12pt; line-height: 138%; font-weight: 600;
@@ -132,39 +133,43 @@ own anatomy.</p>
 PAGE_TWO = f"""
 {step("6", "Look at it properly",
       "Oblique slices cut along the axis of an electrode show every contact of "
-      "a shaft at once, turn around it and travel millimetre by millimetre "
-      "beside it. The 3D scene puts electrodes, brain surface, slice planes and "
-      "functional maps in one picture, and one click narrows the display to "
-      "the contacts sitting in grey matter.")}
+      "a shaft at once. The 3D scene puts electrodes, brain surface, slice "
+      "planes and functional maps in one picture, and narrows it to the "
+      "contacts sitting in grey matter.")}
 
-{step("7", "Export to whatever comes next",
+{step("7", "Write down what the stimulation did",
+      "One card per stimulated pair: the protocol, what the trace showed, what "
+      "the patient felt. A mode of its own draws each pair as a coloured tube "
+      "between its two contacts, filtered and coloured by what the finding is "
+      "worth. In English or in French.")}
+
+{step("8", "Export to whatever comes next",
       "Contact coordinates as TXT, CSV, TSV, JSON, Cartool ELS or iELVIS, in "
-      "LPS or RAS, and a valid BIDS folder with the anatomical labels, in the "
-      "patient space or in MNI152. Exported images can be defaced on the way "
-      "out, and the brain is never touched.")}
+      "LPS or RAS, and a valid BIDS folder with the anatomical labels. "
+      "Stimulation results leave as a table, a report or the records "
+      "themselves. Exported images can be defaced on the way out, and "
+      "screenshots and rotating GIFs come out on the colour of your slide.")}
 
 <h2>Functional imaging where you need it</h2>
 <p>PET, ictal and inter-ictal SPECT, and the SISCOM computed inside the
-application once both SPECT are aligned. fMRI is read either as a statistical
-map or recovered from the colour fusion the scanner exports, so what the
-neurologist sends is what you display. Threshold, opacity, colour map,
-minimum cluster size in mm&sup3;, restriction to the cortical ribbon: as a blob
-in 3D, on the pial surface, or painted on the slice planes, next to the contacts
-that matter.</p>
+application once both SPECT are aligned. fMRI is read as a statistical map or
+recovered from the colour fusion the scanner exports, so what the neurologist
+sends is what you display. Threshold, colour map, minimum cluster size,
+cortical ribbon only: as a blob in 3D, on the pial surface or painted on the
+slice planes, next to the contacts that matter.</p>
 
 <h2>Made to be used in the clinic</h2>
-<p><b>Everything in the patient's own space.</b> MNI is there when you ask for
+<p class="point"><b>Everything in the patient's own space.</b> MNI is there when you ask for
 it, never behind your back.</p>
-<p><b>Nothing is written without you.</b> A validated coregistration lives in
+<p class="point"><b>Nothing is written without you.</b> A validated coregistration lives in
 the session until you save it, and NeuXelec says so if you leave it behind.</p>
-<p><b>A project reopens as you left it, on any machine.</b> Images, electrodes,
-colours and display settings come back in one click, and a project moved to
-another computer finds its images again on its own. A read-only mode lets you
-hand the case over without any risk of changing it.</p>
-<p><b>Nothing to configure, nothing to learn by heart.</b> A Windows installer
-with the registration tools included, an update notice when a new version is
-out, a guided tour on the first launch and the whole user guide behind F1.</p>
-<p><b>Free and open source.</b> Released under the GNU General Public License
+<p class="point"><b>A project reopens as you left it, on any machine.</b> Images, electrodes,
+colours and display settings come back in one click, and a read-only mode hands
+the case over without any risk of changing it.</p>
+<p class="point"><b>Nothing to configure.</b> A Windows installer with the registration tools
+included, an update notice for each new version, a guided tour on the first
+launch and the user guide behind F1.</p>
+<p class="point"><b>Free and open source.</b> Released under the GNU General Public License
 v3: read it, cite it, improve it.</p>
 
 <h2>Where it comes from</h2>

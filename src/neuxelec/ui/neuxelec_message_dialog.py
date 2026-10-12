@@ -183,7 +183,7 @@ class NeuXelecMessageDialog(QDialog):
         title: str,
         message: str,
         choices: Sequence[tuple[str, str, bool]],
-        cancel_text: str = "Cancel",
+        cancel_text: str | None = "Cancel",
     ) -> str | None:
         """
         choices:
@@ -191,10 +191,16 @@ class NeuXelecMessageDialog(QDialog):
                 ("returned_value", "Button text", is_primary),
                 ...
             ]
+
+        ``cancel_text=None`` leaves the Cancel button out. Closing the window
+        still returns ``None``, so nothing becomes unavoidable; it is for the
+        questions whose own buttons already name every outcome, where a third
+        button would only repeat the cross in the title bar.
         """
         dlg = cls(title, message, parent=parent, kind="question")
 
-        dlg._add_button(cancel_text, primary=False, accepted=False)
+        if cancel_text is not None:
+            dlg._add_button(cancel_text, primary=False, accepted=False)
 
         for value, label, primary in choices:
             dlg._add_choice_button(
@@ -250,8 +256,60 @@ class NeuXelecMessageDialog(QDialog):
         except Exception:
             self.resize(preferred_width, preferred_height)
 
+    def _grow_for_buttons(self) -> None:
+        """Elargir la fenetre si ses boutons n'y tiennent pas.
+
+        POURQUOI ICI ET NON A LA CONSTRUCTION
+
+        La taille de depart est calculee dans __init__, avant que le
+        moindre bouton existe : ils sont ajoutes apres, par
+        _add_button et _add_choice_button. Une fenetre posee a 570 px
+        rognait donc tout libelle un peu long, et le choix du repere de
+        parcellation s'affichait "lative space (patient MRI 1" et
+        "space (MNI152NLin2009cA".
+
+        Elargir plutot que raccourcir les libelles : un bouton dit ce
+        qu'il fait, et c'est la fenetre qui doit s'y plier.
+        """
+        try:
+            besoin = self.buttons_layout.sizeHint().width()
+        except Exception:
+            return
+        if besoin <= 0:
+            return
+
+        marges = 0
+        try:
+            cadre = self.dialog_shell.layout()
+            if cadre is not None:
+                bords = cadre.contentsMargins()
+                marges = bords.left() + bords.right()
+        except Exception:
+            marges = 0
+
+        voulue = besoin + marges + 24
+        if voulue <= self.width():
+            return
+
+        plafond = voulue
+        try:
+            ecran = self.screen() or QGuiApplication.primaryScreen()
+            if ecran is not None:
+                plafond = min(
+                    voulue,
+                    max(self.width(), ecran.availableGeometry().width() - 90),
+                )
+        except Exception:
+            pass
+
+        self.resize(int(plafond), self.height())
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
+
+        # Avant de se placer : les boutons existent desormais, et ils
+        # peuvent reclamer plus large que la taille de depart.
+        self._grow_for_buttons()
 
         if self._positioned_once:
             return

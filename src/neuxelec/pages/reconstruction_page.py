@@ -1358,11 +1358,20 @@ class ReconstructionPage:
                 return w
         return None
 
+    #: Le fond des trois vues CT.
+    #:
+    #: Noir, et non le gris rgb(30,30,30) d'avant : ce qui borde l'image
+    #: est la meme absence de signal que son propre fond, et deux gris
+    #: differents dessinaient autour d'elle un cadre que rien ne
+    #: justifie. Les bandes restantes, a zoom 1, se fondent desormais
+    #: dans la coupe.
+    IMAGE_BACKGROUND_STYLE = "background-color: black; color: white;"
+
     def _ensure_image_label(self, frame: QFrame | None) -> ClickableImageLabel:
         if frame is None:
             lbl = ClickableImageLabel()
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet("background-color: rgb(30,30,30); color: white;")
+            lbl.setStyleSheet(self.IMAGE_BACKGROUND_STYLE)
             lbl.setText("[No CT loaded]")
             return lbl
 
@@ -1378,7 +1387,7 @@ class ReconstructionPage:
 
         lbl = ClickableImageLabel(frame)
         lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet("background-color: rgb(30,30,30); color: white;")
+        lbl.setStyleSheet(self.IMAGE_BACKGROUND_STYLE)
         lbl.setText("[No CT loaded]")
         lay.addWidget(lbl)
         return lbl
@@ -1755,20 +1764,20 @@ class ReconstructionPage:
 
         z, y, x = vol.shape
 
-        if self.scroll_axi is not None:
-            self.scroll_axi.setMinimum(0)
-            self.scroll_axi.setMaximum(max(0, z - 1))
-            self.scroll_axi.setValue(z // 2)
-
-        if self.scroll_cor is not None:
-            self.scroll_cor.setMinimum(0)
-            self.scroll_cor.setMaximum(max(0, y - 1))
-            self.scroll_cor.setValue(y // 2)
-
-        if self.scroll_sag is not None:
-            self.scroll_sag.setMinimum(0)
-            self.scroll_sag.setMaximum(max(0, x - 1))
-            self.scroll_sag.setValue(x // 2)
+        # Les barres montrent desormais leurs deux fleches : un clic
+        # dessus doit avancer d'une coupe, et non du pas par defaut de
+        # Qt, qui vaut certes 1 aujourd'hui mais ne le promet pas.
+        for barre, taille in (
+            (self.scroll_axi, z),
+            (self.scroll_cor, y),
+            (self.scroll_sag, x),
+        ):
+            if barre is None:
+                continue
+            barre.setMinimum(0)
+            barre.setMaximum(max(0, taille - 1))
+            barre.setSingleStep(1)
+            barre.setValue(taille // 2)
 
         self.iz = z // 2
         self.iy = y // 2
@@ -2844,8 +2853,52 @@ class ReconstructionPage:
                     float(center[1]),
                 ]
 
+    @staticmethod
+    def _frame_aspect(lbl) -> float | None:
+        """La forme du cadre d'affichage, largeur sur hauteur."""
+        try:
+            largeur, hauteur = int(lbl.width()), int(lbl.height())
+        except Exception:
+            return None
+        if largeur <= 1 or hauteur <= 1:
+            return None
+        return float(largeur) / float(hauteur)
+
+    @staticmethod
+    def _shape_crop_to_frame(cw: float, ch: float, aspect: float, full_w: int, full_h: int):
+        """Donner a la fenetre la forme du cadre, a surface egale.
+
+        POURQUOI A SURFACE EGALE
+
+        Le zoom dit combien de l'image on regarde. En changer la forme
+        ne doit donc pas changer cette quantite, seulement sa
+        repartition : un cadre large montre plus en largeur et moins en
+        hauteur, pour la meme surface. Imposer la forme sans garder la
+        surface ferait sauter le premier cran de zoom.
+
+        La fenetre ne sort jamais de l'image : si la forme demandee n'y
+        tient pas, on la rabat, et les bandes reviennent plutot que de
+        lire hors du volume.
+        """
+        aire = max(1.0, float(cw) * float(ch))
+        cw = float(np.sqrt(aire * aspect))
+        ch = float(np.sqrt(aire / aspect))
+
+        if cw > full_w:
+            cw = float(full_w)
+            ch = cw / aspect
+        if ch > full_h:
+            ch = float(full_h)
+            cw = ch * aspect
+        return min(cw, float(full_w)), min(ch, float(full_h))
+
     def _crop_for_zoom(
-        self, img2d: np.ndarray, plane: str, cx: float, cy: float
+        self,
+        img2d: np.ndarray,
+        plane: str,
+        cx: float,
+        cy: float,
+        aspect: float | None = None,
     ) -> tuple[np.ndarray, dict[str, float]]:
         full_h, full_w = img2d.shape
         zoom = self._get_zoom(plane)
@@ -2861,8 +2914,19 @@ class ReconstructionPage:
             }
             return img2d, st
 
-        cw = max(1, int(round(full_w / zoom)))
-        ch = max(1, int(round(full_h / zoom)))
+        cw_f = float(full_w) / zoom
+        ch_f = float(full_h) / zoom
+
+        # Des le premier cran de zoom, la fenetre epouse le cadre : la
+        # vue le remplit au lieu de laisser deux bandes sur les cotes.
+        # A zoom 1 elle garde la forme de l'image, et les bandes avec :
+        # remplir y couperait une partie du cerveau sans qu'on l'ait
+        # demande.
+        if aspect:
+            cw_f, ch_f = self._shape_crop_to_frame(cw_f, ch_f, aspect, full_w, full_h)
+
+        cw = max(1, int(round(cw_f)))
+        ch = max(1, int(round(ch_f)))
 
         cx = float(np.clip(cx, 0, max(0, full_w - 1)))
         cy = float(np.clip(cy, 0, max(0, full_h - 1)))
@@ -3176,9 +3240,15 @@ class ReconstructionPage:
             else [float(sag_x_full), float(sag_y_full)]
         )
 
-        ax_crop, ax_st = self._crop_for_zoom(ax, "axial", ax_cx, ax_cy)
-        cor_crop, cor_st = self._crop_for_zoom(cor, "coronal", cor_cx, cor_cy)
-        sag_crop, sag_st = self._crop_for_zoom(sag, "sagittal", sag_cx, sag_cy)
+        ax_crop, ax_st = self._crop_for_zoom(
+            ax, "axial", ax_cx, ax_cy, self._frame_aspect(self.lbl_axi)
+        )
+        cor_crop, cor_st = self._crop_for_zoom(
+            cor, "coronal", cor_cx, cor_cy, self._frame_aspect(self.lbl_cor)
+        )
+        sag_crop, sag_st = self._crop_for_zoom(
+            sag, "sagittal", sag_cx, sag_cy, self._frame_aspect(self.lbl_sag)
+        )
 
         self._view_state["axial"] = ax_st
         self._view_state["coronal"] = cor_st

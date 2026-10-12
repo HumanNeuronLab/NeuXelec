@@ -86,7 +86,7 @@ class MarkerListDialog(QDialog):
     hideMarker = Signal(str)
     showMarker = Signal(str)
     deleteMarker = Signal(str)
-    exportMarker = Signal(str)
+    exportAllMarkers = Signal()
 
     def __init__(
         self,
@@ -192,8 +192,17 @@ class MarkerListDialog(QDialog):
         self.btn_close.setCursor(Qt.PointingHandCursor)
         self.btn_close.clicked.connect(self.close)
 
+        # A cote de Fermer: il emporte toute la liste, pas le marqueur
+        # choisi, qui a son entree dans le menu du clic droit.
+        self.btn_export_all = QPushButton("Export all")
+        self.btn_export_all.setObjectName("secondaryButton")
+        self.btn_export_all.setCursor(Qt.PointingHandCursor)
+        self.btn_export_all.setToolTip("Every marker in this list, in one file")
+        self.btn_export_all.clicked.connect(self.exportAllMarkers.emit)
+
         bottom.addWidget(self.btn_refresh)
         bottom.addStretch(1)
+        bottom.addWidget(self.btn_export_all)
         bottom.addWidget(self.btn_close)
 
         main.addLayout(bottom)
@@ -298,8 +307,9 @@ class MarkerListDialog(QDialog):
         visible = bool(marker.get("visible", True))
         act_visibility = menu.addAction("Hide marker" if visible else "Show marker")
 
-        act_export = menu.addAction("Export marker")
-
+        # L'export est le bouton Export all, a cote de Fermer: il emporte
+        # toute la liste. Le proposer aussi ici, pour un seul marqueur,
+        # donnait deux exports voisins qui ne font pas la meme chose.
         menu.addSeparator()
 
         act_delete = menu.addAction("Delete marker")
@@ -323,9 +333,6 @@ class MarkerListDialog(QDialog):
                 self.hideMarker.emit(marker_id)
             else:
                 self.showMarker.emit(marker_id)
-
-        elif choice == act_export:
-            self.exportMarker.emit(marker_id)
 
         elif choice == act_delete:
             self.deleteMarker.emit(marker_id)

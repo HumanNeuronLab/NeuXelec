@@ -42,7 +42,6 @@ except Exception:  # pragma: no cover
     _QT_OK = False
 
 SPECT_LAYERS = ("ictal", "interictal")
-_SPECT_TITLE = {"ictal": "Ictal SPECT", "interictal": "Inter-ictal SPECT"}
 _SPECT_STATE_ATTR = {
     "ictal": ("ictal_spect_coreg_in_t1", "ictal_spect_in_t1"),
     "interictal": ("interictal_spect_coreg_in_t1", "interictal_spect_in_t1"),
@@ -190,24 +189,12 @@ class ObliqueSpectMixin:
         self._oblique_spect_update_enabled(layer)
         self._schedule_refresh(slices=True, brain=False)
 
-    def _choose_oblique_spect_colormap(self, layer: str) -> None:
-        """Right-click colormap chooser for a SPECT overlay (same set as PET)."""
-        try:
-            from ..ui.neuxelec_message_dialog import NeuXelecSelectionDialog
-        except Exception:
-            return
-        options = ["hot", "inferno", "plasma", "jet", "turbo", "viridis", "gray"]
-        current = self._ospect_colormap.get(layer, "hot")
-        current_index = options.index(current) if current in options else 0
-        cmap = NeuXelecSelectionDialog.select_item(
-            self._dialog_parent(),
-            f"{_SPECT_TITLE[layer]} colormap",
-            f"Choose the color scale used for the {_SPECT_TITLE[layer]} overlay:",
-            options=options,
-            current_index=current_index,
-            accept_text="Apply",
-            reject_text="Cancel",
-        )
+    def _apply_oblique_spect_colormap(self, layer: str, cmap: str) -> None:
+        """Poser l'echelle d'un calque SPECT de la coupe oblique.
+
+        La question est posee ailleurs, par la fenetre unique de couleur du
+        clic droit, qui connait les deux calques SPECT comme les autres.
+        """
         if not cmap:
             return
         self._ospect_colormap[layer] = str(cmap)

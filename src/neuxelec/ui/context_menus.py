@@ -2,6 +2,19 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidgetAction
 
+#: L'entree "Open EEG viewer" du clic droit.
+#:
+#: Le visualiseur EEG existe et fonctionne, mais il n'est pas pret a
+#: etre livre : la version distribuee ne doit pas y mener. Le code
+#: reste en place, de son ouverture a son appariement de voies ; seule
+#: la porte du menu est fermee, et la rouvrir tient a ce mot.
+#:
+#: "Re-match EEG channels..." suit : elle ne sert qu'a nourrir ce
+#: visualiseur, et une entree qui prepare une porte fermee n'a rien a
+#: proposer. Elle revient avec lui.
+EEG_VIEWER_IN_MENU = False
+
+
 
 def top_level_window():
     for w in QApplication.topLevelWidgets():
@@ -165,25 +178,25 @@ def exec_3d_view_menu(
     keep_electrodes_through_slices: bool = False,
     show_siscom_crop_option: bool = False,
     siscom_dont_crop: bool = False,
+    show_keep_parcellation_option: bool = False,
+    keep_parcellation_in_volume: bool = False,
     show_slice_plane_frames_option: bool = False,
     slice_plane_frames_visible: bool = True,
     can_add_marker: bool = False,
     marker_under_cursor: bool = False,
     has_hidden_markers: bool = False,
-    show_ictal_color: bool = False,
-    show_interictal_color: bool = False,
     show_plan_option: bool = False,
     plan_visible: bool = False,
     show_cortex_only_option: bool = False,
     cortex_only: bool = False,
     show_grey_matter_option: bool = False,
     grey_matter_only: bool = False,
-    show_fmri_color: bool = False,
     show_fmri_surface: bool = False,
     fmri_blob_on: bool = False,
     fmri_pial_on: bool = False,
     fmri_keep_on: bool = False,
     background_is_custom: bool = False,
+    stimulation_mode_on: bool = False,
 ) -> str | None:
 
     menu = make_base_menu()
@@ -194,6 +207,7 @@ def exec_3d_view_menu(
 
     act_add_marker = None
     act_edit_marker = None
+    act_move_marker = None
     act_hide_marker = None
     act_export_marker = None
     act_delete_marker = None
@@ -201,6 +215,7 @@ def exec_3d_view_menu(
 
     if marker_under_cursor:
         act_edit_marker = menu.addAction("Edit marker…")
+        act_move_marker = menu.addAction("Move marker")
         act_hide_marker = menu.addAction("Hide marker")
         act_export_marker = menu.addAction("Export marker…")
         act_delete_marker = menu.addAction("Delete marker")
@@ -211,26 +226,29 @@ def exec_3d_view_menu(
     if has_hidden_markers:
         act_show_hidden_markers = menu.addAction("Show hidden markers")
 
+    # ------------------------------------------------------------ stimulation
+    # Un mode, pas une fenetre: y entrer change ce que la vue montre, et
+    # l'entree doit le dire avant le clic, pas apres.
+    add_menu_section(menu, "MODE")
+    act_stimulation_results = menu.addAction(
+        "Leave mode: Stimulation Result"
+        if stimulation_mode_on
+        else "Mode: Stimulation Result"
+    )
+
     # --------------------------------------------------------- overlay colors
-    act_pet = None
-    act_siscom = None
-    act_ct = None
-    act_ictal = None
-    act_interictal = None
-    act_fmri_color = None
+    act_overlay_color = None
 
     if native_actions_enabled:
         add_menu_section(menu, "OVERLAY COLORS")
-        act_pet = menu.addAction("Color PET")
-        act_siscom = menu.addAction("Color SISCOM")
-        if show_fmri_color:
-            act_fmri_color = menu.addAction("Color fMRI")
-        act_ct = menu.addAction("Color CT")
-        # Exactly like Color PET: shown in native mode, hidden in MNI mode.
-        if show_ictal_color:
-            act_ictal = menu.addAction("Color Ictal SPECT")
-        if show_interictal_color:
-            act_interictal = menu.addAction("Color Inter-ictal SPECT")
+        # Une seule entree. Les six d'avant disaient la meme chose et
+        # repoussaient vers le bas tout ce qui suit : le calque se choisit
+        # desormais dans la fenetre, pas dans le menu.
+        act_overlay_color = menu.addAction("Color…")
+        act_overlay_color.setToolTip(
+            "The colour of PET, SISCOM, fMRI, CT or SPECT. Pick the overlay "
+            "in the window that opens."
+        )
 
     # ------------------------------------------------------------------- fMRI
     act_fmri_blob = None
@@ -255,6 +273,7 @@ def exec_3d_view_menu(
     act_grey_matter_only = None
     act_keep_electrodes_through_slices = None
     act_siscom_dont_crop = None
+    act_keep_parcellation = None
     act_render_brain = None
 
     # The background entries are always offered, so DISPLAY always opens.
@@ -302,6 +321,15 @@ def exec_3d_view_menu(
         act_siscom_dont_crop = menu.addAction("Don't crop SISCOM blob through slices")
         act_siscom_dont_crop.setCheckable(True)
         act_siscom_dont_crop.setChecked(bool(siscom_dont_crop))
+
+    if show_keep_parcellation_option:
+        act_keep_parcellation = menu.addAction("Keep parcellation in volume")
+        act_keep_parcellation.setCheckable(True)
+        act_keep_parcellation.setChecked(bool(keep_parcellation_in_volume))
+        act_keep_parcellation.setToolTip(
+            "Leave the parcellation surfaces whole instead of cutting them "
+            "on the slice planes."
+        )
 
     if native_actions_enabled:
         act_render_brain = menu.addAction("Render Brain…")
@@ -359,6 +387,10 @@ def exec_3d_view_menu(
 
     if act_marker_list is not None and action == act_marker_list:
         return "marker_list"
+    if act_move_marker is not None and action == act_move_marker:
+        return "move_marker"
+    if act_stimulation_results is not None and action == act_stimulation_results:
+        return "stimulation_results"
 
     if act_add_marker is not None and action == act_add_marker:
         return "add_marker"
@@ -378,14 +410,8 @@ def exec_3d_view_menu(
     if act_show_hidden_markers is not None and action == act_show_hidden_markers:
         return "show_hidden_markers"
 
-    if act_pet is not None and action == act_pet:
-        return "pet"
-
-    if act_siscom is not None and action == act_siscom:
-        return "siscom"
-
-    if act_fmri_color is not None and action == act_fmri_color:
-        return "fmri_color"
+    if act_overlay_color is not None and action == act_overlay_color:
+        return "overlay_color"
 
     if act_fmri_blob is not None and action == act_fmri_blob:
         return "toggle_fmri_blob"
@@ -396,14 +422,8 @@ def exec_3d_view_menu(
     if act_fmri_pial is not None and action == act_fmri_pial:
         return "toggle_fmri_pial"
 
-    if act_ictal is not None and action == act_ictal:
-        return "ictal_color"
-
-    if act_interictal is not None and action == act_interictal:
-        return "interictal_color"
-
-    if act_ct is not None and action == act_ct:
-        return "ct"
+    if act_keep_parcellation is not None and action == act_keep_parcellation:
+        return "toggle_keep_parcellation"
 
     if act_render_brain is not None and action == act_render_brain:
         return "render_brain"
@@ -455,23 +475,22 @@ def exec_oblique_slice_menu(
     *,
     color_scale_visible: bool = True,
     show_color_scale_option: bool = True,
-    show_ictal_color: bool = False,
-    show_interictal_color: bool = False,
     show_cortex_only_option: bool = False,
     cortex_only: bool = False,
     show_grey_matter_option: bool = False,
     grey_matter_only: bool = False,
-    show_fmri_color: bool = False,
     background_is_custom: bool = False,
 ) -> str | None:
     menu = make_base_menu()
 
     add_menu_section(menu, "OVERLAY COLORS")
-    act_pet = menu.addAction("Color PET")
-    act_siscom = menu.addAction("Color SISCOM")
-    act_fmri_color = menu.addAction("Color fMRI") if show_fmri_color else None
-    act_ictal = menu.addAction("Color Ictal SPECT") if show_ictal_color else None
-    act_interictal = menu.addAction("Color Inter-ictal SPECT") if show_interictal_color else None
+    # Une seule entree, comme dans la vue 3D : le calque se choisit dans la
+    # fenetre, pas dans le menu.
+    act_overlay_color = menu.addAction("Color…")
+    act_overlay_color.setToolTip(
+        "The colour scale of PET, SISCOM, fMRI or SPECT. Pick the overlay "
+        "in the window that opens."
+    )
 
     act_toggle_color_scale = None
     act_cortex_only = None
@@ -517,16 +536,8 @@ def exec_oblique_slice_menu(
     if act_background_reset is not None and action == act_background_reset:
         return "background_reset"
 
-    if action == act_pet:
-        return "pet"
-    if action == act_siscom:
-        return "siscom"
-    if act_fmri_color is not None and action == act_fmri_color:
-        return "fmri_color"
-    if act_ictal is not None and action == act_ictal:
-        return "ictal_color"
-    if act_interictal is not None and action == act_interictal:
-        return "interictal_color"
+    if action == act_overlay_color:
+        return "overlay_color"
 
     if act_toggle_color_scale is not None and action == act_toggle_color_scale:
         return "toggle_color_scale"
@@ -551,6 +562,8 @@ def exec_electrode_tree_menu(
     projection_on: bool = False,
     selection_count: int = 1,
     editable: bool = True,
+    eeg_available: bool = False,
+    eeg_already_mapped: bool = False,
 ):
     menu = make_base_menu()
 
@@ -596,11 +609,23 @@ def exec_electrode_tree_menu(
             else:
                 act_delete_elec = menu.addAction("Delete electrode")
 
+        act_eeg = None
+        act_rematch = None
+        if eeg_available and EEG_VIEWER_IN_MENU:
+            menu.addSeparator()
+            act_eeg = menu.addAction("Open EEG viewer")
+            if eeg_already_mapped:
+                act_rematch = menu.addAction("Re-match EEG channels...")
+
         action = menu.exec(global_pos)
 
         if action is None:
             return None
 
+        if act_eeg is not None and action == act_eeg:
+            return "open_eeg"
+        if act_rematch is not None and action == act_rematch:
+            return "rematch_eeg"
         if act_toggle_labels is not None and action == act_toggle_labels:
             return "toggle_labels"
         if act_toggle_electrode_label is not None and action == act_toggle_electrode_label:
@@ -618,11 +643,17 @@ def exec_electrode_tree_menu(
 
     if kind == "contact":
         act_toggle_label = None
+        act_add_stimulation = None
         act_show_coronal = None
         act_show_axial = None
         act_show_sagittal = None
         act_edit = None
         act_delete = None
+
+        act_eeg_contact = None
+        if eeg_available and EEG_VIEWER_IN_MENU:
+            act_eeg_contact = menu.addAction("Open EEG viewer")
+            menu.addSeparator()
 
         # Add/remove label only on Oblique Slice and 3D View
         if current_page in ("pageObliqueSlices", "page3DView"):
@@ -634,6 +665,11 @@ def exec_electrode_tree_menu(
             act_show_coronal = menu.addAction("Show coronal slice")
             act_show_axial = menu.addAction("Show axial slice")
             act_show_sagittal = menu.addAction("Show sagittal slice")
+
+        # A stimulation result is entered from the contact it was
+        # stimulated from, on any page: it is a record, not a view setting.
+        menu.addSeparator()
+        act_add_stimulation = menu.addAction("Add stimulation result")
 
         # Edit coordinates only on Reconstruction
         if current_page == "pageReconstruction":
@@ -653,6 +689,8 @@ def exec_electrode_tree_menu(
         if action is None:
             return None
 
+        if act_eeg_contact is not None and action == act_eeg_contact:
+            return "open_eeg"
         if act_toggle_label is not None and action == act_toggle_label:
             return "toggle_label"
         if act_show_coronal is not None and action == act_show_coronal:
@@ -661,6 +699,8 @@ def exec_electrode_tree_menu(
             return "show_axial_slice"
         if act_show_sagittal is not None and action == act_show_sagittal:
             return "show_sagittal_slice"
+        if act_add_stimulation is not None and action == act_add_stimulation:
+            return "add_stimulation"
         if act_edit is not None and action == act_edit:
             return "edit_contact"
         if act_delete is not None and action == act_delete:

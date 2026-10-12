@@ -1,5 +1,5 @@
 #define MyAppName      "NeuXelec"
-#define MyAppVersion "1.2.1"
+#define MyAppVersion "1.3.0"
 #define MyAppPublisher "Jules Veber - HUG Geneva"
 #define MyAppURL       "https://neuxelec.com"
 #define MyAppExeName   "NeuXelec.exe"

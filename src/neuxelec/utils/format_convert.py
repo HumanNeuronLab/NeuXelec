@@ -18,23 +18,112 @@ def _reorient_sitk(img: sitk.Image, orient: str = "RAS") -> sitk.Image:
         return img
 
 
+#: How deep we look for a series when the chosen folder holds none itself.
+#: A clinical export nests at most patient / study / series, so three levels
+#: are enough, and the cap stops a mis-click on a whole drive from walking it.
+_DICOM_SEARCH_DEPTH = 3
+
+
+def _subdirectories(root: Path, depth: int) -> list[Path]:
+    """Directories under ``root``, breadth first, down to ``depth`` levels."""
+    out: list[Path] = []
+    level = [root]
+    for _ in range(depth):
+        nxt: list[Path] = []
+        for d in level:
+            try:
+                nxt.extend(sorted(p for p in d.iterdir() if p.is_dir()))
+            except OSError:
+                continue
+        if not nxt:
+            break
+        out.extend(nxt)
+        level = nxt
+    return out
+
+
+def find_dicom_series(dicom_folder: str) -> list[tuple[str, str]]:
+    """Every DICOM series reachable from ``dicom_folder``, as (directory, series id).
+
+    The folder itself is looked at first and the search stops there as soon as
+    it holds a series, so a folder that already worked keeps behaving exactly
+    as it did.
+
+    Only when it holds none do we descend. A clinical export is handed over as
+    ``PAT_xxx/DICOM/SERIE_1/*.dcm`` and pointing at ``PAT_xxx`` is the natural
+    thing to do, yet GetGDCMSeriesIDs has no recursive mode at all, unlike
+    GetGDCMSeriesFileNames, and simply reports nothing.
+
+    ITK prints "No Series were found" from C++ for every directory without
+    DICOM in it, which would be one warning per folder walked, so its warnings
+    are silenced for the duration of the scan and restored afterwards.
+    """
+    reader = sitk.ImageSeriesReader()
+    root = Path(dicom_folder)
+
+    display = sitk.ProcessObject.GetGlobalWarningDisplay()
+    sitk.ProcessObject.SetGlobalWarningDisplay(False)
+    try:
+        found = [(str(root), sid) for sid in reader.GetGDCMSeriesIDs(str(root))]
+        if found:
+            return found
+        for sub in _subdirectories(root, _DICOM_SEARCH_DEPTH):
+            found.extend((str(sub), sid) for sid in reader.GetGDCMSeriesIDs(str(sub)))
+        return found
+    finally:
+        sitk.ProcessObject.SetGlobalWarningDisplay(display)
+
+
+def _series_label(directory: str, series_id: str) -> str:
+    """One line describing a series, for the message asking which one to take."""
+    reader = sitk.ImageSeriesReader()
+    files = reader.GetGDCMSeriesFileNames(directory, series_id)
+    name = ""
+    if files:
+        r = sitk.ImageFileReader()
+        r.SetFileName(files[0])
+        r.LoadPrivateTagsOff()
+        try:
+            r.ReadImageInformation()
+            for key in ("0008|103e", "0018|1030"):  # SeriesDescription, ProtocolName
+                if r.HasMetaDataKey(key) and r.GetMetaData(key).strip():
+                    name = r.GetMetaData(key).strip()
+                    break
+        except Exception:
+            pass
+    return "%s, %d slices, in %s" % (name or "unnamed series", len(files), directory)
+
+
 def convert_dicom_folder_to_nifti(dicom_folder: str, out_nifti_path: str) -> str:
     """
     Convert a DICOM series folder to NIfTI (.nii/.nii.gz) using SimpleITK.
     Returns the output path.
     """
-    dicom_folder = str(dicom_folder)
+    dicom_folder = str(Path(dicom_folder))
     out_nifti_path = str(out_nifti_path)
 
-    reader = sitk.ImageSeriesReader()
-    series_ids = reader.GetGDCMSeriesIDs(dicom_folder)
-    if not series_ids:
+    series = find_dicom_series(dicom_folder)
+    if not series:
         raise RuntimeError("No DICOM series found in the selected folder.")
 
-    # Take first series by default (can be improved later with series selection UI)
-    series_id = series_ids[0]
-    file_names = reader.GetGDCMSeriesFileNames(dicom_folder, series_id)
-    reader.SetFileNames(file_names)
+    directory, series_id = series[0]
+
+    # Several series at the top level keep the historical behaviour, the first
+    # one. Several series found by descending is a different matter: those are
+    # separate acquisitions, and guessing would quietly load a localizer where
+    # a T1 was meant. Name them and let the user point at one.
+    if len(series) > 1 and directory != dicom_folder:
+        shown = [_series_label(d, s) for d, s in series[:12]]
+        listing = "\n".join("  - " + s for s in shown)
+        if len(series) > 12:
+            listing += "\n  - ... and %d more" % (len(series) - 12)
+        raise RuntimeError(
+            "This folder holds no DICOM series itself, and several were found "
+            "in its subfolders. Select the subfolder of the one you want:\n\n" + listing
+        )
+
+    reader = sitk.ImageSeriesReader()
+    reader.SetFileNames(reader.GetGDCMSeriesFileNames(directory, series_id))
 
     img = reader.Execute()
     img = _reorient_sitk(img, "RAS")  # ✅ important

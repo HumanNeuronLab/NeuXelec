@@ -70,12 +70,10 @@ class View3DMniMixin:
                 mesh = mesh.triangulate().clean(tolerance=1e-6)
             except Exception:
                 pass
-            opacity = 0.22
-            try:
-                if self.sld_3d_brainMaskOpacity is not None:
-                    opacity = float(self.sld_3d_brainMaskOpacity.value()) / 100.0
-            except Exception:
-                opacity = 0.22
+            # Le curseur du gabarit, dans l'onglet MNI, et non celui du
+            # brainmask qui commande le cerveau du patient : deux objets
+            # differents de la scene, deux reglages.
+            opacity = float(self._mni_brain_opacity())
             self._mni_atlas_actor = self.plotter.add_mesh(
                 mesh,
                 color=(0.78, 0.78, 0.78),
@@ -328,6 +326,15 @@ class View3DMniMixin:
 
         self._hovered_anatomical_marker_id = None
 
+        # Les surfaces de parcellation sont maillees dans l'espace du
+        # patient : laissees la, elles flottent sur un cerveau qui n'est
+        # pas le leur. Elles seront refaites si la parcellation du gabarit
+        # est cochee, avec ses propres etiquettes.
+        try:
+            self._clear_region_actors()
+        except Exception:
+            pass
+
         for attr in (
             "_brain_actor",
             "_ct_actor",
@@ -444,21 +451,27 @@ class View3DMniMixin:
         If the user clicks one of them, MNI will be disabled automatically.
         - Other native-space overlays are disabled because they are not in MNI space.
         """
+        # (famille, cle de la memoire). La famille dit que le cerveau et
+        # la piale restent cliquables ; la cle est celle sous laquelle
+        # _store_native_checkbox_state_for_mni a range l'etat. Les deux
+        # etaient confondues, et la restitution ne trouvait donc jamais
+        # rien : on revenait du mode MNI avec la vue du patient eteinte.
         native_items = [
-            ("brainmask", getattr(self, "chk_brainmask", None)),
-            ("pial", getattr(self, "chk_pial", None)),
-            ("iso", getattr(self, "chk_iso", None)),
-            ("ct", getattr(self, "chk_ct", None)),
-            ("pet", getattr(self, "chk_pet", None)),
-            ("siscom", getattr(self, "chk_siscom", None)),
-            ("coronal", getattr(self, "chk_coronal_plane", None)),
-            ("axial", getattr(self, "chk_axial_plane", None)),
-            ("sagittal", getattr(self, "chk_sagittal_plane", None)),
-            ("parcel1", getattr(self, "chk_parcel1", None)),
-            ("parcel2", getattr(self, "chk_parcel2", None)),
+            ("brainmask", "chk_brainmask"),
+            ("pial", "chk_pial"),
+            ("iso", "chk_iso"),
+            ("ct", "chk_ct"),
+            ("pet", "chk_pet"),
+            ("siscom", "chk_siscom"),
+            ("coronal", "chk_coronal_plane"),
+            ("axial", "chk_axial_plane"),
+            ("sagittal", "chk_sagittal_plane"),
+            ("parcel1", "chk_parcel1"),
+            ("parcel2", "chk_parcel2"),
         ]
 
-        for name, cb in native_items:
+        for name, attribut in native_items:
+            cb = getattr(self, attribut, None)
             if cb is None:
                 continue
 
@@ -483,8 +496,9 @@ class View3DMniMixin:
                     # do not restore the old checkbox state, otherwise it may undo
                     # the user's click.
                     if not bool(getattr(self, "_switching_mni_to_native_brain", False)):
-                        if name in getattr(self, "_mni_native_checkboxes_state", {}):
-                            cb.setChecked(bool(self._mni_native_checkboxes_state[name]))
+                        memoire = getattr(self, "_mni_native_checkboxes_state", {})
+                        if attribut in memoire:
+                            cb.setChecked(bool(memoire[attribut]))
 
                 cb.blockSignals(False)
 
@@ -664,6 +678,9 @@ class View3DMniMixin:
                 self._update_modality_controls_enabled_states()
                 self._update_planes_info_label()
 
+                # Le tableau decrit maintenant le gabarit, pas le patient.
+                self._refresh_parcellation_regions()
+
                 self._render()
                 return
 
@@ -673,6 +690,7 @@ class View3DMniMixin:
                 keep_clicked_native_source=None,
             )
             self._update_brain_opacity_slider_states()
+            self._refresh_parcellation_regions()
         except Exception as e:
             print("[MNI atlas] Toggle failed:", e)
 

@@ -121,6 +121,14 @@ class AppState:
         self.parcel1_path: str | None = None
         self.parcel2_path: str | None = None
 
+        # La seconde parcellation du repere MNI, chargee par
+        # l'utilisateur. La premiere est le Schaefer 2018 fourni avec
+        # NeuXelec ; la seconde tenait le Brainnetome, dont la licence
+        # non commerciale avec partage a l'identique n'est pas
+        # transmissible sous GPL-3.0. Elle est donc restee vide, et
+        # c'est a chacun d'y mettre l'atlas dont il a le droit.
+        self.mni_parcel2_path: str | None = None
+
         self.lh_pial_path: str | None = None
         self.rh_pial_path: str | None = None
 
@@ -132,6 +140,7 @@ class AppState:
 
         self.parcellation1_lut = None
         self.parcellation2_lut = None
+        self.mni_parcellation2_lut = None
 
         self.last_browse_dir = str(Path.home())
 
@@ -146,6 +155,11 @@ class AppState:
         # Where that registered image was saved, so reopening the project can
         # load it back and the alignment can be reviewed again days later.
         self.plan_mri_in_t1_path: str | None = None
+        # Le fichier de trajectoires ecrit par Save plan MRI /
+        # electrodes. Retenu pour deux raisons : le bouton doit
+        # pouvoir dire qu'il a enregistre, et ce fichier se
+        # recharge ensuite comme un plan.
+        self.plan_trajectories_path: str | None = None
 
         # Brain mask (optional, generated on demand)
         self.brainmask_path: str | None = None
@@ -164,6 +178,25 @@ class AppState:
         # Each electrode is a dict with at least:
         #  - name, hemisphere, ref, n, d_mm, contacts_lps, contacts_idx
         self.electrodes: list[dict[str, Any]] = []
+
+        # Electrical stimulation results, entered by hand, one per
+        # stimulated pair. Saved with the project: they are a clinical
+        # record, not a view setting.
+        self.stimulations: list[dict[str, Any]] = []
+
+        # Comment ces stimulations se dessinent: mode de couleur, regles,
+        # epaisseurs. Par patient, parce que les regles utiles dependent de
+        # ce qu'on a trouve chez lui.
+        self.stimulation_display: dict[str, Any] = {}
+
+        # The TRC recording this project reads its EEG from. All three are set
+        # together, the first time a contact's EEG is opened, and saved with
+        # the project: scanning a session costs 52 s for 439 files on a share,
+        # and the channel mapping was reviewed by a human once.
+        self.eeg_folder: str | None = None
+        self.eeg_recording: dict[str, Any] | None = None
+        self.eeg_match: dict[str, Any] | None = None
+
         # Callbacks to notify GUI when electrodes list/visibility/colors change
         self._electrodes_changed_callbacks: list[Any] = []
         self.selected_electrode_id: int | None = None

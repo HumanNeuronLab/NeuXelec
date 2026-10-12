@@ -141,7 +141,9 @@ class SliceQuickTools(QWidget):
 
         self.btn_background = self._make_btn(
             "qt_transparent_background.svg",
-            "Remove black background for display, PNG screenshots and GIF export.",
+            "Remove the black background around the head, on screen and in PNG\n"
+            "screenshots. A GIF cannot: the format carries no transparency.\n"
+            "For an animation, set a Background color instead.",
             self._toggle_background_removed,
             checkable=True,
         )

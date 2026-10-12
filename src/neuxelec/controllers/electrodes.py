@@ -13,6 +13,7 @@ from PySide6.QtGui import QBrush, QColor, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QDialog,
     QFrame,
     QLabel,
     QStyle,
@@ -221,8 +222,10 @@ class ElectrodesController(QObject):
         self._updating_checks = False
         self._trees: list[QTreeWidget] = []
 
-        # Counters displayed above the electrode lists.
+        # Counters displayed above the electrode lists. Keyed by name:
+        # the three pages ne posent plus la meme question.
         self._count_labels: list[QLabel] = []
+        self._count_labels_by_name: dict[str, QLabel] = {}
 
         for label_name in (
             "lbl_ElectrodesCount",
@@ -239,6 +242,7 @@ class ElectrodesController(QObject):
 
             if isinstance(label, QLabel):
                 self._count_labels.append(label)
+                self._count_labels_by_name[label_name] = label
 
         self._ignore_next_tree_click = False
         self._tree_drag_tree = None
@@ -819,21 +823,61 @@ class ElectrodesController(QObject):
         except Exception:
             pass
 
+    def _planned_electrode_count(self) -> int:
+        """Combien d'electrodes le plan charge annonce, ou zero."""
+        plan = getattr(self.state, "plan", None)
+        if not plan:
+            return 0
+        try:
+            trajs = plan.get("trajectories_t1") or plan.get("trajectories") or []
+            return len(trajs)
+        except Exception:
+            return 0
+
+    def _loaded_patient_count(self) -> int:
+        """Combien de jeux d'electrodes MNI sont charges, un par patient."""
+        try:
+            return len(getattr(self.state, "mni_electrode_sets", []) or [])
+        except Exception:
+            return 0
+
     def _update_electrodes_count_labels(self) -> None:
-        """
-        Update the counters displayed above the three electrode lists.
+        """Les trois compteurs au-dessus des listes d'electrodes.
+
+        Ils ne posent pas la meme question :
+
+        - Reconstruction : ce qui est reconstruit sur ce que le plan
+          annonce, quand un plan est charge. C'est la seule page ou
+          l'on sait combien il en reste a faire.
+        - Vue 3D en mode MNI : le nombre de patients charges. Les
+          electrodes montrees n'y sont plus celles d'un patient, donc
+          les compter n'y apprendrait rien. Hors de ce mode, elle
+          revient au compte ordinaire.
+        - Coupe oblique : le compte ordinaire.
         """
         try:
-            n_electrodes = len(getattr(self.state, "electrodes", []) or [])
+            n = len(getattr(self.state, "electrodes", []) or [])
+            ordinaire = "1 electrode" if n == 1 else f"{n} electrodes"
 
-            if n_electrodes == 1:
-                text = "1 electrode"
-            else:
-                text = f"{n_electrodes} electrodes"
+            textes = dict.fromkeys(
+                ("lbl_ElectrodesCount", "lbl_ElectrodesCount_2", "lbl_ElectrodesCount_3"),
+                ordinaire,
+            )
 
-            for label in getattr(self, "_count_labels", []):
+            prevues = self._planned_electrode_count()
+            if prevues:
+                textes["lbl_ElectrodesCount"] = f"{ordinaire} / {prevues}"
+
+            if self._mni_mode_active():
+                patients = self._loaded_patient_count()
+                textes["lbl_ElectrodesCount_3"] = (
+                    "1 patient" if patients == 1 else f"{patients} patients"
+                )
+
+            par_nom = getattr(self, "_count_labels_by_name", {}) or {}
+            for nom, label in par_nom.items():
                 try:
-                    label.setText(text)
+                    label.setText(textes.get(nom, ordinaire))
                     label.adjustSize()
                 except Exception:
                     pass
@@ -2565,6 +2609,94 @@ class ElectrodesController(QObject):
 
         return mode == "edit"
 
+
+    # --------------------------------------------------- Stimulation
+    def _add_stimulation_result(self, elec_id: int, contact_idx: int) -> None:
+        """Enter one stimulation result for a pair starting at this contact.
+
+        The anatomy of both contacts is filled from the parcellation when
+        one is loaded, through the 3D page, so that a card is named the way
+        the oblique table and the BIDS export name the same contact.
+        """
+        from ..ui.stimulation_dialog import StimulationDialog
+        from ..utils import stimulation as st
+
+        electrodes = list(getattr(self.state, "electrodes", []) or [])
+
+        if not (0 <= int(elec_id) < len(electrodes)):
+            return
+
+        parent = self.ui.window() if self.ui is not None else _top_level_window()
+
+        dialog = StimulationDialog(
+            electrodes,
+            int(elec_id),
+            int(contact_idx),
+            anatomy_lookup=self._contact_anatomy_lookup(),
+            parent=parent,
+        )
+
+        if int(dialog.exec()) != int(QDialog.DialogCode.Accepted):
+            return
+
+        records = list(getattr(self.state, "stimulations", []) or [])
+        record = dialog.record()
+        record["id"] = st.next_id(records)
+        records.append(record)
+        self.state.stimulations = records
+
+        self._refresh_stimulation_markers()
+
+    def _contact_anatomy_lookup(self):
+        """How to name the region of a contact, or None when nobody can."""
+        page = getattr(self.state, "view3d_page", None)
+
+        if page is None or not hasattr(page, "contact_region_name"):
+            return None
+
+        return page.contact_region_name
+
+    def _refresh_stimulation_markers(self) -> None:
+        """Redraw the stimulation markers in the 3D view, if it is built."""
+        page = getattr(self.state, "view3d_page", None)
+
+        if page is None or not hasattr(page, "refresh_stimulation_markers"):
+            return
+
+        try:
+            page.refresh_stimulation_markers()
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------ EEG
+    def _eeg_menu_flags(self) -> tuple[bool, bool]:
+        """(offer the entry, a mapping already exists).
+
+        The entry shows as soon as electrodes are reconstructed: the folder is
+        asked for on the first click, not before, so nothing has to be set up
+        in advance to discover that the feature is there.
+        """
+        has_electrodes = bool(getattr(self.state, "electrodes", None))
+        mapped = bool(getattr(self.state, "eeg_match", None))
+        return has_electrodes, mapped
+
+    def _open_eeg(self, elec_id, contact_idx=None, *, force_rematch: bool = False) -> None:
+        from .eeg_session import open_eeg_viewer
+
+        electrodes = list(getattr(self.state, "electrodes", None) or [])
+        name = None
+        if 0 <= int(elec_id) < len(electrodes):
+            name = str(electrodes[int(elec_id)].get("name") or "") or None
+        # The tree counts contacts from zero, the recording from one.
+        contact = None if contact_idx is None else int(contact_idx) + 1
+        open_eeg_viewer(
+            self._dialog_parent() if hasattr(self, "_dialog_parent") else None,
+            self.state,
+            electrode_name=name,
+            contact=contact,
+            force_rematch=force_rematch,
+        )
+
     def _open_context_menu(self, pos: QPoint) -> None:
         tree = self.sender()
         if tree is None or not isinstance(tree, QTreeWidget):
@@ -2684,8 +2816,14 @@ class ElectrodesController(QObject):
                 projection_on=projection_on,
                 selection_count=len(selected_elec_ids),
                 editable=editable,
+                eeg_available=self._eeg_menu_flags()[0],
+                eeg_already_mapped=self._eeg_menu_flags()[1],
             )
             self._ignore_next_tree_click = True
+
+            if choice in ("open_eeg", "rematch_eeg"):
+                self._open_eeg(elec_id, force_rematch=(choice == "rematch_eeg"))
+                return
 
             if choice == "toggle_labels":
                 self._dispatch_local_visual_update("toggle_labels", elec_id)
@@ -2769,8 +2907,18 @@ class ElectrodesController(QObject):
                 label_on=label_on,
                 selection_count=len(selected_contacts),
                 editable=editable,
+                eeg_available=self._eeg_menu_flags()[0],
+                eeg_already_mapped=self._eeg_menu_flags()[1],
             )
             self._ignore_next_tree_click = True
+
+            if choice == "open_eeg":
+                self._open_eeg(elec_id, contact_idx)
+                return
+
+            if choice == "add_stimulation":
+                self._add_stimulation_result(elec_id, contact_idx)
+                return
 
             if choice == "toggle_label":
                 self._dispatch_local_visual_update("toggle_label", elec_id, contact_idx)

@@ -103,6 +103,139 @@ def test_air_trapped_inside_the_head_stays_black(qt_app):
     assert alpha[28:32, 28:32].min() == 255
 
 
+def _head_with_a_cavity_open_to_the_outside(size=80):
+    """A head with a dark cavity that reaches the outside, like a sinus.
+
+    This is the shape that defeated following the air: the cavity connects to
+    the exterior, so labelling the air and keeping what touches a border took
+    the cavity for background and punched it out. On a real oblique slice the
+    space around the brain reaches the outside through the skull base in
+    exactly this way.
+    """
+    y, x = np.mgrid[0:size, 0:size]
+    radius = np.hypot(y - size / 2, x - size / 2)
+    level = np.clip((size / 3 - radius) * 40, 0, 200).astype(np.uint8)
+    # A channel of air cut from the left edge into the middle of the head.
+    level[size // 2 - 3 : size // 2 + 3, : size // 2] = 0
+    return np.dstack([level] * 3)
+
+
+def test_a_cavity_open_to_the_outside_is_not_punched_out(qt_app):
+    """The cavity is anatomy, whatever it connects to."""
+    array = _head_with_a_cavity_open_to_the_outside()
+    alpha = _alpha(_page()._slice_background_alpha_pixmap(_pixmap(array)))
+
+    size = array.shape[0]
+    # The far end of the channel, well inside the head and far from any rim.
+    interieur = alpha[size // 2, size // 2 - 4]
+    assert interieur == 255, f"la cavite a ete percee: alpha={interieur}"
+    # And the outside is still gone.
+    assert alpha[0, 0] == 0
+
+
+def test_remove_background_is_the_same_code_as_the_colour_path(qt_app):
+    """There used to be two implementations; the weaker one walked every
+    pixel in Python and cut on a plain threshold."""
+    array = _head_with_a_cavity_open_to_the_outside()
+    page = _page()
+    page._slice_background_cache = None
+
+    a = _alpha(page._remove_black_background_from_pixmap(_pixmap(array)))
+    page._slice_background_cache = None
+    b = _alpha(page._slice_background_alpha_pixmap(_pixmap(array)))
+    assert np.array_equal(a, b)
+
+
+# ----------------------------------------------------- GIF without background
+class _ExportProbe(ObliqueSlicePage):
+    """Watches whether the export gets past the guard."""
+
+    def __init__(self, colour=None):
+        self._slice_background = colour
+        self._gif_export_active = False
+        self.ui = None
+        self.got_past = False
+        self.warned = False
+
+    def _slice_dialog_parent(self):
+        return None
+
+    def _warn_gif_cannot_be_transparent(self):
+        self.warned = True
+        return False
+
+    def _get_checked_electrode_names(self):
+        # First real call after the guard.
+        self.got_past = True
+        raise RuntimeError("far enough")
+
+
+def _try_export(probe, remove_background):
+    try:
+        probe._export_oblique_slice_gif(1, "x.gif", remove_background=remove_background)
+    except Exception:
+        pass
+    return probe
+
+
+def test_a_gif_without_a_background_is_refused(qt_app):
+    """The format cannot do it, so it is said rather than silently produced."""
+    probe = _try_export(_ExportProbe(colour=None), remove_background=True)
+    assert probe.warned
+    assert not probe.got_past
+
+
+def test_a_chosen_colour_lets_the_gif_through(qt_app):
+    """The frame is already composited on it; nothing has to be cut."""
+    probe = _try_export(_ExportProbe(colour="#FFFFFF"), remove_background=True)
+    assert not probe.warned
+    assert probe.got_past
+
+
+def test_an_ordinary_gif_is_never_interrupted(qt_app):
+    probe = _try_export(_ExportProbe(colour=None), remove_background=False)
+    assert not probe.warned
+    assert probe.got_past
+
+
+# ------------------------------------------------------------- GIF flattening
+def test_a_gif_frame_carries_no_alpha(qt_app):
+    """A GIF has one transparent colour, not an alpha channel. Handing the
+    encoder a soft ramp leaves it to invent a hard, jagged cut."""
+    page = _page()
+    page._slice_background = None
+    frame = np.zeros((2, 1, 4), np.uint8)
+    frame[0] = [200, 100, 50, 255]
+    frame[1] = [200, 100, 50, 0]
+
+    out = page._flatten_gif_frame(frame)
+    assert out.shape[2] == 3
+    assert tuple(out[0, 0]) == (200, 100, 50)
+    assert tuple(out[1, 0]) == (0, 0, 0)
+
+
+def test_a_gif_frame_lands_on_the_chosen_colour(qt_app):
+    page = _page()
+    page._slice_background = "#404040"
+    frame = np.zeros((2, 1, 4), np.uint8)
+    frame[0] = [200, 100, 50, 255]
+    frame[1] = [200, 100, 50, 0]
+
+    out = page._flatten_gif_frame(frame)
+    assert tuple(out[0, 0]) == (200, 100, 50)
+    assert tuple(out[1, 0]) == (64, 64, 64)
+
+
+def test_a_half_transparent_pixel_is_mixed_not_cut(qt_app):
+    page = _page()
+    page._slice_background = "#FFFFFF"
+    frame = np.array([[[0, 0, 0, 128]]], np.uint8)
+
+    out = page._flatten_gif_frame(frame)
+    # Halfway between black and white, give or take the rounding.
+    assert 120 <= int(out[0, 0, 0]) <= 135
+
+
 def test_a_null_pixmap_is_handed_back_untouched(qt_app):
     empty = QPixmap()
     assert _page()._slice_background_alpha_pixmap(empty) is empty

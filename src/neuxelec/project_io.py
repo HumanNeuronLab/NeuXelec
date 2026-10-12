@@ -139,9 +139,15 @@ def build_project_dict_from_state(state) -> dict[str, Any]:
                 # lets the alignment the whole plan rests on be reviewed again
                 # after the project is closed.
                 "path": _as_str_or_none(getattr(state, "plan_mri_in_t1_path", None)),
+                "trajectories_path": _as_str_or_none(
+                    getattr(state, "plan_trajectories_path", None)
+                ),
             },
             "parcel1": {
                 "path": _as_str_or_none(getattr(state, "parcel1_path", None)),
+            },
+            "mni_parcel2": {
+                "path": _as_str_or_none(getattr(state, "mni_parcel2_path", None)),
             },
             "parcel2": {
                 "path": _as_str_or_none(getattr(state, "parcel2_path", None)),
@@ -163,6 +169,21 @@ def build_project_dict_from_state(state) -> dict[str, Any]:
             },
         },
         "electrodes": list(getattr(state, "electrodes", []) or []),
+        # Stimulation results, keyed on the stimulated pair.
+        "stimulations": _json_safe(getattr(state, "stimulations", []) or []),
+        # How those results are drawn in the 3D view.
+        "stimulation_display": _json_safe(
+            getattr(state, "stimulation_display", {}) or {}
+        ),
+        # The EEG recording this project reads from, and how its channels were
+        # bound to the electrodes. Stored because scanning a session costs 52 s
+        # for 439 files on a share, and because a mapping reviewed by a human
+        # must not have to be reviewed again at every right-click.
+        "eeg": {
+            "folder": _as_str_or_none(getattr(state, "eeg_folder", None)),
+            "recording": _json_safe(getattr(state, "eeg_recording", None)),
+            "channel_match": _json_safe(getattr(state, "eeg_match", None)),
+        },
         # Implantation plan imported from NeuroInspire (already in MRI 1 space).
         "plan": _json_safe(getattr(state, "plan", None)),
         "markers": list(getattr(state, "markers", []) or []),
@@ -269,6 +290,7 @@ def create_empty_project_file(project_path: str | Path, patient_id: str) -> Path
             "plan_mri": {"path": None},
             "parcel1": {"path": None},
             "parcel2": {"path": None},
+            "mni_parcel2": {"path": None},
             "lh_pial": {"path": None},
             "rh_pial": {"path": None},
             "pial_surfaces": {
@@ -278,6 +300,8 @@ def create_empty_project_file(project_path: str | Path, patient_id: str) -> Path
             "siscom": {"path": None, "coreg_in_t1_path": None, "validated": False},
         },
         "electrodes": [],
+        "stimulations": [],
+        "stimulation_display": {},
         "markers": [],
         "view3d": {
             "saved_camera": None,
@@ -338,6 +362,9 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
     plan_mri = files.get("plan_mri", {}) if isinstance(files.get("plan_mri"), dict) else {}
     parcel1 = files.get("parcel1", {}) if isinstance(files.get("parcel1"), dict) else {}
     parcel2 = files.get("parcel2", {}) if isinstance(files.get("parcel2"), dict) else {}
+    mni_parcel2 = (
+        files.get("mni_parcel2", {}) if isinstance(files.get("mni_parcel2"), dict) else {}
+    )
 
     state.t1_path = _as_str_or_none(t1.get("path"))
     state.t1_source_path = _as_str_or_none(t1.get("source_path"))
@@ -386,8 +413,10 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
     state.t1_to_mni_warped_path = _as_str_or_none(mni.get("t1_to_mni_warped_path"))
 
     state.plan_mri_in_t1_path = _as_str_or_none(plan_mri.get("path"))
+    state.plan_trajectories_path = _as_str_or_none(plan_mri.get("trajectories_path"))
     state.parcel1_path = _as_str_or_none(parcel1.get("path"))
     state.parcel2_path = _as_str_or_none(parcel2.get("path"))
+    state.mni_parcel2_path = _as_str_or_none(mni_parcel2.get("path"))
     state.lh_pial_path = _as_str_or_none(lh_pial.get("path"))
     state.rh_pial_path = _as_str_or_none(rh_pial.get("path"))
     state.pial_surfaces_available = bool(
@@ -431,7 +460,21 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
     state.oblique_slice_saved_views = saved_views if isinstance(saved_views, dict) else {}
 
     state.electrodes = _safe_list(data.get("electrodes"))
+
+    # A project written before stimulation results simply has no block, and
+    # reads back as having none, which is what it is.
+    state.stimulations = _safe_list(data.get("stimulations"))
+
+    display = data.get("stimulation_display")
+    state.stimulation_display = display if isinstance(display, dict) else {}
     state.markers = _safe_list(data.get("markers"))
+
+    # A project written before the EEG reader simply has no "eeg" block, and
+    # reads back as having no recording, which is what it is.
+    eeg = data.get("eeg") or {}
+    state.eeg_folder = _as_str_or_none(eeg.get("folder"))
+    state.eeg_recording = eeg.get("recording") or None
+    state.eeg_match = eeg.get("channel_match") or None
     # Restore MNI electrode sets (with their per-set / per-electrode colours).
     state.mni_electrode_sets = _safe_list(data.get("mni_electrode_sets"))
 

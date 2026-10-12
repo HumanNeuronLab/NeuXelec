@@ -42,10 +42,26 @@ SHORTCUTS: list[tuple[str, str, str]] = [
     ("3D view", "Wheel", "Zoom"),
     ("3D view", "Middle drag, or Shift + left drag", "Pan"),
     ("3D view", "Double click", "Reset the camera on the visible plane"),
+    (
+        "3D view",
+        "Ctrl + arrow + wheel",
+        "Move a slice: up for axial, down for coronal, left for sagittal",
+    ),
+    ("3D view", "Ctrl+C + left drag", "Move the red crosshair marker"),
+    (
+        "3D view",
+        "Left click, while placing a marker",
+        "Leave the marker on the slice under the cursor; Esc or right click gives up",
+    ),
     ("3D view", "Ctrl+F", "Back to Reconstruction, at the 3D marker"),
     ("3D view", "Esc", "Leave full screen"),
     ("Parcellation table (MNI)", "Ctrl+F", "Search a region"),
     ("Electrode list", "Right click", "Rename, colour, labels, projection, delete"),
+    (
+        "Electrode list",
+        "Right click a contact",
+        "Add a stimulation result, labels, slices, coordinates",
+    ),
 ]
 
 
@@ -96,11 +112,18 @@ review each alignment and save the results.</li>
 <li><b>3D view</b> - see the electrodes, the brain surface and the functional
 maps together.</li>
 </ol>
+<p>On top of that, electrical stimulation results are recorded by hand, one
+card per stimulated pair, and read back on the brain in a mode of their own:
+see <i>Stimulation results</i>.</p>
 <p>The left menu carries the patient identifier, <b>Save project</b>, this
 <b>User guide</b>, and the four pages. A project file (<code>.json</code>)
 remembers the paths of the images, the electrodes and the display settings; it
 does <b>not</b> contain the images themselves. It travels between computers:
 see <i>Moving a project</i>.</p>
+<p>The two stimulation windows speak <b>English and French</b>, chosen in
+their title bar. The language changes what is shown, never what is stored: a
+descriptor picked in French is saved in English, so two cards of the same
+patient stay comparable.</p>
 <p><b>Watch out.</b> Validating a coregistration keeps it for the session only.
 It is written to disk when you click the matching <i>Save</i> button, or
 <i>Save all validated</i>. NeuXelec warns you when you save the project with
@@ -254,6 +277,13 @@ an fMRI threshold left at <i>auto</i> is derived from the map itself.</p>
 screenshot (also copied to the clipboard), export a GIF that turns the plane
 around the electrode, save and restore a slice position, remove the black
 background, and rotate the image by 45, 90, 135 or 180 degrees.</p>
+<p><b>Remove background</b> applies on screen and to PNG screenshots, where the
+transparency is real. A GIF cannot carry it: the format has no alpha channel,
+and the skin fades gradually into the air, which one transparent colour cannot
+reproduce. Asking for a GIF without a background therefore stops with an
+explanation rather than quietly returning a black one. For an animation meant
+for a slide, set a <i>Background color</i> instead: the air fades into the
+colour of the slide and the picture reads as having no background at all.</p>
 
 <h3>Contacts table</h3>
 <p>For the electrodes on screen, the table gives, per contact, the anatomical
@@ -325,8 +355,141 @@ SPECT, SISCOM and fMRI to the cortical ribbon; it needs parcellation 1 and
 applies to the oblique page as well.</p>
 
 <h3>Markers</h3>
-<p>A right click on a slice adds an anatomical marker, which can be renamed,
-hidden or exported.</p>
+<p><b>Add marker</b> in the right-click menu arms the placement rather than
+placing anything: the cursor becomes a cross, and the left click leaves the
+marker on the slice under it. The window asking for its name, colour
+and size opens afterwards, on a position you have already looked at. A right
+click or Esc gives up. The marker remembers which slice it was dropped on.</p>
+<p><b>Move marker</b>, on a marker, picks it back up: the same cross follows
+the slice, and the click puts it down, on the same slice or another one. It
+keeps its name, colour and size, so moving one is not filling it in again.</p>
+<p>A marker can then be renamed, hidden or exported from the marker list.
+<b>Export all</b>, beside <i>Close</i> in that list, writes every marker of the
+list into one text file, with the coordinates and the slice each was dropped
+on.</p>
+
+<h3>Stimulation results</h3>
+<p>A right click in the scene opens <b>Stimulation results</b>: one tab to
+filter what the scene shows, one tab holding a card per stimulation. See the
+<i>Stimulation results</i> chapter.</p>
+""",
+    ),
+    Section(
+        id="stimulation",
+        title="Stimulation results",
+        body="""
+<p>Electrical stimulation results are entered by hand, one card per stimulated
+pair, and read back on the brain. Nothing is computed from the signal: what is
+written down is what the examination found.</p>
+
+<h3>Writing one down</h3>
+<p>Two ways in, and they open the same window. A right click on a
+<b>contact</b> in the electrode list, on any page, offers <b>Add stimulation
+result</b>. Or, from the mode described below, the <b>+ Add a stimulation</b>
+button in the <i>Stimulation cards</i> tab.</p>
+<p>Both contacts of the pair are chosen in the window itself, so nothing has to
+be aimed at beforehand. Bipolar stimulation between two adjacent contacts is
+the standard, so the adjacent contact is already proposed; any other contact
+can be typed, and is checked against the implantation. A pair that is not
+adjacent, or that spans two electrodes, warns and is recorded all the same:
+both are practised and neither has an established recommendation. Monopolar
+stimulation is recorded with its reference. Only a contact stimulated against
+itself is refused.</p>
+<p>When a parcellation is loaded, both contacts are named automatically, with
+the same construction as the oblique table and the BIDS export.</p>
+
+<h3>The protocol</h3>
+<p>Choosing the frequency fills the pulse width, the train duration and the
+current with the values proposed for that protocol, and leaves alone any field
+already typed into. The two modes are low frequency, 1 Hz, with long trains at
+a constant current, and high frequency, 50 or 60 Hz, with short trains and the
+current raised until after-discharges appear.</p>
+<p>The frequency and the pulse width are recorded because milliamps alone do
+not describe a stimulation: the same current at 1 Hz and at 50 Hz is two
+different examinations, and the charge delivered is the current times the pulse
+duration. Above the usual maximum the window says so rather than refusing, the
+real limit depending on the surface area of the contact implanted.</p>
+<p>Any of these four can be left unknown: the bottom of each field reads
+<b>NA</b>, and the frequency offers it in its list. NA is not zero, and a card
+says NA rather than inventing a number. A filter on current or frequency sets
+such a card aside, since it can be neither above nor below a bound.</p>
+
+<h3>What happened</h3>
+<p>Discharges and seizures are separate questions, and several can be ticked
+at once. A seizure is recorded at one of four levels: habitual and
+electro-clinical, habitual aura alone without an EEG change, subclinical with
+an EEG change and no symptom, or not habitual. Whether the patient's own event
+was reproduced is asked separately, and so is the reproducibility of the
+response on repeat stimulation.</p>
+<p>The details of a discharge appear once there is one to describe: where it
+was seen, whether it was remote from the stimulated contacts, how it evolved,
+and whether the stimulation had to be interrupted.</p>
+
+<h3>The responses</h3>
+<p>A response is added as a block, so that several responses to one
+stimulation each keep their own localisation. The eleven categories are motor,
+language, somatosensory, visual, auditory, olfactory or gustatory, vestibular,
+autonomic, affective, cognitive, and other. Each one offers its own
+descriptors, and the question asked for the localisation follows the category:
+where on the body for motor and somatosensory, which part of the visual field
+for visual, which ear for auditory, and nothing at all for the others. A motor
+response is asked first whether it was positive, a movement appearing, or
+negative, an ongoing movement stopping.</p>
+<p>Every list ends in <i>Other</i>, with a free text box: there is no standard
+classification of evoked responses, so the vocabulary here is incomplete by
+nature.</p>
+<p>A pair tested without any response is recorded as such, with the current it
+was pushed to. That is a result, not a missing one.</p>
+
+<h3>The Stimulation Result mode</h3>
+<p>A right click in the 3D scene offers <b>Mode: Stimulation Result</b>.
+Entering it changes one thing and one thing only: the electrodes turn light
+grey and their shaft disappears. Slice planes, overlays, the parcellation, the
+brain surface and the camera all stay exactly as they were, and the contact
+labels that were switched on stay switched on, in grey. A contact or an
+electrode hidden by hand stays hidden.</p>
+<p>The view takes a rose border, with a white <b>STIMULATION RESULTS</b> badge
+and an <b>Esc</b> button in its top right corner. Leaving by that button, by
+closing the window, or by leaving the 3D page puts the view back exactly as it
+was: the state is remembered on the way in rather than recomputed.</p>
+<p>With no filter set, every contact of the implantation is drawn in grey: that
+grey is the map the results are read on. As soon as a filter is set, only the
+contacts of the stimulations it keeps remain, so the view narrows down to what
+was asked. A bipolar pair is drawn as a tube from one contact to the other,
+where the current density peaks.</p>
+<p>The MNI view is never affected.</p>
+
+<h3>The three tabs</h3>
+<p><b>Visualisation filters</b> decides what the scene draws: current,
+frequency, kind of event, kind of response, and whether the patient's own event
+was reproduced. Ticking two boxes inside one filter means either of them;
+between filters, every active filter must be satisfied. Nothing ticked means
+everything.</p>
+<p><b>Appearance</b> decides what it looks like. The colour can follow what the
+finding is worth, the kind of clinical response, one colour for all, or rules
+of your own. A rule is a condition and a colour, and the first rule that
+matches a stimulation wins, so their order counts; a rule is made from the
+filters currently set, so a condition is written in one place only. Three sets
+of rules come with the application and load in one click. The tube thickness,
+the contact size, the opacity and the grey of the contacts are set here too,
+and the legend below the colour choice always says what the current setting
+means.</p>
+<p><b>Stimulation cards</b> holds one card per stimulation, with the detail on
+the right. A card prints only the fields that were filled in. It can be
+corrected, deleted, or a new one added.</p>
+<p>Both stimulation windows can be made full screen, reduced out of the way
+without being closed, resized by their edges and corners, and switched between
+English and French in their title bar.</p>
+<h3>Taking them out</h3>
+<p><b>Export</b>, in the cards tab, writes the stimulations in the format the
+file name asks for. A <b>.csv</b> or <b>.tsv</b> carries one row per stimulated
+pair, with the responses joined into one cell, which is what a spreadsheet or
+a colleague's script expects. A <b>.txt</b> prints the cards one after another,
+for the patient file. A <b>.json</b> keeps the records exactly as the project
+holds them, nested responses included, and is the only lossless one.</p>
+<p>Nothing is recomputed on the way out: a field never filled in leaves its
+cell empty, and a protocol that was not noted reads NA.</p>
+<p>Cards and appearance settings are saved with the project.</p>
 """,
     ),
     Section(
@@ -339,9 +502,12 @@ an fMRI, no <i>cortex only</i> without a parcellation, no <i>Planning</i>
 without a plan. Everything the menus can offer is listed below.</p>
 
 <h3>3D view, right click in the scene</h3>
-<p><b>MARKERS</b>: <i>Marker list</i>; <i>Add marker</i> when the click lands on
-a slice plane; on an existing marker <i>Edit marker</i>, <i>Hide marker</i>,
+<p><b>MARKERS</b>: <i>Marker list</i>; <i>Add marker</i> as soon as a slice is
+displayed, which arms the placement rather than placing anything; on an
+existing marker <i>Edit marker</i>, <i>Move marker</i>, <i>Hide marker</i>,
 <i>Export marker</i>, <i>Delete marker</i>; <i>Show hidden markers</i>.</p>
+<p><b>MODE</b>: <i>Mode: Stimulation Result</i>, and once inside it,
+<i>Leave mode: Stimulation Result</i>.</p>
 <p><b>OVERLAY COLORS</b>: <i>Color PET</i>, <i>Color SISCOM</i>, <i>Color
 fMRI</i>, <i>Color CT</i>, <i>Color Ictal SPECT</i>, <i>Color Inter-ictal
 SPECT</i>.</p>
@@ -396,7 +562,8 @@ selected, renaming steps aside and the deletion becomes <i>Delete N
 electrodes</i>.</p>
 <p>On a <b>contact</b>: <i>Add</i> or <i>Remove label</i> (Oblique slice and 3D
 view); <i>Show coronal slice</i>, <i>Show axial slice</i>, <i>Show sagittal
-slice</i> (3D view only); <i>Edit coordinates</i> (Reconstruction only);
+slice</i> (3D view only); <i>Add stimulation result</i>, on every page;
+<i>Edit coordinates</i> (Reconstruction only);
 <i>Delete contact</i>, or <i>Delete N contacts</i>.</p>
 <p>In View Only mode, renaming and deleting are hidden; the colour, the labels
 and the projection stay available.</p>
@@ -577,11 +744,8 @@ TOUR_STEPS: list[TourStep] = [
         "once. The overlay panel switches CT, MRI, PET, SISCOM and fMRI on, "
         "one layer at a time.",
         target=[
+            "cardObliqueLayerList",
             "cardObliqueDisplay",
-            "cardObliqueAnatomical",
-            "cardObliquePET",
-            "cardObliqueSISCOM",
-            "cardObliquefMRI",
         ],
         page="pageObliqueSlices",
         delay_ms=900,
@@ -603,6 +767,25 @@ TOUR_STEPS: list[TourStep] = [
         delay_ms=1200,
     ),
     TourStep(
+        title="Electrical stimulation",
+        body="A right click on a contact in the electrode list records what a "
+        "stimulation did: the pair, the protocol, what the trace showed and "
+        "what the patient felt. One card per stimulated pair.",
+        # Chaque page a sa propre liste: celle de la vue 3D est la
+        # troisieme. Une etape dont la cible n'existe pas est sautee.
+        target="tv_Electrodes_3",
+        page="page3DView",
+        delay_ms=400,
+    ),
+    TourStep(
+        title="Reading the stimulations back",
+        body="A right click in the scene opens Mode: Stimulation Result. The "
+        "electrodes turn grey, and a coloured tube joins the two contacts of "
+        "each pair the filters keep. Nothing else in the view changes.",
+        target=None,
+        page="page3DView",
+    ),
+    TourStep(
         title="Right click carries the options",
         body="Every view hides its options behind a right click, grouped in "
         "labelled sections: overlay colours, display, fMRI, planning, "
@@ -613,8 +796,9 @@ TOUR_STEPS: list[TourStep] = [
     ),
     TourStep(
         title="Everything is written down here",
-        body="The user guide explains every page, every right-click menu and every "
-        "shortcut. Press F1 at any time, or click this button.",
+        body="The user guide explains every page, every right-click menu, every "
+        "shortcut and the stimulation results. Press F1 at any time, or click "
+        "this button.",
         target="btn_menu_userGuide",
         page="pageFiles",
     ),

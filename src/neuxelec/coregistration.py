@@ -958,6 +958,125 @@ def ants_coreg_to_fixed(
 # =============================================================================
 
 
+#: Tolerances pour juger que deux volumes occupent deja le meme espace.
+#: Larges au regard du flottant, serrees au regard de l anatomie : un dixieme
+#: de micron ne deplace rien, et personne ne produit deux volumes distants de
+#: cela par hasard.
+SAME_SPACE_MM = 1e-4
+SAME_SPACE_DIRECTION = 1e-6
+
+
+def same_physical_space(a: sitk.Image | str, b: sitk.Image | str) -> bool:
+    """Les deux volumes placent-ils deja leurs voxels aux memes millimetres ?
+
+    POURQUOI CETTE QUESTION SE POSE
+
+    Deux images issues du meme traitement sortent sur la meme grille : une carte
+    statistique et l anatomie dont elle derive, une segmentation et son volume
+    source. Les recaler l une sur l autre revient a demander a un optimiseur de
+    retrouver l identite, et il ne la retrouve pas.
+
+    Mesure faite sur une carte de z-score et le T1 dont elle sortait, affines
+    rigoureusement identiques : ANTs a rendu une rotation de 56 degres, une mise
+    a l echelle de 0,77 et une translation de 4 mm, soit plus de 30 mm d erreur
+    au bord du cerveau. Rien n a echoue, aucune alerte n est apparue, et le
+    resultat s est affiche comme n importe quel autre.
+
+    La cause tient en deux phrases. Il n y avait rien a estimer, et une carte
+    statistique n a aucune correspondance d intensite avec une anatomie : la
+    metrique n a pas de maximum a trouver, donc l optimiseur s arrete ou le
+    hasard le mene.
+    """
+    try:
+        # Inside the try, deliberately. This runs before every coregistration,
+        # and an unreadable path must leave the user with the ordinary flow
+        # rather than an exception raised by a check.
+        ia = sitk.ReadImage(str(a), sitk.sitkFloat32) if isinstance(a, (str, Path)) else a
+        ib = sitk.ReadImage(str(b), sitk.sitkFloat32) if isinstance(b, (str, Path)) else b
+        if tuple(ia.GetSize()) != tuple(ib.GetSize()):
+            return False
+        for u, v in zip(ia.GetSpacing(), ib.GetSpacing()):
+            if abs(u - v) > SAME_SPACE_MM:
+                return False
+        for u, v in zip(ia.GetOrigin(), ib.GetOrigin()):
+            if abs(u - v) > SAME_SPACE_MM:
+                return False
+        for u, v in zip(ia.GetDirection(), ib.GetDirection()):
+            if abs(u - v) > SAME_SPACE_DIRECTION:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def write_identity_affine(out_path: str) -> str:
+    """Write an identity affine in the ANTs .mat format, and return its path.
+
+    Used when two volumes already share a space: rather than branching around
+    the registration, the identity is written and applied, so the image
+    follows the same path as any registered one and the project ends up
+    describing a transform for every modality.
+    """
+    t = sitk.AffineTransform(3)
+    t.SetIdentity()
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    sitk.WriteTransform(t, str(out_path))
+    return str(out_path)
+
+
+def apply_existing_affine(
+    fixed_path: str,
+    moving_path: str,
+    affine_mat_path: str,
+    transforms_dir: str | None = None,
+    moving_modality: str = "AUTO",
+    apply_to_path: str | None = None,
+    interpolation: str = "Linear",
+) -> CoregResult:
+    """Appliquer une matrice deja estimee, au lieu d en chercher une nouvelle.
+
+    Sert quand la transformation est connue : estimee sur une autre modalite du
+    meme examen, fournie par un autre outil, ou simplement rejouee sur un
+    second patient traite a l identique.
+
+    Une matrice ANTs s exprime en millimetres physiques, pas en indices de
+    voxel. Elle reste donc valable apres que NeuXelec a reoriente et
+    reechantillonne l image au chargement, puisque ces deux operations
+    conservent l origine et la direction : verifie, un point physique revient a
+    la meme place a 1e-13 mm pres.
+    """
+    out_dir = _ants_out_dir(transforms_dir)
+    slug = _safe_slug(moving_modality.upper() if moving_modality else "moving")
+    cible = out_dir / f"{slug}_to_T1_Applied.nii.gz"
+
+    moved = ants_apply_affine_to_image(
+        fixed_path=fixed_path,
+        image_path=apply_to_path or moving_path,
+        affine_mat_path=affine_mat_path,
+        out_path=str(cible),
+        interpolation=interpolation,
+    )
+    compagnon = None
+    if apply_to_path:
+        autre = out_dir / f"{slug}_to_T1_AppliedAnatomy.nii.gz"
+        compagnon = ants_apply_affine_to_image(
+            fixed_path=fixed_path,
+            image_path=moving_path,
+            affine_mat_path=affine_mat_path,
+            out_path=str(autre),
+            interpolation=interpolation,
+        )
+    return CoregResult(
+        transform=sitk.Transform(3, sitk.sitkIdentity),
+        moving_in_fixed=moved,
+        fixed=sitk.ReadImage(fixed_path),
+        moving=sitk.ReadImage(apply_to_path or moving_path),
+        affine_mat_path=str(affine_mat_path),
+        ants_work_dir=str(out_dir),
+        companion_in_fixed=compagnon,
+    )
+
+
 def rigid_coreg_to_fixed(
     fixed_path: str,
     moving_path: str,
@@ -969,13 +1088,28 @@ def rigid_coreg_to_fixed(
     use_ants: bool = True,  # kept for compatibility; must be True in ANTs-only
     transforms_dir: str | None = None,
     apply_to_path: str | None = None,
+    existing_affine_mat: str | None = None,
 ) -> CoregResult:
     """
     Coregister moving -> fixed (ANTs only).
 
     ``apply_to_path``: see ``ants_coreg_to_fixed`` (companion image moved with
     the transform estimated on ``moving``; it becomes ``moving_in_fixed``).
+
+    ``existing_affine_mat``: apply this transform instead of estimating one.
+    Nothing is optimised, so the result is exactly reproducible, which is the
+    point when the transform is already known.
     """
+    if existing_affine_mat:
+        return apply_existing_affine(
+            fixed_path=fixed_path,
+            moving_path=moving_path,
+            affine_mat_path=existing_affine_mat,
+            transforms_dir=transforms_dir,
+            moving_modality=moving_modality,
+            apply_to_path=apply_to_path,
+        )
+
     fixed = sitk.ReadImage(fixed_path)
     moving = sitk.ReadImage(apply_to_path or moving_path)
 

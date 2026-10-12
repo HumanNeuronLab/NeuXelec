@@ -375,7 +375,7 @@ class View3DMarkersMixin:
             dlg.hideMarker.connect(self._hide_marker_from_marker_list)
             dlg.showMarker.connect(self._show_marker_from_marker_list)
             dlg.deleteMarker.connect(self._delete_marker_from_marker_list)
-            dlg.exportMarker.connect(self._export_marker_text)
+            dlg.exportAllMarkers.connect(self._export_all_markers)
 
             dlg.destroyed.connect(lambda *_: setattr(self, "_marker_list_dialog", None))
 
@@ -538,7 +538,183 @@ class View3DMarkersMixin:
         except Exception:
             pass
 
-    def _create_marker_at_ras(self, ras_xyz) -> None:
+
+    # ------------------------------------------------------------------
+    # Placing a marker: the cross follows the mouse, a click leaves it.
+    #
+    # The old way asked where the marker went by the point of the right
+    # click that opened the menu, which meant aiming before knowing that
+    # you were aiming. Now the menu arms the placement, the cursor becomes
+    # a cross, and the left click settles the marker on the slice under
+    # it. The window that asks for the name opens afterwards.
+    #
+    # A red cross used to be drawn in the scene as well, following the
+    # mouse. It was dropped: redrawing the whole scene on every mouse
+    # move made it trail behind the cursor, and two crosses one step
+    # apart say less than one.
+    # ------------------------------------------------------------------
+
+    def marker_placement_active(self) -> bool:
+        return bool(getattr(self, "_marker_placing", False))
+
+    def _plane_of_actor(self, actor):
+        """Which anatomical plane an actor belongs to, or None.
+
+        The marker has to know the slice it was dropped on: a point in
+        space says nothing about which image the user was reading.
+        """
+        for plane in ("coronal", "axial", "sagittal"):
+            for suffix in ("plane", "pet", "siscom"):
+                if actor is getattr(self, f"_{plane}_{suffix}_actor", None):
+                    return plane
+
+        return None
+
+    def _slice_under_qpos(self, qpos):
+        """``(plane, ras)`` under the cursor, or ``(None, None)``.
+
+        Only the anatomical planes and their overlays count: a marker
+        dropped on the brain surface would sit on no image at all.
+        """
+        actor, ras = self._vtk_pick_actor_and_ras_from_qpos(qpos)
+
+        if actor is None or ras is None:
+            return None, None
+
+        plane = self._plane_of_actor(actor)
+
+        return (plane, ras) if plane is not None else (None, None)
+
+    def begin_marker_placement(self) -> None:
+        """Arm the placement. The next left click leaves the marker."""
+        if not _PV_OK or self.plotter is None:
+            return
+
+        self._marker_placing = True
+        self._marker_moving_id = ""
+
+        try:
+            if self.interactor is not None:
+                self.interactor.setCursor(Qt.CrossCursor)
+        except Exception:
+            pass
+
+    def cancel_marker_placement(self) -> None:
+        """Give up without leaving anything behind."""
+        self._marker_placing = False
+        self._marker_moving_id = ""
+
+        try:
+            if self.interactor is not None:
+                self.interactor.unsetCursor()
+        except Exception:
+            pass
+
+    def _finish_marker_placement(self, qpos) -> None:
+        """Leave the cross where it is, then ask what it is.
+
+        A click outside the slices is not a place: the placement stays
+        armed rather than dropping a marker in mid-air.
+        """
+        plane, ras = self._slice_under_qpos(qpos)
+
+        if plane is None or ras is None:
+            return
+
+        self._marker_placing = False
+
+        try:
+            if self.interactor is not None:
+                self.interactor.unsetCursor()
+        except Exception:
+            pass
+
+        moving = self.marker_being_moved()
+        self._marker_moving_id = ""
+
+        if moving:
+            # Moving one does not ask its name again: it already has one.
+            self._move_marker_to(moving, ras, plane)
+            return
+
+        self._create_marker_at_ras(ras, plane=plane)
+
+    def begin_marker_move(self, marker_id: str) -> None:
+        """Pick a marker back up and put it down somewhere else.
+
+        The same gesture as placing one: the cross follows the slice, the
+        click settles it. Dragging it directly would fight the camera,
+        which turns on exactly the same button.
+        """
+        if not _PV_OK or self.plotter is None:
+            return
+
+        if self._marker_by_id(marker_id) is None:
+            return
+
+        self._marker_placing = True
+        self._marker_moving_id = str(marker_id)
+
+        try:
+            if self.interactor is not None:
+                self.interactor.setCursor(Qt.CrossCursor)
+        except Exception:
+            pass
+
+    def marker_being_moved(self) -> str:
+        return str(getattr(self, "_marker_moving_id", "") or "")
+
+    def _move_marker_to(self, marker_id: str, ras, plane: str) -> None:
+        """Put the marker down, keeping everything else it says."""
+        marker = self._marker_by_id(marker_id)
+
+        if marker is None:
+            return
+
+        marker["ras"] = [float(v) for v in ras]
+        marker["plane"] = str(plane)
+
+        self._render_anatomical_markers()
+        self._save_markers_to_project_json()
+        self._refresh_marker_list_dialog()
+
+    def _handle_marker_placement_event(self, event) -> bool:
+        """The whole placement, while it is armed.
+
+        The buttons are consumed, not the plain moves: a drag can only
+        start from a press, and the press never reaches the camera. A
+        move that changes nothing is left alone, so the view stays as
+        responsive as ever while aiming.
+        """
+        if not self.marker_placement_active():
+            return False
+
+        try:
+            kind = event.type()
+
+            if kind == QEvent.MouseButtonPress:
+                if event.button() == Qt.LeftButton:
+                    self._finish_marker_placement(event.position())
+                    return True
+
+                if event.button() == Qt.RightButton:
+                    self.cancel_marker_placement()
+                    return True
+
+                return True
+
+            if kind in (QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick):
+                return True
+
+            if kind == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+                self.cancel_marker_placement()
+                return True
+        except Exception:
+            self.cancel_marker_placement()
+
+        return False
+
+    def _create_marker_at_ras(self, ras_xyz, plane: str = "") -> None:
         """
         Open the marker dialog and create a new persistent 3D marker.
         """
@@ -554,6 +730,9 @@ class View3DMarkersMixin:
             "size_mm": 4.0,
             "description": "",
             "ras": [float(v) for v in ras],
+            # The slice it was dropped on, so that a marker can be found
+            # again on the image its author was reading.
+            "plane": str(plane),
         }
 
         dlg = MarkerDialog(
@@ -570,6 +749,7 @@ class View3DMarkersMixin:
         marker["id"] = uuid4().hex
         marker["visible"] = True
         marker["space"] = self._current_marker_space()
+        marker["plane"] = str(plane)
 
         self._all_markers().append(marker)
 
@@ -727,6 +907,113 @@ class View3DMarkersMixin:
             )
 
         Path(path).write_text("\n".join(lines), encoding="utf-8")
+
+    def _marker_report_lines(self, marker: dict) -> list[str]:
+        """One marker, as the single export already prints it."""
+        name = str(marker.get("name", "Marker")).strip() or "Marker"
+        ras = marker.get("ras", [0.0, 0.0, 0.0])
+        voxel = marker.get("voxel_xyz", None)
+        space = str(marker.get("space", "native")).lower()
+
+        lines = [
+            f"Name: {name}",
+            f"Type: {marker.get('type', 'Lesion')}",
+            f"Color: {marker.get('color', '#FF3B30')}",
+            f"Marker size: {float(marker.get('size_mm', 4.0)):.1f} mm",
+        ]
+
+        plane = str(marker.get("plane", "")).strip()
+
+        if plane:
+            lines.append(f"Dropped on the {plane} slice")
+
+        lines += [
+            "",
+            "Description:",
+            str(marker.get("description", "") or "None"),
+            "",
+            "RAS coordinates (mm):",
+            f"X: {float(ras[0]):.2f}",
+            f"Y: {float(ras[1]):.2f}",
+            f"Z: {float(ras[2]):.2f}",
+            "",
+            "Voxel coordinates in MNI template:"
+            if space == "mni"
+            else "Voxel coordinates in MRI 1:",
+        ]
+
+        if not isinstance(voxel, (list, tuple)) or len(voxel) != 3:
+            lines.append("Unavailable")
+        else:
+            lines += [
+                f"i: {float(voxel[0]):.2f}",
+                f"j: {float(voxel[1]):.2f}",
+                f"k: {float(voxel[2]):.2f}",
+            ]
+
+        return lines
+
+    def _export_all_markers(self) -> None:
+        """Every marker of the list, in one file.
+
+        The same text as the single export, one marker after another, so
+        a file holding one marker and a file holding twenty read alike.
+        """
+        markers = self._markers()
+
+        if not markers:
+            NeuXelecMessageDialog.warning(
+                self._dialog_parent(),
+                "Export markers",
+                "There is no marker in this list.",
+            )
+            return
+
+        patient = str(getattr(self.state, "patient_id", "") or "")
+        propose = f"{patient}_markers.txt" if patient else "markers.txt"
+
+        path, _filter = QFileDialog.getSaveFileName(
+            self._dialog_parent(),
+            "Export every marker",
+            propose,
+            "Text files (*.txt)",
+        )
+
+        if not path:
+            return
+
+        if not path.lower().endswith(".txt"):
+            path += ".txt"
+
+        lines = [
+            "NeuXelec marker list",
+            "--------------------",
+        ]
+
+        if patient:
+            lines.append(f"Patient: {patient}")
+
+        lines += [f"{len(markers)} marker(s)", ""]
+
+        for marker in markers:
+            lines += self._marker_report_lines(marker)
+            lines += ["", "-" * 40, ""]
+
+        try:
+            Path(path).write_text("\n".join(lines), encoding="utf-8")
+        except Exception as error:
+            NeuXelecMessageDialog.critical(
+                self._dialog_parent(),
+                "Export every marker",
+                f"Could not write the file: {error}",
+            )
+            return
+
+        NeuXelecMessageDialog.information(
+            self._dialog_parent(),
+            "Export every marker",
+            f"{len(markers)} marker(s) written to\n{path}",
+        )
 
     def _handle_anatomical_marker_hover_event(self, obj, event) -> bool:
         """

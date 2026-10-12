@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSlider,
     QSpinBox,
+    QTabWidget,
     QToolButton,
     QToolTip,
     QTreeWidget,
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 from scipy.ndimage import map_coordinates
 
 from neuxelec.ui.brain_render_dialog import BrainRenderDialog
+from neuxelec.ui.card_borrowing import CardBorrower
 from neuxelec.ui.context_menus import (
     exec_3d_view_menu,
     exec_mni_electrode_tree_menu,
@@ -39,11 +41,11 @@ from neuxelec.ui.context_menus import (
 from neuxelec.ui.export_coordinates_dialog import ExportCoordinatesDialog
 from neuxelec.ui.mni_parcellation_table_dialog import MniParcellationTableDialog
 from neuxelec.ui.neuxelec_color_dialog import NeuXelecColorDialog
-from neuxelec.ui.neuxelec_message_dialog import (
-    NeuXelecMessageDialog,
-    NeuXelecSelectionDialog,
-)
+from neuxelec.ui.neuxelec_message_dialog import NeuXelecMessageDialog
+from neuxelec.ui.overlay_color_dialog import OverlayColorDialog
+from neuxelec.ui.overlay_layer_list import OverlayLayerList
 from neuxelec.ui.page_loading_overlay import PageLoadingOverlay
+from neuxelec.ui.parcellation_region_panel import ParcellationRegionPanel
 from neuxelec.ui.pyvista_quick_tools import PyVistaQuickTools
 from neuxelec.utils.cortex_mask import build_cortex_mask, cortex_label_ids
 from neuxelec.utils.fmri_visualization import (
@@ -51,6 +53,7 @@ from neuxelec.utils.fmri_visualization import (
     auto_fmri_levels,
     filter_small_clusters,
 )
+from neuxelec.utils.micro_tetrodes import ring_points, tetrode_ring
 from neuxelec.utils.mni_electrodes_io import load_bids_mni_electrodes_tsv
 
 from .view3d_camera import View3DCameraMixin
@@ -60,6 +63,7 @@ from .view3d_markers import View3DMarkersMixin
 from .view3d_mni import View3DMniMixin
 from .view3d_slice_planes import View3DSlicePlanesMixin
 from .view3d_spect import View3DSpectMixin
+from .view3d_stimulation import View3DStimulationMixin
 
 try:
     import pyvista as pv
@@ -84,6 +88,9 @@ from neuxelec.utils.siscom_visualization import (
     normalize_siscom_slice,
     siscom_norm_to_colormap,
 )
+
+#: Repere de premiere construction : aucune signature ne peut l'egaler.
+_JAMAIS_VU = object()
 
 
 def _lps_to_ras_points(pts: np.ndarray) -> np.ndarray:
@@ -144,6 +151,16 @@ class _CrosshairMarkerDragFilter(QObject):
         # Keyboard + wheel controls for coronal / axial / sagittal
         # slice sliders in the 3D View.
         # ---------------------------------------------------------
+        # ---------------------------------------------------------
+        # Placing a marker takes the whole view: a drag that turned the
+        # camera under the cross would move the brain, not the marker.
+        # ---------------------------------------------------------
+        try:
+            if self.owner._handle_marker_placement_event(event):
+                return True
+        except Exception:
+            pass
+
         try:
             handled = self.owner._handle_slice_slider_keyboard_wheel_event(event)
             if handled:
@@ -188,6 +205,37 @@ class _CrosshairMarkerDragFilter(QObject):
         return False
 
 
+class _SlicePlaneKeyFilter(QObject):
+    """
+    Application level filter for the Ctrl + arrow slice shortcut.
+
+    The wheel event reaches the 3D view on its own, because Qt sends it
+    to the widget under the cursor. The arrow key press does not: Qt
+    sends key events to the **focused** widget, and showing a plane
+    means clicking its checkbox, which takes the focus away from the
+    3D view. Installed on the interactor alone, the shortcut therefore
+    only worked right after a click inside the 3D view.
+
+    Seeing the key here makes it independent of the focus, without
+    stealing the arrow from whatever holds it.
+    """
+
+    def __init__(self, owner):
+        super().__init__()
+        self.owner = owner
+
+    def eventFilter(self, obj, event):
+        try:
+            if event.type() not in (QEvent.KeyPress, QEvent.KeyRelease):
+                return False
+
+            return bool(
+                self.owner._handle_slice_plane_key_from_application(event)
+            )
+        except Exception:
+            return False
+
+
 class _MniTreeBulkCheckFilter(QObject):
     def __init__(self, owner):
         super().__init__()
@@ -207,6 +255,7 @@ class View3DPage(
     View3DMniMixin,
     View3DSlicePlanesMixin,
     View3DSpectMixin,
+    View3DStimulationMixin,
     View3DCameraMixin,
 ):
     def __init__(self, ui_root: QObject, state: object):
@@ -276,6 +325,11 @@ class View3DPage(
         # T1 remains the geometry reference, T2 is only a display source.
         self._active_mri_source_3d = "T1"
 
+        #: Each MRI keeps its own opacity, so switching what the slider edits
+        #: does not lose the other setting.
+        self._mri_opacity_3d = {"T1": 100, "T2": 50}
+        self._mri_edited_3d = "T1"
+
         self._brainmask_img: sitk.Image | None = None
         self._iso_mesh_data: dict | None = None  # {"points","faces"}
         self._pet_img: sitk.Image | None = None
@@ -324,7 +378,6 @@ class View3DPage(
         self.sb_pet_max: QSpinBox | None = None
         self.sld_pet_gamma: QSlider | None = None
         self.dsb_pet_gamma = None
-        self._siscom_color = (1.0, 0.0, 0.0)  # rouge
 
         self._brain_color = (0.83, 0.83, 0.83)  # light gray
         # Ambient occlusion on the cortex: off by default because it costs
@@ -369,9 +422,13 @@ class View3DPage(
         self._mni_template_mask_img = None
         self._mni_t1_slices_visible = False
         self._mni_parcel1_img = None
-        self._mni_parcel2_img = None
         self._mni_parcel1_lut = {}
+        # La case 2 du repere MNI : vide tant que personne n'y met un
+        # atlas. Elle tenait le Brainnetome, que la licence interdit de
+        # redistribuer ; c'est donc a chacun d'apporter le sien.
+        self._mni_parcel2_img = None
         self._mni_parcel2_lut = {}
+        self._mni_parcel2_name = ""
         self._mni_parcellation_table_dialog = None
         # Temporary contact label created by a MNI "Show ... slice" action.
         # Format:
@@ -400,6 +457,28 @@ class View3DPage(
         self._crosshair_marker_drag_armed = False
         self._crosshair_marker_drag_active = False
         self._crosshair_marker_drag_filter = None
+        self._slice_plane_key_filter = None
+
+        # Stimulation results: the mode, the markers drawn, and what the
+        # filters tab last asked for.
+        self._stimulation_mode = False
+        self._stim_marker_actors: dict = {}
+        self._stim_filters: dict = {}
+        self._stim_results_dialog = None
+        self._stim_hidden_electrodes: dict = {}
+        self._stim_chrome_filter = None
+        self._stim_container_style = None
+        self._stim_container_margins = None
+        self._stim_badge = None
+        self._stim_escape = None
+
+        # Pose d'un marqueur: la croix qui suit la souris, et la coupe
+        # sur laquelle elle se trouve.
+        self._marker_placing = False
+        self._marker_moving_id = ""
+        self._marker_placing_ras = None
+        self._marker_placing_plane = None
+        self._marker_placement_actor = None
 
         # Anatomical markers, e.g. lesion sites.
         # Data are stored persistently in state.markers.
@@ -485,6 +564,7 @@ class View3DPage(
         self._ct_img: sitk.Image | None = None
 
         self.btn_elec_shaft: QPushButton | None = None
+        self.btn_micro_tetrodes: QPushButton | None = None
         self.spin_contacts_size: QDoubleSpinBox | None = None
 
         self._ct_render_timer = QTimer()
@@ -926,6 +1006,10 @@ class View3DPage(
         except Exception:
             pass
 
+        # Un acteur qui vient d'etre reconstruit est visible: le mode
+        # Stimulation Result doit se reappliquer par-dessus.
+        self.apply_stimulation_mode_visibility()
+
     def _block_export_if_fullscreen(self, export_name: str = "export") -> bool:
         if not bool(getattr(self, "_view3d_is_fullscreen", False)):
             return False
@@ -1131,6 +1215,14 @@ class View3DPage(
             self.interactor.setFocusPolicy(Qt.StrongFocus)
             self._crosshair_marker_drag_filter = _CrosshairMarkerDragFilter(self)
             self.interactor.installEventFilter(self._crosshair_marker_drag_filter)
+
+            # Les touches du raccourci Ctrl + fleche ne passent pas par
+            # l'interacteur quand le focus est ailleurs.
+            app = QApplication.instance()
+
+            if app is not None:
+                self._slice_plane_key_filter = _SlicePlaneKeyFilter(self)
+                app.installEventFilter(self._slice_plane_key_filter)
         except Exception:
             pass
 
@@ -1383,9 +1475,18 @@ class View3DPage(
         self._create_mni_atlas_checkbox()
         self.chk_mri_t1 = self.ui.findChild(QCheckBox, "checkBox_3dView_T1")
         self.chk_mri_t2 = self.ui.findChild(QCheckBox, "checkBox_3dView_T2")
+        #: Which MRI the slider and the spin box edit. The two check boxes
+        #: above say what is drawn; this says what is being adjusted.
+        self.cmb_mri_3d = self.ui.findChild(QComboBox, "comboBox_3dView_MRI")
+        self.sld_mri_3d = self.ui.findChild(QSlider, "horizontalSlider_3dView_MRI")
+        self.spn_mri_3d = self.ui.findChild(QSpinBox, "spinBox_3dView_MRI")
 
         self.sld_3d_brainMaskOpacity = self.ui.findChild(QSlider, "sld_3d_brainMaskOpacity")
+        self.spn_3d_brainMaskOpacity = self.ui.findChild(
+            QSpinBox, "spinBox_3d_brainMaskOpacity"
+        )
         self.sld_3d_PialOpacity = self.ui.findChild(QSlider, "sld_3d_PialOpacity")
+        self.spn_3d_pialOpacity = self.ui.findChild(QSpinBox, "spinBox_3d_pialOpacity")
         self.sld_brain_iso_pct = self.ui.findChild(QSlider, "sld_3d_brainIsoPerct")
 
         # Opacity values are later divided by 100.0, so these sliders must
@@ -1538,6 +1639,9 @@ class View3DPage(
             self.spn_parcel1_opacity.valueChanged.connect(
                 lambda _: self._refresh_base_slice_cache_and_scene()
             )
+            self.spn_parcel1_opacity.valueChanged.connect(
+                lambda _: self._apply_region_opacity()
+            )
 
         if self.sld_parcel2_opacity is not None and self.spn_parcel2_opacity is not None:
             self.sld_parcel2_opacity.setRange(0, 100)
@@ -1549,16 +1653,22 @@ class View3DPage(
             self.spn_parcel2_opacity.valueChanged.connect(
                 lambda _: self._refresh_base_slice_cache_and_scene()
             )
+            self.spn_parcel2_opacity.valueChanged.connect(
+                lambda _: self._apply_region_opacity()
+            )
 
         try:
+            # 100 % au depart : une parcellation a demi transparente sur
+            # un fond sombre se lit mal, et la rendre franche est le point
+            # de depart naturel. Le curseur sert a l'alleger ensuite.
             if self.sld_parcel1_opacity is not None:
-                self.sld_parcel1_opacity.setValue(50)
+                self.sld_parcel1_opacity.setValue(100)
             if self.spn_parcel1_opacity is not None:
-                self.spn_parcel1_opacity.setValue(50)
+                self.spn_parcel1_opacity.setValue(100)
             if self.sld_parcel2_opacity is not None:
-                self.sld_parcel2_opacity.setValue(50)
+                self.sld_parcel2_opacity.setValue(100)
             if self.spn_parcel2_opacity is not None:
-                self.spn_parcel2_opacity.setValue(50)
+                self.spn_parcel2_opacity.setValue(100)
             if self.chk_parcel1 is not None:
                 self._set_checked(self.chk_parcel1, False)
             if self.chk_parcel2 is not None:
@@ -1567,6 +1677,7 @@ class View3DPage(
             pass
 
         self.btn_elec_shaft = self.ui.findChild(QPushButton, "btn_3d_elecShaft")
+        self.btn_micro_tetrodes = self.ui.findChild(QPushButton, "btn_3d_microTetrodes")
         self.btn_export_coordinates = self.ui.findChild(QPushButton, "Export_Coordinates_3")
         if self.btn_export_coordinates is not None:
             self.btn_export_coordinates.clicked.connect(self._open_export_coordinates_dialog)
@@ -1605,6 +1716,8 @@ class View3DPage(
                 self.chk_mri_t2.toggled.connect(
                     lambda checked=False: self._on_3d_mri_source_toggled("T2", checked)
                 )
+
+            self._connect_mri_opacity_3d()
         except Exception:
             pass
 
@@ -1613,8 +1726,31 @@ class View3DPage(
                 lambda _: self._update_brain_opacity()
             )
 
+        if (
+            self.sld_3d_brainMaskOpacity is not None
+            and self.spn_3d_brainMaskOpacity is not None
+        ):
+            # Les deux montrent la meme valeur : chacun suit l'autre, et
+            # le rendu ne passe que par le curseur, deja cable plus haut.
+            self.spn_3d_brainMaskOpacity.setRange(0, 100)
+            self.spn_3d_brainMaskOpacity.setValue(self.sld_3d_brainMaskOpacity.value())
+            self.sld_3d_brainMaskOpacity.valueChanged.connect(
+                self.spn_3d_brainMaskOpacity.setValue
+            )
+            self.spn_3d_brainMaskOpacity.valueChanged.connect(
+                self.sld_3d_brainMaskOpacity.setValue
+            )
+
         if self.sld_3d_PialOpacity is not None:
             self.sld_3d_PialOpacity.valueChanged.connect(lambda _: self._update_brain_opacity())
+
+        if self.sld_3d_PialOpacity is not None and self.spn_3d_pialOpacity is not None:
+            # Les deux montrent la meme valeur : chacun suit l'autre, et
+            # le rendu ne passe que par le curseur, deja cable au-dessus.
+            self.spn_3d_pialOpacity.setRange(0, 100)
+            self.spn_3d_pialOpacity.setValue(self.sld_3d_PialOpacity.value())
+            self.sld_3d_PialOpacity.valueChanged.connect(self.spn_3d_pialOpacity.setValue)
+            self.spn_3d_pialOpacity.valueChanged.connect(self.sld_3d_PialOpacity.setValue)
 
         if self.chk_pet is not None:
             self.chk_pet.toggled.connect(self._on_pet_toggled)
@@ -1676,6 +1812,16 @@ class View3DPage(
             self.btn_elec_shaft.setCheckable(True)
             self.btn_elec_shaft.setChecked(True)
             self.btn_elec_shaft.toggled.connect(
+                lambda _: self._on_electrode_display_option_changed()
+            )
+
+        if self.btn_micro_tetrodes is not None:
+            self.btn_micro_tetrodes.setCheckable(True)
+            # Decoche au depart. Cet anneau est calcule, pas reconstruit, et
+            # il ne doit jamais apparaitre a cote des contacts sans que
+            # quelqu'un l'ait demande.
+            self.btn_micro_tetrodes.setChecked(False)
+            self.btn_micro_tetrodes.toggled.connect(
                 lambda _: self._on_electrode_display_option_changed()
             )
 
@@ -1758,6 +1904,57 @@ class View3DPage(
         self._update_modality_controls_enabled_states()
         self._update_plane_slider_enabled_states()
         self._update_planes_info_label()
+        self._build_overlay_layer_list()
+        self._build_parcellation_region_panel()
+        self._build_mni_tab()
+
+        onglets = self.ui.findChild(QTabWidget, "tabWidget3D")
+        if onglets is not None:
+            onglets.currentChanged.connect(self._on_3d_tab_changed)
+
+    def _build_overlay_layer_list(self) -> None:
+        """Monter la colonne des calques de l'onglet Overlay.
+
+        Elle ne peut etre batie qu'ici : elle prend les cases a cocher
+        elles-memes dans leurs cartes, donc elle suppose que findChild les
+        a deja trouvees et que leurs signaux sont branches.
+        """
+        self._overlay_layers = None
+        try:
+            liste = OverlayLayerList(self.ui, on_selected=self._on_overlay_layer_selected)
+            if liste.build():
+                self._overlay_layers = liste
+        except Exception:
+            # Une colonne manquante laisse les cartes empilees comme avant,
+            # ce qui reste utilisable. Une exception ici tuerait la page.
+            logging.getLogger(__name__).exception("Could not build the overlay layer list")
+
+    #: Le titre de la carte des IRM, selon celle que l'on regle.
+    MRI_CARD_TITLES = {"T1": "MRI 1", "T2": "MRI 2"}
+
+    def _on_overlay_layer_selected(self, key: str) -> None:
+        """Le calque choisi dans la colonne designe l'IRM a regler.
+
+        Les deux IRM partagent une carte, parce qu'elles partagent un
+        reglage : une opacite. Une liste deroulante y choisissait
+        laquelle, ce qui faisait deux gestes pour une seule question,
+        et posait un choix de plus que les autres calques n'en
+        demandent. La colonne repond deja a cette question : cliquer
+        MRI 1 regle MRI 1.
+
+        Le titre de la carte le dit, sans quoi rien ne distinguerait
+        les deux etats du meme curseur.
+        """
+        if key not in ("mri1", "mri2"):
+            return
+        self._mri_edited_3d = "T1" if key == "mri1" else "T2"
+        try:
+            titre = self.ui.findChild(QLabel, "lbl3DMRICard")
+            if titre is not None:
+                titre.setText(self.MRI_CARD_TITLES[self._mri_edited_3d])
+        except Exception:
+            pass
+        self._sync_mri_opacity_widgets_3d()
 
     def _on_electrode_display_option_changed(self) -> None:
         """
@@ -1838,6 +2035,7 @@ class View3DPage(
         cb.blockSignals(False)
 
     def _on_chk_parcel1_toggled(self, checked: bool):
+        QTimer.singleShot(0, self._refresh_parcellation_regions)
         try:
             if checked and self.chk_parcel2 is not None and self.chk_parcel2.isChecked():
                 self.chk_parcel2.blockSignals(True)
@@ -1868,6 +2066,7 @@ class View3DPage(
             pass
 
     def _on_chk_parcel2_toggled(self, checked: bool):
+        QTimer.singleShot(0, self._refresh_parcellation_regions)
         try:
             if checked and self.chk_parcel1 is not None and self.chk_parcel1.isChecked():
                 self.chk_parcel1.blockSignals(True)
@@ -1947,15 +2146,15 @@ class View3DPage(
             self.chk_brainmask.setChecked(False)
             self.chk_brainmask.blockSignals(False)
 
-        # If both become unchecked, keep brainmask as fallback if available
-        if (self.chk_brainmask is not None and not self.chk_brainmask.isChecked()) and (
-            self.chk_pial is not None and not self.chk_pial.isChecked()
-        ):
-            if self._brainmask_img is not None and self.chk_brainmask is not None:
-                self.chk_brainmask.blockSignals(True)
-                self.chk_brainmask.setChecked(True)
-                self.chk_brainmask.blockSignals(False)
-
+        # Unchecking both used to tick the brainmask straight back on, which
+        # made "neither" a state the user could not reach: the box appeared to
+        # refuse the click. It is a legitimate choice now, and it means one
+        # thing only, that the anatomical slice is shown whole, skull and scalp
+        # included. Nothing else follows from it: the functional overlays stay
+        # masked, the brain mesh, the SISCOM and the exports are untouched.
+        # Everything, not just the base layer: the crop box is shared by all
+        # slice planes, and it widens to the full slice along with the texture.
+        self._invalidate_slice_volume_cache()
         self._update_brain_opacity_slider_states()
         self._render_brain()
 
@@ -1987,24 +2186,63 @@ class View3DPage(
         if self._mni_t1_slices_are_visible():
             return self._get_mni_template_t1_image()
 
-        source = str(getattr(self, "_active_mri_source_3d", "T1"))
+        from ..utils.mri_blend import blend_mri_volumes
 
-        if source == "T2":
-            t2 = self._get_t2_for_3d()
-            if t2 is not None:
-                return t2
+        sources = self._mri_sources_3d()
+        if not sources:
+            # Nothing ticked: fall back to MRI 1, which is what the rest of the
+            # page expects to find when it asks for the anatomy.
+            return self._t1_img
+        # Normalised even for a single layer, because the texture builder is
+        # told below not to normalise again: that second stretch is what used
+        # to undo the opacity entirely.
+        return blend_mri_volumes(
+            [(img, pct) for _name, img, pct in sources], always_normalise=True
+        )
 
-        return self._t1_img
+    def _mri_sources_3d(self):
+        """The MRIs to draw, as (name, image, opacity), in stacking order.
+
+        THE CHECK BOX IS THE TRUTH, and nothing else. A parallel dictionary of
+        what is shown looked tidier and desynchronised within a day: several
+        places tick these boxes silently, with signals blocked, so a mirror of
+        their state goes stale without a sound and the planes show something
+        other than what is on screen.
+        """
+        opacity = getattr(self, "_mri_opacity_3d", {"T1": 100, "T2": 50})
+        out = []
+        for name, box, getter in (
+            ("T1", self.chk_mri_t1, lambda: self._t1_img),
+            ("T2", self.chk_mri_t2, self._get_t2_for_3d),
+        ):
+            if box is None or not box.isChecked():
+                continue
+            img = getter()
+            if img is not None:
+                out.append((name, img, int(opacity.get(name, 100))))
+        return out
 
     def _refresh_3d_mri_source_controls(self) -> None:
-        """
-        Refresh T1/T2 checkbox states and redraw visible slice planes.
+        """Rebuild the anatomical texture and repaint the planes already shown.
+
+        Modelled on what the PET does, because the PET has always updated the
+        moment its slider moved. Invalidating the cache is not enough: the
+        planes keep the texture they were given, so something has to hand them
+        the new one. _render_visible_slice_planes_only is the anatomical
+        counterpart of _render_visible_pet_overlays_only, and it existed in the
+        file without a single caller, which is why changing the MRI opacity did
+        nothing until the slice was moved and forced a rebuild.
         """
         self._invalidate_slice_volume_cache(base=True, pet=False, siscom=False)
         try:
             self._update_modality_controls_enabled_states()
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Could not refresh the MRI controls")
+
+        try:
+            self._render_visible_slice_planes_only()
+        except Exception:
+            logging.getLogger(__name__).exception("Could not repaint the slice planes")
 
         try:
             self._refresh_multiplanar_clipped_scene()
@@ -2017,36 +2255,106 @@ class View3DPage(
             pass
 
     def _on_3d_mri_source_toggled(self, source: str, checked: bool) -> None:
+        """A box says whether that MRI is drawn, and nothing more.
+
+        The two used to be a source selector dressed as check boxes: ticking
+        one unticked the other, and a single anatomical texture fed the slice
+        planes. Neither could be adjusted on its own and the two could not be
+        compared on one screen. They are now two layers, each with its own
+        opacity, and the combo box below says which one the slider is editing.
+        """
         source = str(source).upper().strip()
-
-        if not checked:
-            # Avoid both T1 and T2 being unchecked.
-            t1_checked = bool(self.chk_mri_t1 is not None and self.chk_mri_t1.isChecked())
-            t2_checked = bool(self.chk_mri_t2 is not None and self.chk_mri_t2.isChecked())
-
-            if not t1_checked and not t2_checked:
-                self._active_mri_source_3d = "T1"
-                self._set_checked(self.chk_mri_t1, True)
-                self._set_checked(self.chk_mri_t2, False)
-                self._refresh_3d_mri_source_controls()
+        if checked and source == "T2" and self._get_t2_for_3d() is None:
+            # Nothing to draw: MRI 2 is only available once coregistered into
+            # MRI 1 space, and an empty layer would look like a bug.
+            self._set_checked(self.chk_mri_t2, False)
             return
 
-        if source == "T1":
-            self._active_mri_source_3d = "T1"
-            self._set_checked(self.chk_mri_t2, False)
+        # Kept in step for everything still reading the old single source: it
+        # now names the first MRI actually drawn.
+        drawn = [n for n, _img, _o in self._mri_sources_3d()]
+        self._active_mri_source_3d = "T2" if drawn == ["T2"] else "T1"
+        logging.getLogger(__name__).info(
+            "3D MRI layers: %s (MRI 2 available: %s)",
+            drawn or "none", self._get_t2_for_3d() is not None,
+        )
 
-        elif source == "T2":
-            if self._get_t2_for_3d() is None:
-                self._active_mri_source_3d = "T1"
-                self._set_checked(self.chk_mri_t2, False)
-                self._set_checked(self.chk_mri_t1, True)
-                self._refresh_3d_mri_source_controls()
-                return
-
-            self._active_mri_source_3d = "T2"
-            self._set_checked(self.chk_mri_t1, False)
-
+        self._sync_mri_opacity_widgets_3d()
         self._refresh_3d_mri_source_controls()
+
+    def _on_mri_edited_changed_3d(self, name: str) -> None:
+        """Point the slider and the spin box at one MRI or the other.
+
+        What is drawn does not change here. Only what the two opacity widgets
+        are editing, and each MRI keeps the value it had.
+        """
+        self._mri_edited_3d = "T2" if str(name).strip().endswith("2") else "T1"
+        self._sync_mri_opacity_widgets_3d()
+
+    def _sync_mri_opacity_widgets_3d(self) -> None:
+        """Show the opacity of the MRI being edited, without redrawing.
+
+        Signals are blocked, or setting the widget would read back as the user
+        moving it and would overwrite the other MRI's value.
+        """
+        opacity = getattr(self, "_mri_opacity_3d", {"T1": 100, "T2": 50})
+        value = int(opacity.get(getattr(self, "_mri_edited_3d", "T1"), 100))
+        for widget in (self.sld_mri_3d, self.spn_mri_3d):
+            if widget is None:
+                continue
+            widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(False)
+
+    def _on_mri_opacity_changed_3d(self, value: int) -> None:
+        """Record the new opacity, and repaint once the slider settles.
+
+        The repaint is deferred by a few tens of milliseconds on purpose.
+        Unlike the PET, whose opacity is a property of its actor and costs
+        nothing to change, the MRI opacity is baked into the texture: honouring
+        it means rebuilding the whole RGBA volume, 67 MB for a 256 cube. Doing
+        that on every pixel of a drag would make the slider crawl, while a
+        short wait after the last move still reads as immediate.
+        """
+        opacity = getattr(self, "_mri_opacity_3d", None)
+        if opacity is None:
+            opacity = {"T1": 100, "T2": 50}
+            self._mri_opacity_3d = opacity
+        opacity[getattr(self, "_mri_edited_3d", "T1")] = int(value)
+
+        timer = getattr(self, "_mri_opacity_timer_3d", None)
+        if timer is None:
+            # No parent. View3DPage is a plain object, not a QObject, so
+            # QTimer(self) raises TypeError: the handler died here, right after
+            # recording the value, which is why the new opacity only appeared
+            # after unticking and reticking the layer. Every other timer in
+            # this file is built the same way, without a parent, and kept alive
+            # by the reference held on the page.
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._refresh_3d_mri_source_controls)
+            self._mri_opacity_timer_3d = timer
+        timer.start(60)
+
+    def _connect_mri_opacity_3d(self) -> None:
+        """Apparier le curseur et sa boite.
+
+        Plus de selecteur : c'est la colonne des calques qui dit quelle
+        IRM est reglee.
+        """
+        for widget in (self.sld_mri_3d, self.spn_mri_3d):
+            if widget is not None:
+                try:
+                    widget.setRange(0, 100)
+                except Exception:
+                    pass
+        if self.sld_mri_3d is not None and self.spn_mri_3d is not None:
+            self.sld_mri_3d.valueChanged.connect(self.spn_mri_3d.setValue)
+            self.spn_mri_3d.valueChanged.connect(self.sld_mri_3d.setValue)
+        for widget in (self.sld_mri_3d, self.spn_mri_3d):
+            if widget is not None:
+                widget.valueChanged.connect(self._on_mri_opacity_changed_3d)
+        self._sync_mri_opacity_widgets_3d()
 
     # ---------------- Public API ----------------
     def set_t1(self, t1_img: sitk.Image | None, t1_path: str | None = None) -> None:
@@ -2117,11 +2425,13 @@ class View3DPage(
         self._t2_img = t2_img
         self._invalidate_slice_volume_cache(base=True, pet=False, siscom=False)
 
-        # If no T2 is available anymore, fallback to T1.
-        if self._t2_img is None and getattr(self, "_active_mri_source_3d", "T1") == "T2":
-            self._active_mri_source_3d = "T1"
-            self._set_checked(self.chk_mri_t1, True)
+        # MRI 2 gone: untick it. MRI 1 is not ticked back on in its place,
+        # which would override a choice the user never changed.
+        if self._t2_img is None:
             self._set_checked(self.chk_mri_t2, False)
+            if not self._mri_sources_3d():
+                self._set_checked(self.chk_mri_t1, True)
+            self._active_mri_source_3d = "T1"
 
         try:
             self._update_modality_controls_enabled_states()
@@ -2157,10 +2467,9 @@ class View3DPage(
         if self.chk_pial is not None:
             self._set_checked(self.chk_pial, False)
 
-        if self.sld_3d_brainMaskOpacity is not None:
-            self.sld_3d_brainMaskOpacity.blockSignals(True)
-            self.sld_3d_brainMaskOpacity.setValue(50)
-            self.sld_3d_brainMaskOpacity.blockSignals(False)
+        self._set_opacity_pair(
+            self.sld_3d_brainMaskOpacity, self.spn_3d_brainMaskOpacity, 50
+        )
 
         self._update_brain_opacity_slider_states()
 
@@ -2322,6 +2631,7 @@ class View3DPage(
                 img = None
 
         self._parcel1_img = img
+        self._region_vol_cache = {}
         try:
             from pathlib import Path as _P
 
@@ -2353,6 +2663,7 @@ class View3DPage(
                 img = None
 
         self._parcel2_img = img
+        self._region_vol_cache = {}
         try:
             from pathlib import Path as _P
 
@@ -2402,14 +2713,20 @@ class View3DPage(
         # -------------------------
         # MNI mode
         # -------------------------
+        # La case 1 porte le Schaefer 2018 fourni avec NeuXelec. La case 2
+        # tenait le Brainnetome, accorde pour un usage non commercial avec
+        # partage a l'identique : une restriction que l'article 7 de la
+        # GPL-3.0 ne permet pas de transmettre a qui recoit NeuXelec. Elle
+        # n'est donc plus livree, mais elle est desormais chargeable comme
+        # les parcellations natives, remplie par l'utilisateur et non par
+        # nous.
         if self._mni_t1_slices_are_visible():
             if p1_on:
                 img, lut = self._get_mni_parcellation1_img_and_lut()
                 return img, lut
 
-            if p2_on:
-                img, lut = self._get_mni_parcellation2_img_and_lut()
-                return img, lut
+            if p2_on and self._mni_parcel2_img is not None:
+                return self._mni_parcel2_img, dict(self._mni_parcel2_lut or {})
 
             return None, {}
 
@@ -2429,45 +2746,6 @@ class View3DPage(
             return self._parcel2_img, lut
 
         return None, {}
-
-    def _sample_labels_at_ras_points(self, img: sitk.Image, pts_ras: np.ndarray):
-        try:
-            pts_ras = np.asarray(pts_ras, dtype=np.float64)
-            if pts_ras.ndim != 2 or pts_ras.shape[1] != 3:
-                return None
-
-            pts_lps = pts_ras.copy()
-            pts_lps[:, 0] *= -1.0
-            pts_lps[:, 1] *= -1.0
-
-            origin = np.asarray(img.GetOrigin(), dtype=np.float64)
-            spacing = np.asarray(img.GetSpacing(), dtype=np.float64)
-            direction = np.asarray(img.GetDirection(), dtype=np.float64).reshape(3, 3)
-            inv_direction = np.linalg.inv(direction)
-
-            rel = pts_lps - origin[None, :]
-            idx_xyz = (rel @ inv_direction.T) / spacing[None, :]
-
-            x = np.round(idx_xyz[:, 0]).astype(int)
-            y = np.round(idx_xyz[:, 1]).astype(int)
-            z = np.round(idx_xyz[:, 2]).astype(int)
-
-            arr = sitk.GetArrayFromImage(img)  # z,y,x
-            out = np.full((pts_ras.shape[0],), -1, dtype=np.int32)
-
-            inside = (
-                (x >= 0)
-                & (x < arr.shape[2])
-                & (y >= 0)
-                & (y < arr.shape[1])
-                & (z >= 0)
-                & (z < arr.shape[0])
-            )
-
-            out[inside] = arr[z[inside], y[inside], x[inside]].astype(np.int32)
-            return out
-        except Exception:
-            return None
 
     def _clean_parcellation_label_for_display(self, name: str) -> str:
         """
@@ -2541,7 +2819,6 @@ class View3DPage(
         Works for:
             - MNI parcellation on MNI T1 slices
             - patient/native parcellation on patient slices
-            - patient/native parcellation displayed on the pial surface
         """
         try:
             et = event.type()
@@ -2582,7 +2859,6 @@ class View3DPage(
         Works on:
             - MNI parcellation slices
             - patient/native parcellation slices
-            - native pial surface colored with the active parcellation
         """
         try:
             if self.interactor is None or self.plotter is None:
@@ -2595,15 +2871,24 @@ class View3DPage(
             if self._parcellation_hover_qpos is None:
                 return
 
-            # IMPORTANT:
-            # These two variables were missing in your current function.
+            qpos = self._parcellation_hover_qpos
+
+            # Les surfaces de regions d'abord : elles portent leur nom,
+            # alors qu'une coupe oblige a relire le volume. Et une
+            # surface est tracee a la frontiere de sa region, donc
+            # echantillonner dessous rendrait souvent la voisine.
+            region = self._region_under_mouse(float(qpos.x()), float(qpos.y()))
+            if region is not None:
+                nom, etiquette = region
+                self._show_hover_text(qpos, "%s  (index %d)" % (nom, etiquette))
+                return
+
             parcel_img, parcel_lut = self._get_active_parcellation_img_and_lut()
 
             if parcel_img is None or not isinstance(parcel_lut, dict) or not parcel_lut:
                 QToolTip.hideText()
                 return
 
-            qpos = self._parcellation_hover_qpos
             x_qt = float(qpos.x())
             y_qt = float(qpos.y())
 
@@ -2636,15 +2921,61 @@ class View3DPage(
             if lab > 0:
                 text += f"  (index {lab})"
 
-            global_pos = self._parcellation_hover_global_pos
-            if global_pos is None:
-                global_pos = self.interactor.mapToGlobal(qpos)
-
-            QToolTip.showText(global_pos, text, self.interactor)
+            self._show_hover_text(qpos, text)
 
         except Exception as e:
             print("[Parcellation hover] Tooltip failed:", e)
             QToolTip.hideText()
+
+    def _show_hover_text(self, qpos, text: str) -> None:
+        """Poser l'infobulle la ou la souris se trouve."""
+        global_pos = self._parcellation_hover_global_pos
+        if global_pos is None:
+            global_pos = self.interactor.mapToGlobal(qpos)
+        QToolTip.showText(global_pos, text, self.interactor)
+
+    def _pick_prop_from_mouse(self, x_qt: float, y_qt: float):
+        """L'acteur sous la souris, ou ``None``.
+
+        Meme pioche que pour le point du monde, mais on lui demande ce
+        qu'elle a touche plutot qu'ou.
+        """
+        try:
+            if self.interactor is None or self.plotter is None:
+                return None
+            hauteur = int(self.interactor.height())
+            picker = vtk.vtkPropPicker()
+            if not picker.Pick(
+                int(round(float(x_qt))),
+                int(round(float(hauteur) - float(y_qt))),
+                0,
+                self.plotter.renderer,
+            ):
+                return None
+            return picker.GetViewProp()
+        except Exception:
+            return None
+
+    def _region_under_mouse(self, x_qt: float, y_qt: float):
+        """``(nom, etiquette)`` de la region survolee, ou ``None``.
+
+        On remonte de l'acteur a sa region, et non du point a la
+        parcellation : la surface d'une region est tracee **a sa
+        frontiere**, donc echantillonner le volume juste sous elle
+        rendrait une fois sur deux le nom de sa voisine. Un acteur, lui,
+        n'appartient qu'a une region.
+        """
+        acteurs = getattr(self, "_region_actors", None) or {}
+        if not acteurs:
+            return None
+        prop = self._pick_prop_from_mouse(x_qt, y_qt)
+        if prop is None:
+            return None
+        for etiquette, acteur in acteurs.items():
+            if acteur is prop:
+                nom = (getattr(self, "_region_names", {}) or {}).get(etiquette)
+                return (nom or "label-%d" % etiquette, int(etiquette))
+        return None
 
     def _pick_world_ras_from_mouse(self, x_qt: float, y_qt: float):
         """
@@ -2718,29 +3049,6 @@ class View3DPage(
 
         except Exception:
             return None
-
-    def _labels_to_rgb(self, labels: np.ndarray, lut: dict):
-        try:
-            labels = np.asarray(labels, dtype=np.int32).ravel()
-            rgb = np.zeros((labels.shape[0], 3), dtype=np.uint8)
-
-            if not isinstance(lut, dict):
-                return rgb
-
-            for lab in np.unique(labels):
-                if int(lab) <= 0:
-                    continue
-                entry = lut.get(int(lab), None)
-                if entry is None:
-                    continue
-                try:
-                    _name, color = entry
-                    rgb[labels == int(lab), :] = np.array(color, dtype=np.uint8)
-                except Exception:
-                    pass
-            return rgb
-        except Exception:
-            return np.zeros((0, 3), dtype=np.uint8)
 
     def _apply_brain_actor_opacity_mode(self, actor, opacity: float) -> None:
         """
@@ -2845,47 +3153,21 @@ class View3DPage(
 
             p = getattr(self, "_brain_render_params", {})
 
-            parcel_img, parcel_lut = self._get_active_parcellation_img_and_lut()
-
-            scalars_name = None
-            rgb_scalars = None
-
-            if parcel_img is not None:
-                try:
-                    labels = self._sample_labels_at_ras_points(
-                        parcel_img, np.asarray(mesh.points, dtype=np.float32)
-                    )
-                    if labels is not None:
-                        rgb_scalars = self._labels_to_rgb(labels, parcel_lut)
-                        if rgb_scalars is not None and rgb_scalars.shape[0] == mesh.n_points:
-                            mesh["parcel_rgb"] = rgb_scalars
-                            scalars_name = "parcel_rgb"
-                except Exception:
-                    scalars_name = None
-
-            if scalars_name is not None:
-                self._brain_actor = self.plotter.add_mesh(
-                    mesh,
-                    scalars=scalars_name,
-                    rgb=True,
-                    opacity=float(opacity),
-                    smooth_shading=True,
-                    ambient=float(p.get("ambient", 0.35)),
-                    diffuse=float(p.get("diffuse", 0.60)),
-                    specular=float(p.get("specular", 0.08)),
-                    specular_power=float(p.get("specular_power", 12.0)),
-                )
-            else:
-                self._brain_actor = self.plotter.add_mesh(
-                    mesh,
-                    color=self._brain_color,
-                    opacity=float(opacity),
-                    smooth_shading=True,
-                    ambient=float(p.get("ambient", 0.35)),
-                    diffuse=float(p.get("diffuse", 0.60)),
-                    specular=float(p.get("specular", 0.08)),
-                    specular_power=float(p.get("specular_power", 12.0)),
-                )
+            # La surface piale garde sa couleur. La parcellation se
+            # regarde dans l'onglet Parcellation, en volume et region par
+            # region, avec de quoi choisir ce qui est trace ; la peindre
+            # ici en plus donnait deux lectures du meme atlas, dont une
+            # qui montrait tout sans rien pouvoir en retirer.
+            self._brain_actor = self.plotter.add_mesh(
+                mesh,
+                color=self._brain_color,
+                opacity=float(opacity),
+                smooth_shading=True,
+                ambient=float(p.get("ambient", 0.35)),
+                diffuse=float(p.get("diffuse", 0.60)),
+                specular=float(p.get("specular", 0.08)),
+                specular_power=float(p.get("specular_power", 12.0)),
+            )
 
             self._apply_brain_actor_opacity_mode(self._brain_actor, opacity)
 
@@ -2931,12 +3213,15 @@ class View3DPage(
                 return
             mesh = self._binarymask_to_polydata(self._brainmask_img)
         else:
-            if self._brainmask_img is not None:
-                mesh = self._binarymask_to_polydata(self._brainmask_img)
-            else:
-                self._remove_actor("brain")
-                self._render()
-                return
+            # Ni la surface piale ni le brainmask ne sont coches. Le
+            # brainmask etait redessine quand meme des lors que son image
+            # existait, ce qui contredisait _on_brain_source : celui-ci
+            # retire l'acteur et traite "aucun des deux" comme un choix.
+            # Le brainmask revenait donc au premier rendu venu, par exemple
+            # en changeant de parcellation.
+            self._remove_actor("brain")
+            self._render()
+            return
 
         if mesh is None or getattr(mesh, "n_points", 0) == 0:
             self._remove_actor("brain")
@@ -2978,16 +3263,14 @@ class View3DPage(
         self._render()
 
     def _update_brain_opacity(self) -> None:
-        # MNI atlas opacity is controlled by the Brain mask opacity slider.
+        # Le gabarit MNI a son propre curseur, dans son onglet : celui du
+        # brainmask ne commande plus que le cerveau du patient.
         try:
             if self.chk_mni_atlas is not None and self.chk_mni_atlas.isChecked():
                 if self._mni_atlas_actor is not None:
-                    op = (
-                        self.sld_3d_brainMaskOpacity.value() / 100.0
-                        if self.sld_3d_brainMaskOpacity is not None
-                        else 0.22
+                    self._mni_atlas_actor.GetProperty().SetOpacity(
+                        float(self._mni_brain_opacity())
                     )
-                    self._mni_atlas_actor.GetProperty().SetOpacity(float(op))
                     self._render()
                 return
         except Exception:
@@ -3121,12 +3404,16 @@ class View3DPage(
         )
 
     def _parcellation_hover_display_active(self) -> bool:
+        """Y a-t-il, sous la souris, quelque chose qui porte un nom ?
+
+        Deux objets repondent oui : une coupe ou la parcellation est
+        peinte, et les surfaces de regions tracees depuis l'onglet
+        Parcellation. Ces dernieres n'ont besoin d'aucune image : la
+        region, c'est l'acteur lui-meme.
         """
-        Return True when an active parcellation is visually displayed on an object
-        that can be hovered:
-        - a visible coronal/axial/sagittal slice
-        - the native pial surface
-        """
+        if getattr(self, "_region_actors", None):
+            return True
+
         try:
             parcel_img, parcel_lut = self._get_active_parcellation_img_and_lut()
 
@@ -3141,53 +3428,39 @@ class View3DPage(
         except Exception:
             pass
 
-        try:
-            if self.chk_pial is not None and self.chk_pial.isChecked():
-                return bool(self._brain_actor is not None)
-        except Exception:
-            pass
-
+        # La surface piale n'est plus peinte avec l'atlas : y annoncer un
+        # nom de region designerait une couleur qui n'y est pas.
         return False
-
-    def _native_surface_mode_active(self) -> bool:
-        """
-        True when the patient brainmask or pial surface is active.
-        This option is not used in MNI mode.
-        """
-        try:
-            mni_on = bool(self.chk_mni_atlas is not None and self.chk_mni_atlas.isChecked())
-        except Exception:
-            mni_on = False
-
-        if mni_on:
-            return False
-
-        try:
-            brainmask_on = bool(self.chk_brainmask is not None and self.chk_brainmask.isChecked())
-        except Exception:
-            brainmask_on = False
-
-        try:
-            pial_on = bool(self.chk_pial is not None and self.chk_pial.isChecked())
-        except Exception:
-            pial_on = False
-
-        return bool(brainmask_on or pial_on)
 
     def _show_keep_electrodes_through_slices_option(self) -> bool:
         """
         Show the context-menu option only when it is useful:
-        - native brainmask or pial surface is visible
+        - native mode, since MNI electrodes keep their own behaviour
         - at least one slice plane is visible
         - native electrodes are loaded
+
+        It used to require the brainmask or the pial surface to be visible as
+        well, through _native_surface_mode_active. That was never what the
+        option acts on: it decides whether the electrode actors are clipped by
+        the slice planes, and _apply_actor_clipping clips them as soon as a
+        plane is shown, surface or no surface. The condition passed unnoticed
+        because unticking both boxes ticked the brainmask straight back on, so
+        it could not be false. Once "neither" became a state one can be in, the
+        option disappeared precisely when the slice shows the whole head, which
+        is when following an electrode through it matters most.
         """
         try:
             has_electrodes = bool(getattr(self.state, "electrodes", None))
         except Exception:
             has_electrodes = False
 
+        try:
+            mni_on = bool(self.chk_mni_atlas is not None and self.chk_mni_atlas.isChecked())
+        except Exception:
+            mni_on = False
+
         return bool(
-            self._native_surface_mode_active()
+            not mni_on
             and self._any_slice_plane_visible()
             and has_electrodes
         )
@@ -3403,12 +3676,48 @@ class View3DPage(
         except Exception:
             return None
 
-    def _get_slice_cache_mask_np(self, ref_img: sitk.Image | None) -> np.ndarray | None:
+    def _anatomical_slice_is_masked(self) -> bool:
+        """Whether the anatomical slice texture is cut to the brain.
+
+        This answers a question of display, and only that. With neither the
+        brainmask nor the pial surface ticked, an MRI slice is shown whole,
+        skull and scalp included, which is what you want when you are judging
+        an entry point. The overlays do not follow: a PET or an fMRI outside
+        the brain is reconstruction noise, so they keep their mask whatever
+        this returns. Nothing downstream reads this either, not the SISCOM, not
+        the exports, not the brain mesh.
+
+        MNI mode is excluded: there the slice is the template, which only means
+        something inside the template brain.
+        """
+        if self._mni_t1_slices_are_visible():
+            return True
+        try:
+            brainmask_on = bool(
+                self.chk_brainmask is not None and self.chk_brainmask.isChecked()
+            )
+            pial_on = bool(self.chk_pial is not None and self.chk_pial.isChecked())
+        except Exception:
+            return True
+        return brainmask_on or pial_on
+
+    def _get_slice_cache_mask_np(
+        self, ref_img: sitk.Image | None, *, anatomical: bool = False
+    ) -> np.ndarray | None:
         """
         Return the mask used for slice textures as a boolean NumPy array [z, y, x].
+
+        ``anatomical`` marks the two callers that draw the patient's own
+        anatomy, the base texture and the crop box. They are the only ones the
+        checkbox may unmask. Every overlay leaves it at False and stays cut to
+        the brain.
         """
         if ref_img is None:
             return None
+
+        if anatomical and not self._anatomical_slice_is_masked():
+            size = ref_img.GetSize()  # x, y, z
+            return np.ones((int(size[2]), int(size[1]), int(size[0])), dtype=bool)
 
         try:
             mask_img = self._get_3d_plane_mask_for_slices(ref_img)
@@ -3483,7 +3792,7 @@ class View3DPage(
             return cached
 
         try:
-            mask_np = self._get_slice_cache_mask_np(ref_img)  # z, y, x
+            mask_np = self._get_slice_cache_mask_np(ref_img, anatomical=True)  # z, y, x
 
             if mask_np is None or not np.any(mask_np):
                 self._slice_crop_bounds_xyz = full_bounds
@@ -3577,7 +3886,7 @@ class View3DPage(
         except Exception:
             return None
 
-        mask_np = self._get_slice_cache_mask_np(ref_img)
+        mask_np = self._get_slice_cache_mask_np(ref_img, anatomical=True)
         if mask_np is None:
             mask_np = np.ones(anat_np.shape, dtype=bool)
 
@@ -3590,13 +3899,19 @@ class View3DPage(
         if vals.size == 0:
             return None
 
-        vmin = float(np.percentile(vals, 2))
-        vmax = float(np.percentile(vals, 98))
-
-        if vmax <= vmin:
-            vmax = vmin + 1.0
-
-        normalized = np.clip((anat_np - vmin) / (vmax - vmin), 0.0, 1.0)
+        # The anatomy arrives already between 0 and 1, with each MRI's opacity
+        # baked in by blend_mri_volumes. Stretching it again on its own
+        # percentiles, which is what happened here, cancelled that opacity
+        # exactly: a layer dimmed to 40 % came back at full scale and the
+        # slider looked dead until the slice was moved.
+        if float(np.nanmax(vals)) <= 1.0 + 1e-6 and float(np.nanmin(vals)) >= -1e-6:
+            normalized = np.clip(anat_np, 0.0, 1.0)
+        else:
+            vmin = float(np.percentile(vals, 2))
+            vmax = float(np.percentile(vals, 98))
+            if vmax <= vmin:
+                vmax = vmin + 1.0
+            normalized = np.clip((anat_np - vmin) / (vmax - vmin), 0.0, 1.0)
         gray = (np.nan_to_num(normalized, nan=0.0) * 255.0).astype(np.uint8)
 
         rgba = np.zeros(anat_np.shape + (4,), dtype=np.uint8)
@@ -3877,9 +4192,20 @@ class View3DPage(
         return None
 
     def _refresh_base_slice_cache_and_scene(self) -> None:
-        """
-        Rebuild the anatomical/parcellation cache and immediately redraw
-        the currently visible MNI or native planes.
+        """Refaire le cache anatomique, et redessiner les coupes visibles.
+
+        POURQUOI LA RECONSTRUCTION COMPLETE DES DEUX COTES
+
+        La parcellation est **peinte dans la texture** de chaque coupe :
+        changer son opacite ne deplace aucun plan, mais oblige a
+        refaire cette texture. Seul le mode MNI le faisait ; en natif
+        on se contentait de redecouper la scene et de redessiner les
+        surcouches, si bien que la nouvelle opacite n'apparaissait
+        qu'au prochain deplacement d'un plan.
+
+        Le decoupage passe avant : les contours colores sont rebatis a
+        la fin de la reconstruction, et ils doivent connaitre l'etat
+        de decoupe deja a jour.
         """
         self._invalidate_slice_volume_cache(
             base=True,
@@ -3888,10 +4214,9 @@ class View3DPage(
         )
 
         try:
-            if self._mni_t1_slices_are_visible():
-                self._refresh_all_visible_slice_planes_full()
-            else:
-                self._refresh_multiplanar_clipped_scene()
+            if not self._mni_t1_slices_are_visible():
+                self._apply_actor_clipping()
+            self._refresh_all_visible_slice_planes_full()
         except Exception:
             pass
 
@@ -4113,9 +4438,7 @@ class View3DPage(
 
             self._siscom_actor = self.plotter.add_mesh(
                 mesh,
-                scalars="SISCOM_Z",
-                cmap=self._siscom_colormap_name,
-                clim=[float(zthr), float(zmax)],
+                color=self.SISCOM_SURFACE_COLOR,
                 opacity=float(opacity),
                 smooth_shading=True,
                 show_scalar_bar=False,
@@ -4148,21 +4471,24 @@ class View3DPage(
     # fMRI / functional activation-map overlay (Stage 1)
     # ------------------------------------------------------------------
     def _fmri_source_image(self) -> sitk.Image | None:
-        """The functional map to display, in T1 space.
+        """La carte fonctionnelle a afficher, dans l'espace du T1.
 
-        Stage 1 reads it from the MRI2 slot (coregistered first). This is where
-        a dedicated fMRI modality would plug in later.
+        POURQUOI PLUS AUCUN REPLI SUR LA CASE MRI 2
+
+        A ses debuts le fMRI y etait range, faute de case a lui. Il a
+        depuis sa propre modalite, mais le repli est reste : un patient
+        sans fMRI et avec un MRI 2 coregistre voyait sa case fMRI
+        devenir cochable, et la cocher lui montrait son T2 seuille et
+        colorie comme une carte d'activation, sans que rien ne le dise.
+
+        Le commentaire qui suivait affirmait d'ailleurs que ce repli
+        n'existait pas. Il existe desormais pour de bon : sans fMRI
+        charge, il n'y a rien a montrer.
         """
-        for attr in (
-            "fmri_coreg_in_t1",
-            "fmri_in_t1",
-            "t2_coreg_in_t1",
-            "t2_in_t1",
-        ):
+        for attr in ("fmri_coreg_in_t1", "fmri_in_t1"):
             img = getattr(self.state, attr, None)
             if img is not None:
                 return img
-        # No fallback on MRI 2: the fMRI is its own modality (validated coreg only).
         return None
 
     def _ensure_fmri_auto_levels(self, img: sitk.Image) -> None:
@@ -4676,23 +5002,8 @@ class View3DPage(
             self._hide_fmri_pial_projection()
             self._render()
 
-    def _choose_fmri_colormap(self) -> None:
-        options = ["hot", "jet", "turbo", "viridis", "coolwarm", "RdBu_r"]
-        try:
-            idx = options.index(self._fmri_cmap_name)
-        except ValueError:
-            idx = 0
-        # Same call as _choose_pet_colormap (View3DPage is not a QWidget, so the
-        # dialog parent must come from _dialog_parent()).
-        cmap = NeuXelecSelectionDialog.select_item(
-            self._dialog_parent(),
-            "fMRI colormap",
-            "Choose the color scale used for the fMRI overlay:",
-            options=options,
-            current_index=idx,
-            accept_text="Apply",
-            reject_text="Cancel",
-        )
+    def _apply_fmri_colormap(self, cmap: str) -> None:
+        """Poser l'echelle du fMRI et reconstruire ce qui en depend."""
         if cmap:
             self._fmri_cmap_name = str(cmap)
             self._fmri_cmap_user_set = True
@@ -5263,6 +5574,11 @@ class View3DPage(
             pass
 
         try:
+            self.refresh_stimulation_markers()
+        except Exception:
+            pass
+
+        try:
             self._refresh_multiplanar_clipped_scene()
         except Exception:
             pass
@@ -5441,6 +5757,11 @@ class View3DPage(
                         except Exception:
                             pass
 
+                # ---------- micro tetrodes ----------
+                # Hors du bloc des contacts : l'anneau ne depend pas de ce
+                # qui est affiche, seulement de la geometrie de l'electrode.
+                self._draw_micro_tetrode_ring(elec_id, elec, color)
+
                 # ---------- labels ----------
                 try:
                     contact_labels_visible = self._get_local_contact_labels_visible(
@@ -5516,6 +5837,50 @@ class View3DPage(
         self._apply_actor_clipping()
         self.render_all_surface_projections()
         self._render()
+
+        # Un acteur qui vient d'etre reconstruit est visible: le mode
+        # Stimulation Result doit se reappliquer par-dessus.
+        self.apply_stimulation_mode_visibility()
+
+    def _draw_micro_tetrode_ring(self, elec_id: int, elec: dict, color) -> None:
+        """Draw where the tetrodes of a micro-macro electrode land.
+
+        Un cercle, et non des points : l'electrode tourne librement autour
+        de son axe pendant l'implantation, cette rotation n'est enregistree
+        nulle part, et poser deux points dessus inventerait une orientation.
+
+        Le tube est translucide pour que l'anneau ne puisse pas se confondre
+        avec un contact reconstruit. Il est calcule, pas mesure.
+        """
+        bouton = getattr(self, "btn_micro_tetrodes", None)
+        if bouton is None or not bouton.isChecked():
+            return
+
+        try:
+            ring = tetrode_ring(
+                elec.get("ref"),
+                elec.get("d_mm"),
+                elec.get("contacts_lps", []) or [],
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Could not place the tetrode ring")
+            return
+
+        if ring is None:
+            return
+
+        try:
+            ras = _lps_to_ras_points(np.asarray(ring_points(ring, n=96), dtype=np.float32))
+            tube = pv.lines_from_points(ras, close=True).tube(radius=0.22, n_sides=12)
+            actor = self.plotter.add_mesh(tube, color=color, opacity=0.55)
+            try:
+                actor.PickableOff()
+            except Exception:
+                pass
+            self._apply_electrode_actor_depth_mode(actor)
+            self._elec_actors[(elec_id, "tetrodes")] = actor
+        except Exception:
+            logging.getLogger(__name__).exception("Could not draw the tetrode ring")
 
     def _remove_actor(self, which: str) -> None:
         if self.plotter is None:
@@ -6011,6 +6376,43 @@ class View3DPage(
             self._slice_wheel_active_plane = None
 
         return False
+
+    def _handle_slice_plane_key_from_application(self, event) -> bool:
+        """
+        See the Ctrl + arrow keys whatever widget holds the focus.
+
+        Returns True only when the 3D view holds the focus, so that the
+        arrow keeps reaching a tree or a text field that holds it.
+        """
+        try:
+            if self.interactor is None:
+                return False
+
+            if bool(getattr(self, "_view3d_is_fullscreen", False)):
+                return False
+
+            # Ne rien capter depuis une autre page.
+            page = getattr(self, "_page_widget", None)
+
+            if page is not None and not page.isVisible():
+                return False
+
+            handled = self._handle_slice_slider_keyboard_wheel_event(event)
+
+            if not handled:
+                return False
+
+            # Le widget a qui Qt livrera cette touche.
+            cible = QApplication.focusWidget()
+
+            if cible is None:
+                return False
+
+            return bool(
+                cible is self.interactor or self.interactor.isAncestorOf(cible)
+            )
+        except Exception:
+            return False
 
     def _handle_crosshair_marker_drag_event(self, event) -> bool:
         """
@@ -6551,7 +6953,10 @@ class View3DPage(
 
                 # In MNI mode, parcellations are available only when MNI T1 slices are visible.
                 mni_parcel1_loaded = bool(mni_t1_ready and self._mni_parcellation1_loaded())
-                mni_parcel2_loaded = bool(mni_t1_ready and self._mni_parcellation2_loaded())
+                # La case 2 suit l'atlas que l'utilisateur a charge, s'il
+                # l'a fait : NeuXelec n'en fournit pas, pour la raison
+                # dite dans _get_active_parcellation_img_and_lut.
+                mni_parcel2_loaded = bool(mni_t1_ready and self._mni_parcel2_img is not None)
 
                 try:
                     if self.chk_parcel1 is not None:
@@ -6623,25 +7028,21 @@ class View3DPage(
             if self.chk_mri_t2 is not None:
                 self.chk_mri_t2.setEnabled(t2_loaded)
 
+            # Untick what cannot be drawn, and nothing else. This block used
+            # to force exactly one of the two on at every refresh, from
+            # _active_mri_source_3d: ticking MRI 2 therefore unticked itself
+            # before anything was redrawn, because the refresh it triggered ran
+            # through here first. The two are independent layers now.
             if not t1_loaded:
                 self._set_checked(self.chk_mri_t1, False)
+            if not t2_loaded:
                 self._set_checked(self.chk_mri_t2, False)
-                self._active_mri_source_3d = "T1"
-
-            elif t1_loaded and not t2_loaded:
-                self._active_mri_source_3d = "T1"
+            if t1_loaded and not self._mri_sources_3d():
+                # Everything ticked became undrawable: leave MRI 1 showing
+                # rather than an empty scene with no way back.
                 self._set_checked(self.chk_mri_t1, True)
-                self._set_checked(self.chk_mri_t2, False)
-
-            elif t1_loaded and t2_loaded:
-                # Keep current source if valid, otherwise default to T1.
-                if getattr(self, "_active_mri_source_3d", "T1") == "T2":
-                    self._set_checked(self.chk_mri_t1, False)
-                    self._set_checked(self.chk_mri_t2, True)
-                else:
-                    self._active_mri_source_3d = "T1"
-                    self._set_checked(self.chk_mri_t1, True)
-                    self._set_checked(self.chk_mri_t2, False)
+            drawn = [n for n, _img, _o in self._mri_sources_3d()]
+            self._active_mri_source_3d = "T2" if drawn == ["T2"] else "T1"
         except Exception:
             pass
         try:
@@ -7535,6 +7936,21 @@ class View3DPage(
         else:
             actors.append(getattr(self, "_fmri_actor", None))
 
+        # Surfaces de parcellation : decoupees comme le reste, sauf si on
+        # demande de les garder entieres. Laisser des regions traverser une
+        # coupe cacherait justement ce qu'on vient d'ouvrir.
+        regions = list((getattr(self, "_region_actors", {}) or {}).values())
+        if bool(getattr(self, "_keep_parcellation_in_volume", False)):
+            for acteur in regions:
+                try:
+                    m = acteur.GetMapper()
+                    if m is not None:
+                        m.RemoveAllClippingPlanes()
+                except Exception:
+                    pass
+        else:
+            actors.extend(regions)
+
         keep_electrodes = bool(getattr(self, "_keep_electrodes_visible_through_slices", False))
 
         # Native electrodes:
@@ -8032,6 +8448,13 @@ class View3DPage(
                 + 2.0 * v  # up
             )
 
+            # always_visible=False place un vtkSelectVisiblePoints devant
+            # l'etiquette : elle n'est dessinee que si son point passe le
+            # test de profondeur. L'etiquette se cache donc derriere le
+            # cerveau quand la projection part de l'autre cote, et le
+            # traverse de nouveau des que cet hemisphere n'est plus affiche,
+            # puisque plus rien ne l'occulte. La croix, elle, est un maillage
+            # ordinaire : elle etait deja cachee correctement.
             label_actor = self.plotter.add_point_labels(
                 np.asarray([label_pos], dtype=np.float32),
                 [name],
@@ -8039,7 +8462,7 @@ class View3DPage(
                 text_color=color,
                 shape_opacity=0.0,
                 show_points=False,
-                always_visible=True,
+                always_visible=False,
                 name=f"surface_proj_label_{int(elec_id)}",
             )
             try:
@@ -8193,7 +8616,6 @@ class View3DPage(
                 # Preload MNI parcellations if they exist, so controls can update immediately.
                 if visible:
                     self._get_mni_parcellation1_img_and_lut()
-                    self._get_mni_parcellation2_img_and_lut()
             except Exception:
                 pass
 
@@ -8245,9 +8667,7 @@ class View3DPage(
         )
         try:
             self._mni_parcel1_img = None
-            self._mni_parcel2_img = None
             self._mni_parcel1_lut = {}
-            self._mni_parcel2_lut = {}
         except Exception:
             pass
 
@@ -8323,6 +8743,8 @@ class View3DPage(
             pet_or_siscom_checked = self._is_pet_or_siscom_checked()
             mni_checked = self._is_mni_atlas_checked()
 
+            stimulation_mode_on = self.stimulation_mode_active()
+
             clicked_marker_id = self._pick_marker_id_from_qpos(pos)
 
             clicked_slice_ras = None
@@ -8336,6 +8758,7 @@ class View3DPage(
 
             choice = exec_3d_view_menu(
                 global_pos,
+                stimulation_mode_on=stimulation_mode_on,
                 has_lh=bool(lh_loaded and pial_checked),
                 has_rh=bool(rh_loaded and pial_checked),
                 show_lh=getattr(self, "_show_lh_pial", True),
@@ -8356,21 +8779,23 @@ class View3DPage(
                 ),
                 show_siscom_crop_option=self._show_siscom_crop_option(),
                 siscom_dont_crop=bool(getattr(self, "_keep_siscom_blob_through_slices", False)),
+                show_keep_parcellation_option=bool(getattr(self, "_region_actors", None)),
+                keep_parcellation_in_volume=bool(
+                    getattr(self, "_keep_parcellation_in_volume", False)
+                ),
                 show_slice_plane_frames_option=self._slice_plane_frames_option_available(),
                 slice_plane_frames_visible=bool(getattr(self, "_slice_plane_frames_visible", True)),
-                can_add_marker=bool(clicked_slice_ras is not None),
+                # La pose se fait apres, a la souris: il suffit qu'une
+                # coupe soit affichee, pas qu'on ait clique dessus.
+                can_add_marker=bool(self._any_slice_plane_visible()),
                 marker_under_cursor=bool(clicked_marker_id is not None),
                 has_hidden_markers=bool(has_hidden_markers),
-                show_ictal_color=True,
-                show_interictal_color=True,
                 show_plan_option=self._has_plan_trajectories(),
                 plan_visible=bool(getattr(self, "_plan_traj_visible", False)),
                 show_cortex_only_option=self._has_parcellation(),
                 show_grey_matter_option=self._grey_matter_available(),
                 grey_matter_only=bool(getattr(self.state, "contacts_grey_matter_only", False)),
                 cortex_only=bool(getattr(self.state, "functional_cortex_only", False)),
-                # Same rule as "Color PET": always offered in native mode.
-                show_fmri_color=True,
                 background_is_custom=bool(getattr(self, "_view3d_background", None)),
                 show_fmri_surface=self._fmri_source_image() is not None,
                 fmri_blob_on=bool(getattr(self, "_fmri_surface_shown", False)),
@@ -8386,11 +8811,17 @@ class View3DPage(
             elif choice == "marker_list":
                 self._open_marker_list_dialog()
 
-            elif choice == "add_marker" and clicked_slice_ras is not None:
-                self._create_marker_at_ras(clicked_slice_ras)
+            elif choice == "stimulation_results":
+                self.toggle_stimulation_mode()
+
+            elif choice == "add_marker":
+                self.begin_marker_placement()
 
             elif choice == "edit_marker" and clicked_marker_id is not None:
                 self._edit_marker(clicked_marker_id)
+
+            elif choice == "move_marker" and clicked_marker_id is not None:
+                self.begin_marker_move(clicked_marker_id)
 
             elif choice == "hide_marker" and clicked_marker_id is not None:
                 self._hide_marker(clicked_marker_id)
@@ -8407,14 +8838,8 @@ class View3DPage(
             elif choice == "toggle_slice_plane_frames":
                 self._toggle_slice_plane_frames_visible()
 
-            elif choice == "pet":
-                self._choose_pet_colormap()
-
-            elif choice == "siscom":
-                self._choose_siscom_colormap()
-
-            elif choice == "fmri_color":
-                self._choose_fmri_colormap()
+            elif choice == "overlay_color":
+                self._open_overlay_color_dialog()
 
             elif choice == "toggle_fmri_blob":
                 self._toggle_fmri_blob()
@@ -8425,14 +8850,11 @@ class View3DPage(
             elif choice == "toggle_fmri_pial":
                 self._toggle_fmri_pial_projection()
 
-            elif choice == "ictal_color":
-                self._choose_spect_colormap("ictal")
-
-            elif choice == "interictal_color":
-                self._choose_spect_colormap("interictal")
-
-            elif choice == "ct":
-                self._choose_modality_color("ct")
+            elif choice == "toggle_keep_parcellation":
+                self._keep_parcellation_in_volume = not bool(
+                    getattr(self, "_keep_parcellation_in_volume", False)
+                )
+                self._apply_actor_clipping()
 
             elif choice == "render_brain":
                 self._open_brain_render_dialog()
@@ -8470,37 +8892,10 @@ class View3DPage(
         except Exception as e:
             print("[3D context menu] failed:", e)
 
-    def _choose_modality_color(self, which: str) -> None:
+    def _apply_modality_color(self, which: str, color_hex: str) -> None:
+        """Poser la couleur unie d'un calque qui n'a pas d'echelle."""
         try:
-            if which == "pet":
-                init = self._tuple_to_qcolor(self._pet_color)
-                title = "Choose PET color"
-
-            elif which == "siscom":
-                init = self._tuple_to_qcolor(self._siscom_color)
-                title = "Choose SISCOM color"
-
-            elif which == "ct":
-                init = self._tuple_to_qcolor(self._ct_color)
-                title = "Choose CT color"
-
-            elif which == "brain":
-                init = self._tuple_to_qcolor(self._brain_color)
-                title = "Choose Brain color"
-
-            else:
-                return
-
-            color_hex = NeuXelecColorDialog.get_color(
-                initial_color=init,
-                parent=self._dialog_parent(),
-                title=title,
-            )
-
-            if color_hex is None:
-                return
-
-            color = QColor(color_hex)
+            color = QColor(str(color_hex))
 
             if not color.isValid():
                 return
@@ -8527,6 +8922,846 @@ class View3DPage(
 
         except Exception:
             pass
+
+    #: Les echelles proposees aux calques fonctionnels. PET, SISCOM et les
+    #: deux SPECT partagent la meme ; le fMRI a la sienne, qui comporte des
+    #: echelles divergentes parce qu'il porte des valeurs signees.
+    OVERLAY_COLORMAPS = ("hot", "inferno", "plasma", "jet", "turbo", "viridis", "gray")
+    FMRI_COLORMAPS = ("hot", "jet", "turbo", "viridis", "coolwarm", "RdBu_r")
+
+    def _overlay_color_layers(self) -> list[dict]:
+        """Les calques que la fenetre propose, dans l'ordre des anciennes entrees.
+
+        Le CT est le seul a porter une couleur unie : il n'a pas de valeur
+        par voxel a representer, donc pas d'echelle.
+        """
+        spect = getattr(self, "_spect_colormap", {}) or {}
+        return [
+            {
+                "key": "pet",
+                "label": "PET",
+                "kind": "colormap",
+                "options": list(self.OVERLAY_COLORMAPS),
+                "current": getattr(self, "_pet_colormap_name", "hot"),
+            },
+            {
+                "key": "siscom",
+                "label": "SISCOM",
+                "kind": "colormap",
+                "options": list(self.OVERLAY_COLORMAPS),
+                "current": getattr(self, "_siscom_colormap_name", "hot"),
+            },
+            {
+                "key": "fmri",
+                "label": "fMRI",
+                "kind": "colormap",
+                "options": list(self.FMRI_COLORMAPS),
+                "current": getattr(self, "_fmri_cmap_name", "hot"),
+            },
+            {
+                "key": "ictal",
+                "label": "Ictal SPECT",
+                "kind": "colormap",
+                "options": list(self.OVERLAY_COLORMAPS),
+                "current": spect.get("ictal", "hot"),
+            },
+            {
+                "key": "interictal",
+                "label": "Inter-ictal SPECT",
+                "kind": "colormap",
+                "options": list(self.OVERLAY_COLORMAPS),
+                "current": spect.get("interictal", "hot"),
+            },
+            {
+                "key": "ct",
+                "label": "CT",
+                "kind": "solid",
+                "current": self._tuple_to_qcolor(self._ct_color).name(),
+            },
+        ]
+
+    def _open_overlay_color_dialog(self) -> None:
+        """Une fenetre pour les six calques, au lieu de six entrees de menu."""
+        try:
+            choix = OverlayColorDialog.choose(
+                self._dialog_parent(),
+                self._overlay_color_layers(),
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Could not open the overlay colour dialog")
+            return
+
+        if not choix:
+            return
+
+        cle, valeur = choix
+        if cle == "pet":
+            self._apply_pet_colormap(valeur)
+        elif cle == "siscom":
+            self._apply_siscom_colormap(valeur)
+        elif cle == "fmri":
+            self._apply_fmri_colormap(valeur)
+        elif cle in ("ictal", "interictal"):
+            self._apply_spect_colormap(cle, valeur)
+        elif cle == "ct":
+            self._apply_modality_color("ct", valeur)
+
+    # ==================================================================
+    # Parcellation : une surface par region
+    # ==================================================================
+
+    # ==================================================================
+    # Onglet MNI
+    # ==================================================================
+
+    #: Les cartes qui, en mode MNI, commandent le MNI : les coupes y
+    #: promenent le T1 du gabarit, et les parcellations y sont celles de
+    #: l'atlas. Ce sont les memes widgets, pas des copies.
+    #: Tous les reglages a gauche, le tableau seul a droite : il n'en
+    #: montrait qu'une ligne, alors que c'est lui qu'on vient lire.
+    MNI_BORROWED_LEFT = ("card3DSlices", "card3DParcellation")
+    MNI_BORROWED_RIGHT = ("card3DRegions",)
+
+    def _build_mni_tab(self) -> None:
+        """Poser le bouton de chargement, et retirer la case du cadre Brain."""
+        self._mni_borrower = CardBorrower()
+        self._mni_tab_active = False
+        try:
+            gauche = self.ui.findChild(QFrame, "card3DMniLeft")
+            if gauche is None or gauche.layout() is None:
+                return
+
+            bouton = QPushButton("Load MNI electrodes…")
+            bouton.setObjectName("btn_3d_loadMniElectrodes")
+            bouton.setToolTip(
+                "Load a BIDS electrodes.tsv in MNI space and plot it here."
+            )
+            bouton.clicked.connect(self.open_mni_electrodes_files)
+            gauche.layout().addWidget(bouton)
+            self.btn_load_mni_electrodes = bouton
+
+            self._build_mni_brain_row()
+
+            # La case du cadre Brain disparait : l'onglet la remplace. Elle
+            # n'est pas supprimee, tout le mode MNI passe encore par elle,
+            # mais elle devient invisible et pilotee par l'onglet.
+            if self.chk_mni_atlas is not None:
+                self.chk_mni_atlas.setVisible(False)
+                self.chk_mni_atlas.toggled.connect(self._on_mni_state_changed)
+        except Exception:
+            logging.getLogger(__name__).exception("Could not build the MNI tab")
+
+    #: Opacite de depart du gabarit MNI, celle qu'avait le curseur partage.
+    MNI_BRAIN_OPACITY_DEFAULT = 50
+
+    def _build_mni_brain_row(self) -> None:
+        """Poser la rangee du cerveau du gabarit dans la carte des coupes.
+
+        Juste sous celle du brainmask du patient, qu'elle remplace en mode
+        MNI : une seule des deux est visible a la fois, donc la carte garde
+        la meme forme et chaque reglage ne commande qu'un objet.
+        """
+        self.chk_mni_brain = None
+        self.sld_mni_brain_opacity = None
+        self.spn_mni_brain_opacity = None
+        try:
+            carte = self.ui.findChild(QFrame, "card3DSlices")
+            if carte is None or carte.layout() is None:
+                return
+
+            case = QCheckBox("MNI brain")
+            case.setObjectName("chk_3d_showMniBrain")
+            case.setChecked(True)
+            case.setToolTip("Show the MNI template brain.")
+
+            curseur = QSlider(Qt.Horizontal)
+            curseur.setObjectName("sld_3d_mniBrainOpacity")
+            curseur.setRange(0, 100)
+            curseur.setValue(self.MNI_BRAIN_OPACITY_DEFAULT)
+
+            boite = QSpinBox()
+            boite.setObjectName("spinBox_3d_mniBrainOpacity")
+            boite.setRange(0, 100)
+            boite.setValue(self.MNI_BRAIN_OPACITY_DEFAULT)
+
+            rangee = QHBoxLayout()
+            rangee.setSpacing(8)
+            rangee.addWidget(case)
+            rangee.addWidget(curseur, 1)
+            rangee.addWidget(boite)
+
+            # Juste sous le titre de la carte, la place qu'occupait la
+            # rangee du brainmask du patient avant son retour dans
+            # Surfaces : le reglage du gabarit se lit au meme endroit
+            # qu'avant, et son rang ne depend plus d'une voisine qui peut
+            # demenager.
+            layout = carte.layout()
+            rang = self._row_index_of(layout, "lbl3DSlicesCard")
+            if rang < 0:
+                layout.insertLayout(0, rangee)
+            else:
+                layout.insertLayout(rang + 1, rangee)
+
+            curseur.valueChanged.connect(boite.setValue)
+            boite.valueChanged.connect(curseur.setValue)
+            curseur.valueChanged.connect(lambda _: self._update_brain_opacity())
+            case.toggled.connect(self._on_mni_brain_toggled)
+
+            self.chk_mni_brain = case
+            self.sld_mni_brain_opacity = curseur
+            self.spn_mni_brain_opacity = boite
+            for widget in (case, curseur, boite):
+                widget.setVisible(False)
+        except Exception:
+            logging.getLogger(__name__).exception("Could not build the MNI brain row")
+
+    @staticmethod
+    def _row_index_of(layout, nom: str) -> int:
+        """Le rang d'une rangee nommee, sous-disposition ou widget, ou -1.
+
+        Les deux, parce qu'une carte alterne les unes et les autres :
+        son titre est un widget, ses reglages des dispositions, et
+        s'ancrer a l'un ou a l'autre ne devrait pas changer d'appel.
+        """
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item is None:
+                continue
+            sous = item.layout()
+            if sous is not None and sous.objectName() == nom:
+                return i
+            widget = item.widget()
+            if widget is not None and widget.objectName() == nom:
+                return i
+        return -1
+
+    def _on_mni_brain_toggled(self, checked: bool) -> None:
+        """Montrer ou cacher le cerveau du gabarit, sans le refaire."""
+        try:
+            if self._mni_atlas_actor is not None:
+                self._mni_atlas_actor.SetVisibility(bool(checked))
+                self._render()
+        except Exception:
+            logging.getLogger(__name__).exception("Could not toggle the MNI brain")
+
+    def _stop_region_plot_for_mode_switch(self) -> None:
+        """Decocher le trace des regions en changeant de repere.
+
+        Il ne se transporte pas : les maillages sont tailles dans un
+        espace, et celui d'en face a ses propres etiquettes. Decoche, et
+        non simplement vide, pour que la case dise la verite.
+        """
+        panneau = getattr(self, "_region_panel", None)
+        if panneau is None:
+            return
+        try:
+            panneau.set_plotting(False)
+            self._clear_region_actors()
+        except Exception:
+            logging.getLogger(__name__).exception("Could not stop the region plot")
+
+    def _mni_brain_opacity(self) -> float:
+        """L'opacite du gabarit, entre 0 et 1.
+
+        Son propre curseur, et non celui du brainmask : deux objets
+        differents de la scene ne doivent pas partager un reglage dont le
+        nom n'en designe qu'un.
+        """
+        curseur = getattr(self, "sld_mni_brain_opacity", None)
+        try:
+            if curseur is not None:
+                return max(0.0, min(1.0, float(curseur.value()) / 100.0))
+        except Exception:
+            pass
+        return self.MNI_BRAIN_OPACITY_DEFAULT / 100.0
+
+    def _mni_tab_index(self) -> int:
+        onglets = self.ui.findChild(QTabWidget, "tabWidget3D")
+        if onglets is None:
+            return -1
+        for i in range(onglets.count()):
+            if onglets.tabText(i) == "MNI":
+                return i
+        return -1
+
+    def _enter_mni_tab(self) -> None:
+        """Poser le voile, puis basculer dessous.
+
+        Le changement de repere defait toute la scene native avant de
+        monter celle du gabarit : sans voile, on assiste au demontage.
+        """
+        if getattr(self, "_mni_tab_active", False):
+            return
+        self._mni_tab_active = True
+
+        if self._loading_overlay is not None:
+            self._loading_overlay.begin("Switching to the MNI template")
+        QTimer.singleShot(0, self._enter_mni_tab_work)
+
+    def _enter_mni_tab_work(self) -> None:
+        if not getattr(self, "_mni_tab_active", False):
+            if self._loading_overlay is not None:
+                self._loading_overlay.cancel()
+            return
+
+        gauche = self.ui.findChild(QFrame, "card3DMniLeft")
+        droite = self.ui.findChild(QFrame, "card3DMniRight")
+        emprunteur = getattr(self, "_mni_borrower", None)
+        if emprunteur is not None:
+            for nom in self.MNI_BORROWED_LEFT:
+                carte = self.ui.findChild(QFrame, nom)
+                if carte is not None and gauche is not None:
+                    emprunteur.borrow(carte, gauche.layout())
+            for nom in self.MNI_BORROWED_RIGHT:
+                carte = self.ui.findChild(QFrame, nom)
+                if carte is not None and droite is not None:
+                    emprunteur.borrow(carte, droite.layout())
+
+        # Le trace des regions ne traverse pas la bascule : les maillages
+        # du patient viennent d'etre retires, et ceux du gabarit sont a
+        # demander, pas a heriter.
+        self._stop_region_plot_for_mode_switch()
+
+        if self.chk_mni_atlas is not None and not self.chk_mni_atlas.isChecked():
+            self.chk_mni_atlas.setChecked(True)
+
+        if self._loading_overlay is not None:
+            self._loading_overlay.complete()
+
+    def _leave_mni_tab(self) -> None:
+        """Poser le voile, puis revenir au patient dessous."""
+        if not getattr(self, "_mni_tab_active", False):
+            return
+        self._mni_tab_active = False
+
+        if self._loading_overlay is not None:
+            self._loading_overlay.begin("Back to the patient")
+        QTimer.singleShot(0, self._leave_mni_tab_work)
+
+    def _leave_mni_tab_work(self) -> None:
+        self._stop_region_plot_for_mode_switch()
+
+        if self.chk_mni_atlas is not None and self.chk_mni_atlas.isChecked():
+            self.chk_mni_atlas.setChecked(False)
+
+        emprunteur = getattr(self, "_mni_borrower", None)
+        if emprunteur is not None:
+            emprunteur.return_all()
+
+        if self._loading_overlay is not None:
+            self._loading_overlay.complete()
+
+    def _on_mni_state_changed(self, checked: bool) -> None:
+        """Suivre le mode MNI quand il est quitte par un autre chemin.
+
+        Cliquer Brain mask ou Pial surface quitte le mode MNI : l'onglet
+        resterait alors ouvert sur une vue qui n'est plus la sienne, avec
+        les cartes empruntees en otage.
+        """
+        if checked or not getattr(self, "_mni_tab_active", False):
+            return
+
+        # Rendre les cartes ici, et non en comptant sur le changement
+        # d'onglet : setCurrentIndex n'emet rien quand l'onglet vise est
+        # deja le courant, et les cartes resteraient prises.
+        self._leave_mni_tab()
+
+        onglets = self.ui.findChild(QTabWidget, "tabWidget3D")
+        if onglets is not None:
+            QTimer.singleShot(0, lambda: onglets.setCurrentIndex(0))
+
+    def _build_parcellation_region_panel(self) -> None:
+        """Monter le tableau des regions de l'onglet Parcellation."""
+        self._region_panel = None
+        self._region_actors = {}
+        #: Le nom de chaque region tracee, par etiquette.
+        self._region_names: dict[int, str] = {}
+        self._brain_state_before_regions = None
+        self._region_queue = []
+        self._region_building = False
+        self._region_vol_cache = {}
+        try:
+            panneau = ParcellationRegionPanel(
+                self.ui,
+                on_plot_toggled=self._on_parcellation_plot_toggled,
+                on_regions_changed=self._on_parcellation_regions_changed,
+            )
+            if panneau.build():
+                self._region_panel = panneau
+                self._refresh_parcellation_regions()
+        except Exception:
+            logging.getLogger(__name__).exception("Could not build the region panel")
+
+    # ------------------------------------------------------------------
+    # Donnees
+    # ------------------------------------------------------------------
+
+    def _on_3d_tab_changed(self, index: int) -> None:
+        """Entrer ou quitter le mode MNI, et tenir le tableau a jour."""
+        try:
+            onglets = self.ui.findChild(QTabWidget, "tabWidget3D")
+            if onglets is None:
+                return
+            nom = onglets.tabText(int(index))
+
+            if nom == "MNI":
+                self._enter_mni_tab()
+                return
+
+            self._leave_mni_tab()
+
+            if nom == "Parcellation":
+                # Les electrodes ont pu etre reconstruites depuis la
+                # derniere fois : la colonne des contacts serait perimee,
+                # et personne ne penserait a la rafraichir a la main.
+                self._refresh_parcellation_regions()
+        except Exception:
+            logging.getLogger(__name__).exception("Could not switch the 3D tab")
+
+    def _active_parcellation_for_regions(self):
+        """``(image, table des couleurs)`` de la parcellation cochee, ou ``None``.
+
+        Delegue a _get_active_parcellation_img_and_lut, qui sait deja
+        choisir entre la parcellation du patient et celle du gabarit MNI.
+        Reecrire ce choix ici avait ignore le mode MNI, et aurait trace la
+        parcellation du patient sur un cerveau qui n'est pas le sien.
+        """
+        try:
+            img, lut = self._get_active_parcellation_img_and_lut()
+        except Exception:
+            logging.getLogger(__name__).exception("Could not pick the parcellation")
+            return None
+        if img is None:
+            return None
+        return img, (lut or {})
+
+    def _contact_points_for_regions(self):
+        """Les contacts a confronter a la parcellation active.
+
+        En mode MNI ce sont les jeux charges depuis des electrodes.tsv, en
+        coordonnees MNI : les contacts du patient ne sont pas dans ce
+        repere, et les y mettre les placerait tous a cote.
+        """
+        from ..utils.parcellation_regions import mni_contact_points, native_contact_points
+
+        if self._mni_t1_slices_are_visible():
+            return mni_contact_points(getattr(self.state, "mni_electrode_sets", []) or [])
+        return native_contact_points(getattr(self.state, "electrodes", []) or [])
+
+    def contact_region_name(self, electrode_name: str, contact_index: int) -> str | None:
+        """The region one contact sits in, named as it is named everywhere else.
+
+        The same construction as the oblique table and the BIDS export, on
+        purpose: a contact attributed to two different regions depending on
+        which window names it would be worse than no name at all.
+
+        Returns None when no parcellation is loaded, when the contact falls
+        outside the volume, or when the background dominates its cube, which
+        happens for a structure smaller than three voxels.
+        """
+        try:
+            from ..utils.parcellation_regions import contact_region_labels, lut_entry
+
+            source = self._active_parcellation_for_regions()
+
+            if source is None:
+                return None
+
+            img, lut = source
+            vol = self._parcellation_label_volume(img)
+
+            if vol is None:
+                return None
+
+            wanted = str(electrode_name).strip()
+            point = None
+
+            for electrode in getattr(self.state, "electrodes", []) or []:
+                if str(electrode.get("name", "")).strip() != wanted:
+                    continue
+
+                contacts = electrode.get("contacts_lps") or []
+
+                if 0 <= int(contact_index) < len(contacts):
+                    point = tuple(float(v) for v in contacts[int(contact_index)][:3])
+
+                break
+
+            if point is None:
+                return None
+
+            name = f"{wanted}{int(contact_index) + 1}"
+            label = contact_region_labels(img, vol, [(name, point)]).get(name)
+
+            if label is None:
+                return None
+
+            return str(lut_entry(lut, int(label))[0])
+        except Exception:
+            return None
+
+    def _parcellation_label_volume(self, img):
+        """Le volume d'etiquettes, enrichi du wmparc comme ailleurs.
+
+        La meme construction que le tableau de la coupe oblique et que
+        l'export BIDS : sans cela, un contact serait attribue a deux
+        regions differentes selon la page qui l'affiche.
+        """
+        cle = id(img)
+        vol = self._region_vol_cache.get(cle)
+        if vol is not None:
+            return vol
+        try:
+            from ..seeg2parc import build_parcellation_volume
+            from ..utils.wmparc import find_sibling_wmparc
+
+            chemin = getattr(self.state, "parcel1_path", None)
+            if self.chk_parcel2 is not None and self.chk_parcel2.isChecked():
+                chemin = getattr(self.state, "parcel2_path", None)
+            if self._mni_t1_slices_are_visible():
+                # Le gabarit MNI n'a pas de wmparc a cote : le chercher
+                # irait prendre celui du patient, dans un autre repere.
+                chemin = None
+
+            brut = sitk.GetArrayFromImage(img)
+            wm = find_sibling_wmparc(chemin, img)
+            vol = build_parcellation_volume(brut, sitk.GetArrayFromImage(wm) if wm else None)
+        except Exception:
+            logging.getLogger(__name__).exception("Could not build the label volume")
+            try:
+                vol = sitk.GetArrayFromImage(img)
+            except Exception:
+                return None
+        self._region_vol_cache = {cle: vol}
+        return vol
+
+    def _region_table_signature(self):
+        """Ce dont depend le tableau : la parcellation et les contacts.
+
+        Comparee avant de reconstruire. Sans elle, arriver sur l'onglet
+        suffisait a recocher toutes les regions, et une selection d'une
+        seule region redevenait le cerveau entier.
+        """
+        source = self._active_parcellation_for_regions()
+        if source is None:
+            return None
+        img, _lut = source
+        try:
+            contacts = tuple(
+                (str(nom), tuple(round(float(v), 3) for v in point))
+                for nom, point in self._contact_points_for_regions()
+            )
+        except Exception:
+            contacts = ()
+        return (id(img), contacts)
+
+    def _refresh_parcellation_regions(self, force: bool = False) -> None:
+        """Refaire le tableau pour la parcellation actuellement cochee.
+
+        Ne fait rien quand ni la parcellation ni les contacts n'ont bouge :
+        les onglets sont trois panneaux de commande sur une seule scene,
+        et passer de l'un a l'autre ne doit rien y changer.
+        """
+        if getattr(self, "_region_panel", None) is None:
+            return
+
+        signature = self._region_table_signature()
+        if not force and signature == getattr(self, "_region_table_sig", _JAMAIS_VU):
+            return
+        self._region_table_sig = signature
+
+        try:
+            from ..utils.parcellation_regions import build_regions
+
+            source = self._active_parcellation_for_regions()
+            if source is None:
+                self._region_panel.set_regions([])
+                return
+            img, lut = source
+            vol = self._parcellation_label_volume(img)
+            if vol is None:
+                self._region_panel.set_regions([])
+                return
+            trace = self._region_panel.is_plotting()
+            if trace:
+                # Les etiquettes de l'une ne designent pas les regions de
+                # l'autre : les anciens maillages n'ont plus de sens.
+                self._clear_region_actors()
+            self._region_panel.set_regions(
+                build_regions(img, vol, lut, self._contact_points_for_regions())
+            )
+            if trace:
+                QTimer.singleShot(0, self._start_region_plot)
+        except Exception:
+            logging.getLogger(__name__).exception("Could not list the parcellation regions")
+            try:
+                self._region_panel.set_regions([])
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Trace
+    # ------------------------------------------------------------------
+
+    def _on_parcellation_plot_toggled(self, on: bool) -> None:
+        if on:
+            self._start_region_plot()
+        else:
+            self._clear_region_actors()
+            self._restore_brain_before_regions()
+            self._render()
+
+    def _on_parcellation_regions_changed(self, labels) -> None:
+        """Montrer ou cacher, sans refaire les maillages.
+
+        Decocher une region est un geste que l'on fait vingt fois de
+        suite : reconstruire a chaque fois rendrait la table inutilisable.
+        """
+        voulus = {int(v) for v in labels}
+        for label, acteur in (getattr(self, "_region_actors", {}) or {}).items():
+            try:
+                acteur.SetVisibility(bool(int(label) in voulus))
+            except Exception:
+                pass
+        self._render()
+
+    def _hide_brain_for_regions(self) -> None:
+        """Retenir ce qui etait affiche, puis l'eteindre.
+
+        Retenu et non suppose : au retour il faut remettre ce qui etait la,
+        pas rallumer le brainmask par defaut.
+        """
+        if getattr(self, "_brain_state_before_regions", None) is None:
+            # Retenu une seule fois. Relancer le trace rappelle cette
+            # methode, et l'etat deja eteint effacerait celui d'avant.
+            self._brain_state_before_regions = {
+                "brainmask": bool(
+                    self.chk_brainmask is not None and self.chk_brainmask.isChecked()
+                ),
+                "pial": bool(self.chk_pial is not None and self.chk_pial.isChecked()),
+            }
+        for case in (self.chk_brainmask, self.chk_pial):
+            if case is not None and case.isChecked():
+                self._set_checked(case, False)
+                try:
+                    self._on_brain_source(
+                        "brainmask" if case is self.chk_brainmask else "pial", False
+                    )
+                except Exception:
+                    pass
+
+    def _restore_brain_before_regions(self) -> None:
+        etat = getattr(self, "_brain_state_before_regions", None)
+        self._brain_state_before_regions = None
+        if not etat:
+            return
+        for cle, case in (("brainmask", self.chk_brainmask), ("pial", self.chk_pial)):
+            if case is None or not etat.get(cle):
+                continue
+            self._set_checked(case, True)
+            try:
+                self._on_brain_source(cle, True)
+            except Exception:
+                pass
+
+    def _start_region_plot(self) -> None:
+        """Poser le voile, puis tout faire dessous.
+
+        Rien ne bouge avant lui : retirer les anciennes surfaces et
+        eteindre le cerveau se voyaient a l'ecran, et le voile n'arrivait
+        qu'apres. Le travail passe donc au tour de boucle suivant, le
+        temps que Qt le peigne.
+        """
+        panneau = getattr(self, "_region_panel", None)
+        if panneau is None or not panneau.regions():
+            self._clear_region_actors()
+            if panneau is not None:
+                panneau.set_plotting(False)
+            NeuXelecMessageDialog.information(
+                self._dialog_parent(),
+                "Parcellation",
+                "Tick Parcellation 1 or Parcellation 2 first.",
+            )
+            return
+
+        if self._loading_overlay is not None:
+            self._loading_overlay.begin("Building parcellation surfaces")
+        QTimer.singleShot(0, self._start_region_plot_work)
+
+    def _start_region_plot_work(self) -> None:
+        """Le travail, une fois le voile en place."""
+        panneau = getattr(self, "_region_panel", None)
+        if panneau is None or not panneau.is_plotting():
+            if self._loading_overlay is not None:
+                self._loading_overlay.cancel()
+            return
+
+        self._clear_region_actors()
+        self._hide_brain_for_regions()
+        self._region_queue = list(panneau.regions())
+        self._region_total = len(self._region_queue)
+        self._region_building = True
+        self._region_plot_step()
+
+    def _region_plot_step(self) -> None:
+        """Traiter quelques regions, puis rendre la main a la fenetre.
+
+        Par paquets plutot qu'en une fois : marching cubes sur quatre
+        cents regions prend plusieurs secondes, et une fenetre figee
+        pendant ce temps-la passe pour un plantage.
+        """
+        if not getattr(self, "_region_building", False):
+            # Une minuterie peut arriver apres une annulation : sans cela,
+            # elle rejouerait la fin du trace sur une file deja vide.
+            return
+
+        panneau = getattr(self, "_region_panel", None)
+        if panneau is None or not panneau.is_plotting():
+            self._region_queue = []
+            self._region_building = False
+            if self._loading_overlay is not None:
+                self._loading_overlay.cancel()
+            return
+
+        source = self._active_parcellation_for_regions()
+        vol = self._parcellation_label_volume(source[0]) if source else None
+
+        for _ in range(6):
+            if not self._region_queue:
+                break
+            region = self._region_queue.pop(0)
+            if vol is not None:
+                self._add_region_actor(source[0], vol, region)
+
+        if self._region_queue:
+            fait = self._region_total - len(self._region_queue)
+            if self._loading_overlay is not None:
+                self._loading_overlay.set_progress(
+                    0.10 + 0.84 * (fait / max(1, self._region_total)),
+                    f"Building parcellation surfaces ({fait}/{self._region_total})",
+                )
+            QTimer.singleShot(0, self._region_plot_step)
+            return
+
+        self._region_building = False
+        # Coche ET visible : le filtre restreint le trace, pas seulement
+        # la liste.
+        self._on_parcellation_regions_changed(panneau.plotted_labels())
+        if self._loading_overlay is not None:
+            self._loading_overlay.complete()
+        self._render()
+
+    def _add_region_actor(self, img, vol, region) -> None:
+        try:
+            from ..utils.parcellation_regions import cropped_region_mask
+
+            decoupe = cropped_region_mask(vol, region.label)
+            if decoupe is None:
+                return
+            masque, (z0, y0, x0) = decoupe
+
+            # Le coin, en millimetres : l'index SimpleITK est (x, y, z).
+            origine = img.TransformIndexToPhysicalPoint((int(x0), int(y0), int(z0)))
+            morceau = sitk.GetImageFromArray(masque)
+            morceau.SetSpacing(img.GetSpacing())
+            morceau.SetDirection(img.GetDirection())
+            morceau.SetOrigin(origine)
+
+            maillage = self._binarymask_to_polydata(morceau)
+            if maillage is None or getattr(maillage, "n_points", 0) == 0:
+                return
+
+            rgb = tuple(float(c) / 255.0 for c in region.color)
+            acteur = self.plotter.add_mesh(maillage, color=rgb, smooth_shading=True)
+            try:
+                acteur.PickableOff()
+            except Exception:
+                pass
+            self._region_actors[int(region.label)] = acteur
+            # Le nom voyage avec l'acteur : au survol c'est lui qu'on
+            # veut, et aller le relire dans le tableau supposerait que
+            # les deux n'aient pas diverge entre-temps.
+            self._region_names[int(region.label)] = str(region.name)
+            self._apply_clipping_to_region_actor(acteur)
+            self._set_region_actor_opacity(acteur, self._parcellation_region_opacity())
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not draw region %s", getattr(region, "name", "?")
+            )
+
+    def _parcellation_region_opacity(self) -> float:
+        """L'opacite reglee pour la parcellation cochee, entre 0 et 1.
+
+        Le curseur de la parcellation 2 quand c'est elle qui est cochee,
+        celui de la 1 sinon : les deux cases sont exclusives, et chaque
+        parcellation garde son propre reglage.
+        """
+        curseur = self.spn_parcel1_opacity
+        if self.chk_parcel2 is not None and self.chk_parcel2.isChecked():
+            curseur = self.spn_parcel2_opacity
+        try:
+            if curseur is not None:
+                return max(0.0, min(1.0, float(curseur.value()) / 100.0))
+        except Exception:
+            pass
+        return 1.0
+
+    @staticmethod
+    def _set_region_actor_opacity(acteur, opacite: float) -> None:
+        try:
+            propriete = acteur.GetProperty()
+            if propriete is not None:
+                propriete.SetOpacity(float(opacite))
+        except Exception:
+            pass
+
+    def _apply_region_opacity(self) -> None:
+        """Reporter le curseur sur toutes les surfaces de regions."""
+        acteurs = (getattr(self, "_region_actors", {}) or {}).values()
+        if not acteurs:
+            return
+        opacite = self._parcellation_region_opacity()
+        for acteur in list(acteurs):
+            self._set_region_actor_opacity(acteur, opacite)
+        self._render()
+
+    def _apply_clipping_to_region_actor(self, acteur) -> None:
+        """Decouper un maillage qui vient de naitre.
+
+        Les autres acteurs sont decoupes en bloc par _apply_actor_clipping,
+        mais les regions arrivent par paquets, bien apres : sans cela, les
+        premieres traverseraient les coupes jusqu'au prochain reglage.
+        """
+        if bool(getattr(self, "_keep_parcellation_in_volume", False)):
+            return
+        try:
+            mapper = acteur.GetMapper()
+            if mapper is None:
+                return
+            mapper.RemoveAllClippingPlanes()
+            for nom, case in (
+                ("coronal", self.chk_coronal_plane),
+                ("axial", self.chk_axial_plane),
+                ("sagittal", self.chk_sagittal_plane),
+            ):
+                if case is None or not case.isChecked():
+                    continue
+                plan = getattr(self, f"_build_vtk_{nom}_clip_plane")()
+                if plan is not None:
+                    mapper.AddClippingPlane(plan)
+        except Exception:
+            logging.getLogger(__name__).exception("Could not clip a region surface")
+
+    def _clear_region_actors(self) -> None:
+        self._region_queue = []
+        self._region_building = False
+        for acteur in list((getattr(self, "_region_actors", {}) or {}).values()):
+            try:
+                self.plotter.remove_actor(acteur, reset_camera=False)
+            except Exception:
+                pass
+        self._region_actors = {}
+        self._region_names = {}
 
     def _tuple_to_qcolor(self, rgb) -> QColor:
         r = int(np.clip(rgb[0] * 255.0, 0, 255))
@@ -8582,10 +9817,7 @@ class View3DPage(
         if self.chk_iso is not None:
             self._set_checked(self.chk_iso, False)
 
-        if self.sld_3d_PialOpacity is not None:
-            self.sld_3d_PialOpacity.blockSignals(True)
-            self.sld_3d_PialOpacity.setValue(50)
-            self.sld_3d_PialOpacity.blockSignals(False)
+        self._set_opacity_pair(self.sld_3d_PialOpacity, self.spn_3d_pialOpacity, 50)
 
         self._update_brain_opacity_slider_states()
         self._render_brain()
@@ -8644,6 +9876,18 @@ class View3DPage(
     #: back; black everywhere is both prettier and predictable, and it is what
     #: "Reset background" now returns to.
     VIEW3D_DEFAULT_BACKGROUND = "black"
+
+    #: Couleur de la surface 3D du SISCOM.
+    #:
+    #: Unie, et non prise dans l'echelle : ce maillage est l'isosurface
+    #: **au seuil**, donc tous ses sommets portent la meme valeur, celle
+    #: du bas de l'echelle. Avec "hot", ce bas est noir, et le blob
+    #: disparaissait dans le fond de la scene en attendant de coder une
+    #: intensite qu'il n'a pas.
+    #:
+    #: Les coupes, elles, gardent l'echelle : elles traversent le champ
+    #: et ont donc bien une intensite a montrer.
+    SISCOM_SURFACE_COLOR = (0.95, 0.95, 0.97)
 
     def _view3d_default_background(self) -> str:
         return self.VIEW3D_DEFAULT_BACKGROUND
@@ -8778,81 +10022,80 @@ class View3DPage(
         except Exception as e:
             print("[3D View] Failed to toggle RH pial visibility:", e)
 
+    @staticmethod
+    def _set_opacity_pair(curseur, boite, valeur: int) -> None:
+        """Poser la meme valeur sur un curseur et sa boite, sans rendu.
+
+        Les deux ne montrent qu'un seul reglage. Les remises a zero
+        posent le curseur signaux bloques, pour ne pas declencher un
+        rendu par reglage : la boite n'en apprend alors rien et garde
+        l'ancienne valeur, et l'on lit deux chiffres differents pour la
+        meme opacite.
+
+        L'appelant appelle ensuite son rafraichissement, comme avant.
+        """
+        for widget in (curseur, boite):
+            if widget is None:
+                continue
+            try:
+                widget.blockSignals(True)
+                widget.setValue(int(valeur))
+            finally:
+                widget.blockSignals(False)
+
     def _update_brain_opacity_slider_states(self) -> None:
         mni_on = bool(self.chk_mni_atlas is not None and self.chk_mni_atlas.isChecked())
         brainmask_on = bool(self.chk_brainmask is not None and self.chk_brainmask.isChecked())
         pial_on = bool(self.chk_pial is not None and self.chk_pial.isChecked())
 
-        # In MNI mode, the MNI atlas opacity is controlled by the Brain mask opacity slider.
+        # Toute la rangee du brainmask commande le cerveau du patient.
+        # Elle est dans la carte Surfaces, que l'onglet MNI n'emprunte
+        # pas, donc elle ne s'y montre jamais. On continue de la cacher
+        # le temps du mode : si elle revenait un jour dans une carte
+        # empruntee, elle y proposerait un reglage qui agit ailleurs.
+        for widget in (
+            getattr(self, "chk_brainmask", None),
+            getattr(self, "sld_3d_brainMaskOpacity", None),
+            getattr(self, "spn_3d_brainMaskOpacity", None),
+        ):
+            if widget is not None:
+                widget.setVisible(not mni_on)
+
+        # Et la rangee du gabarit prend sa place, jamais a cote d'elle.
+        for widget in (
+            getattr(self, "chk_mni_brain", None),
+            getattr(self, "sld_mni_brain_opacity", None),
+            getattr(self, "spn_mni_brain_opacity", None),
+        ):
+            if widget is not None:
+                widget.setVisible(mni_on)
+
         if getattr(self, "sld_3d_brainMaskOpacity", None) is not None:
-            self.sld_3d_brainMaskOpacity.setEnabled(bool(mni_on or brainmask_on))
+            self.sld_3d_brainMaskOpacity.setEnabled(bool(brainmask_on))
+        if getattr(self, "spn_3d_brainMaskOpacity", None) is not None:
+            # Meme etat que son curseur : une boite active a cote d'un
+            # curseur grise laisserait croire qu'elle commande encore.
+            self.spn_3d_brainMaskOpacity.setEnabled(bool(brainmask_on))
 
         # Pial opacity is only for native pial surface, not MNI atlas.
+        pial_reglable = bool((not mni_on) and pial_on)
         if getattr(self, "sld_3d_PialOpacity", None) is not None:
-            self.sld_3d_PialOpacity.setEnabled(bool((not mni_on) and pial_on))
+            self.sld_3d_PialOpacity.setEnabled(pial_reglable)
+        if getattr(self, "spn_3d_pialOpacity", None) is not None:
+            # Meme etat que son curseur : une boite active a cote d'un
+            # curseur grise laisserait croire qu'elle commande encore.
+            self.spn_3d_pialOpacity.setEnabled(pial_reglable)
 
-    def _choose_pet_colormap(self) -> None:
-        options = [
-            "hot",
-            "inferno",
-            "plasma",
-            "jet",
-            "turbo",
-            "viridis",
-            "gray",
-        ]
-
-        current_index = (
-            options.index(self._pet_colormap_name) if self._pet_colormap_name in options else 0
-        )
-
-        cmap = NeuXelecSelectionDialog.select_item(
-            self._dialog_parent(),
-            "PET colormap",
-            "Choose the color scale used for the PET overlay:",
-            options=options,
-            current_index=current_index,
-            accept_text="Apply",
-            reject_text="Cancel",
-        )
-
+    def _apply_pet_colormap(self, cmap: str) -> None:
         if not cmap:
             return
-
         self._pet_colormap_name = str(cmap)
         self._remove_pet_scalar_bar()
         self._refresh_pet_only()
 
-    def _choose_siscom_colormap(self) -> None:
-        options = [
-            "hot",
-            "inferno",
-            "plasma",
-            "jet",
-            "turbo",
-            "viridis",
-            "gray",
-        ]
-
-        current_index = (
-            options.index(self._siscom_colormap_name)
-            if self._siscom_colormap_name in options
-            else 0
-        )
-
-        cmap = NeuXelecSelectionDialog.select_item(
-            self._dialog_parent(),
-            "SISCOM colormap",
-            "Choose the color scale used for the SISCOM overlay:",
-            options=options,
-            current_index=current_index,
-            accept_text="Apply",
-            reject_text="Cancel",
-        )
-
+    def _apply_siscom_colormap(self, cmap: str) -> None:
         if not cmap:
             return
-
         self._siscom_colormap_name = str(cmap)
         self._remove_siscom_scalar_bar()
         self._refresh_siscom_only()
@@ -10977,6 +12220,14 @@ class View3DPage(
             except Exception:
                 pass
 
+            # La colonne des contacts du tableau des regions vient de
+            # changer : sans cela, les electrodes qu'on vient de charger
+            # n'y figureraient pas, personne n'appelant le rafraichissement.
+            try:
+                self._refresh_parcellation_regions()
+            except Exception:
+                pass
+
         if errors:
             NeuXelecMessageDialog.warning(
                 self._dialog_parent(),
@@ -12836,6 +14087,67 @@ class View3DPage(
         except Exception:
             return {}
 
+    def set_mni_parcellation2(self, img, path: str | None = None) -> None:
+        """Poser l'atlas MNI que l'utilisateur a choisi, dans la case 2.
+
+        La table de couleurs est cherchee a cote du fichier, sous le nom
+        ``<fichier>_lut.tsv``, puis sous ``<fichier sans extension>.tsv``.
+        A defaut, une table est fabriquee a partir des etiquettes
+        presentes : un atlas se regarde meme sans ses couleurs d'origine,
+        et refuser de l'afficher pour un fichier annexe manquant serait
+        pire que des couleurs arbitraires.
+        """
+        from pathlib import Path as _P
+
+        if img is None and path:
+            try:
+                img = sitk.ReadImage(str(path))
+            except Exception:
+                img = None
+
+        self._mni_parcel2_img = img
+        self._mni_parcel2_name = _P(path).name if path else ""
+        self._mni_parcel2_lut = {}
+
+        if img is not None:
+            lut = {}
+            try:
+                for voisin in self._mni_lut_candidates(path):
+                    if voisin.exists():
+                        lut = self._load_mni_lut_tsv(voisin)
+                        if lut:
+                            break
+            except Exception:
+                lut = {}
+            if not lut:
+                try:
+                    lut = self._generate_simple_lut_from_image(img)
+                except Exception:
+                    lut = {}
+            self._mni_parcel2_lut = lut or {}
+
+        if self.chk_parcel2 is not None:
+            self._set_checked(self.chk_parcel2, False)
+
+        self._update_modality_controls_enabled_states()
+        self._refresh_multiplanar_clipped_scene()
+        self._render()
+
+    @staticmethod
+    def _mni_lut_candidates(path):
+        """Les noms sous lesquels chercher la table d'un atlas MNI."""
+        from pathlib import Path as _P
+
+        if not path:
+            return []
+        p = _P(str(path))
+        tronc = p.name
+        for suffixe in (".nii.gz", ".nii", ".mgz", ".mgh"):
+            if tronc.lower().endswith(suffixe):
+                tronc = tronc[: -len(suffixe)]
+                break
+        return [p.with_name(tronc + "_lut.tsv"), p.with_name(tronc + ".tsv")]
+
     def _get_mni_parcellation1_img_and_lut(self):
         """
         Load first MNI parcellation from:
@@ -12874,46 +14186,6 @@ class View3DPage(
 
         except Exception as e:
             print("[MNI parcellation] Could not load parcellation 1:", e)
-            return None, {}
-
-    def _get_mni_parcellation2_img_and_lut(self):
-        """
-        Load second MNI parcellation from:
-            tools/templates/template_parcellation2.nii.gz
-            tools/templates/template_parcellation2_lut.tsv
-        """
-        try:
-            if self._mni_parcel2_img is not None and self._mni_parcel2_lut:
-                return self._mni_parcel2_img, self._mni_parcel2_lut
-
-            d = self._mni_templates_dir()
-            if d is None:
-                return None, {}
-
-            img_path = d / "template_parcellation2.nii.gz"
-            lut_path = d / "template_parcellation2_lut.tsv"
-
-            if not img_path.exists():
-                print(f"[MNI parcellation] Parcellation 2 NIfTI not found: {img_path}")
-                return None, {}
-
-            if not lut_path.exists():
-                print(f"[MNI parcellation] Parcellation 2 TSV not found: {lut_path}")
-
-            img = sitk.ReadImage(str(img_path))
-            lut = self._load_mni_lut_tsv(lut_path)
-
-            if not lut:
-                print("[MNI parcellation] Parcellation 2 TSV LUT empty. Using fallback.")
-                lut = self._generate_simple_lut_from_image(img)
-
-            self._mni_parcel2_img = img
-            self._mni_parcel2_lut = lut
-
-            return self._mni_parcel2_img, self._mni_parcel2_lut
-
-        except Exception as e:
-            print("[MNI parcellation] Could not load parcellation 2:", e)
             return None, {}
 
     def _load_mni_lut_json(self, lut_path: Path) -> dict:
@@ -13052,10 +14324,6 @@ class View3DPage(
 
     def _mni_parcellation1_loaded(self) -> bool:
         img, _lut = self._get_mni_parcellation1_img_and_lut()
-        return img is not None
-
-    def _mni_parcellation2_loaded(self) -> bool:
-        img, _lut = self._get_mni_parcellation2_img_and_lut()
         return img is not None
 
     def _mni_t1_slices_are_visible(self) -> bool:

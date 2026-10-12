@@ -500,25 +500,12 @@ class View3DSpectMixin:
         self._spect_ref_key[layer] = None  # force ref recompute is not needed, ref is per-image
         self._refresh_spect_only()
 
-    def _choose_spect_colormap(self, layer: str) -> None:
-        """Right-click colormap chooser for a SPECT overlay (like PET/SISCOM)."""
-        try:
-            from ..ui.neuxelec_message_dialog import NeuXelecSelectionDialog
-        except Exception:
-            return
-        # Same colormap set as PET / SISCOM, for consistency.
-        options = ["hot", "inferno", "plasma", "jet", "turbo", "viridis", "gray"]
-        current = self._spect_colormap.get(layer, "hot")
-        current_index = options.index(current) if current in options else 0
-        cmap = NeuXelecSelectionDialog.select_item(
-            self._dialog_parent(),
-            f"{_SPECT_TITLE[layer]} colormap",
-            f"Choose the color scale used for the {_SPECT_TITLE[layer]} overlay:",
-            options=options,
-            current_index=current_index,
-            accept_text="Apply",
-            reject_text="Cancel",
-        )
+    def _apply_spect_colormap(self, layer: str, cmap: str) -> None:
+        """Poser l'echelle d'un calque SPECT, comme pour le PET et le SISCOM.
+
+        La question est posee ailleurs, par la fenetre unique de couleur du
+        clic droit, qui connait les deux calques SPECT comme les autres.
+        """
         if not cmap:
             return
         self._spect_colormap[layer] = str(cmap)

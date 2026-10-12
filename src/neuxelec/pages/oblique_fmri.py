@@ -154,24 +154,12 @@ class ObliqueFmriMixin:
             pass
         self._schedule_refresh(slices=True, brain=False)
 
-    def _choose_oblique_fmri_colormap(self) -> None:
-        """Right-click colormap chooser (same call as PET / SISCOM / SPECT)."""
-        try:
-            from ..ui.neuxelec_message_dialog import NeuXelecSelectionDialog
-        except Exception:
-            return
-        options = ["hot", "inferno", "plasma", "jet", "turbo", "viridis", "coolwarm", "RdBu_r"]
-        current = self._ofmri_cmap(self._ofmri_img())
-        current_index = options.index(current) if current in options else 0
-        cmap = NeuXelecSelectionDialog.select_item(
-            self._dialog_parent(),
-            "fMRI colormap",
-            "Choose the color scale used for the fMRI overlay:",
-            options=options,
-            current_index=current_index,
-            accept_text="Apply",
-            reject_text="Cancel",
-        )
+    def _apply_oblique_fmri_colormap(self, cmap: str) -> None:
+        """Poser l'echelle du fMRI de la coupe oblique.
+
+        La question est posee ailleurs, par la fenetre unique de couleur du
+        clic droit, qui connait ce calque comme les quatre autres.
+        """
         if not cmap:
             return
         self._ofmri_colormap = str(cmap)

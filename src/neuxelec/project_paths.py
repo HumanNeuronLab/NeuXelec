@@ -62,6 +62,7 @@ SECTION_LABELS: dict[str, str] = {
     "plan_mri": "Planning MRI",
     "parcel1": "Parcellation 1",
     "parcel2": "Parcellation 2",
+    "mni_parcel2": "MNI parcellation 2",
     "lh_pial": "Left pial surface",
     "rh_pial": "Right pial surface",
 }

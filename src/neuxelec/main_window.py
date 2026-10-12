@@ -1115,7 +1115,11 @@ class NeuxelecWindow(QWidget):
             # If it was only generated but not saved, it will still be reported as unsaved,
             # but it cannot be restored after reopening unless the file was saved.
             if bm_path:
-                self.state.brainmask_sitk = sitk.ReadImage(bm_path)
+                # Comme au chargement : un brainmask peut etre un .mgz
+                # de FreeSurfer, que SimpleITK ne sait pas lire.
+                from .utils.image_ingest import read_image_any
+
+                self.state.brainmask_sitk = read_image_any(bm_path)
 
                 try:
                     self.view3d_page.set_brainmask(
@@ -1196,6 +1200,24 @@ class NeuxelecWindow(QWidget):
                     pass
         except Exception:
             pass
+
+        # -------------------------
+        # Parcellation 2 du repere MNI
+        # -------------------------
+        # Elle n'a pas de table FreeSurfer a reconstruire : la page 3D
+        # cherche la sienne a cote du fichier, ou la fabrique.
+        try:
+            chemin_mni = getattr(self.state, "mni_parcel2_path", None)
+            if chemin_mni and getattr(self, "view3d_page", None) is not None:
+                from .utils.image_ingest import read_image_any
+
+                img_mni = read_image_any(chemin_mni)
+                if img_mni is not None and hasattr(
+                    self.view3d_page, "set_mni_parcellation2"
+                ):
+                    self.view3d_page.set_mni_parcellation2(img_mni, chemin_mni)
+        except Exception:
+            logger.exception("Could not restore the MNI parcellation")
 
         # -------------------------
         # Parcellation 2

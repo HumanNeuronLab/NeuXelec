@@ -36,6 +36,7 @@ class CoregWorker(QThread):
         initial_transform: sitk.Transform | None = None,
         transforms_dir: str | None = None,
         apply_to_path: str | None = None,
+        existing_affine_mat: str | None = None,
     ):
         super().__init__()
         self.modality = modality
@@ -46,6 +47,10 @@ class CoregWorker(QThread):
         # Companion image moved with the estimated transform (fMRI activation
         # recovered from a colour fusion: registered on its grey anatomy).
         self.apply_to_path = apply_to_path
+        # When set, no transform is estimated: this one is applied. Used when
+        # the two volumes already share a space, or when the transform came
+        # from elsewhere.
+        self.existing_affine_mat = existing_affine_mat
 
     def run(self):
         try:
@@ -57,6 +62,7 @@ class CoregWorker(QThread):
                 moving_modality=_ENGINE_MODALITY.get(self.modality, self.modality),
                 transforms_dir=self.transforms_dir,
                 apply_to_path=self.apply_to_path,
+                existing_affine_mat=self.existing_affine_mat,
             )
             self.finished_ok.emit(self.modality, res)
         except Exception as e:

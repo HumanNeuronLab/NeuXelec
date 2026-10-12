@@ -239,3 +239,181 @@ def summarize_plan(plan: dict) -> str:
         f"{plan.get('source', 'plan')} {info.get('software_version') or ''} · "
         f"{n} trajectories · reference MRI: {cs.get('reference_series_name') or '?'}"
     ).strip()
+
+
+# ======================================================================
+# Relire un fichier de trajectoires ecrit par NeuXelec
+# ======================================================================
+#
+# Save plan MRI / electrodes ecrit les trajectoires en LPS, deja dans
+# l'espace de MRI 1. Les relire evite de refaire tout le chemin
+# d'import : pas de .nip a retrouver, pas d'IRM de planification a
+# recaler, pas d'alignement a revoir. Les coordonnees sont celles que
+# NeuXelec a lui-meme calculees.
+#
+# C'est aussi pourquoi la verification porte sur l'espace et non sur la
+# forme : un fichier bien ecrit mais calcule contre une autre IRM se
+# lirait sans erreur et placerait les electrodes a cote.
+
+#: La premiere ligne du fichier, qui le distingue de tout autre texte.
+TRAJECTORY_FILE_HEADER = "SEEG_planned_trajectories"
+
+
+def is_planned_trajectories_file(path: str | os.PathLike) -> bool:
+    """Ce fichier est-il un export de trajectoires de NeuXelec ?
+
+    On lit la premiere ligne plutot que de se fier a l'extension : un
+    .txt ne dit rien, et l'utilisateur renomme ses fichiers.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as handle:
+            return handle.readline().strip() == TRAJECTORY_FILE_HEADER
+    except Exception:
+        return False
+
+
+def _parse_lps_fields(reste: str):
+    """``x=.. | y=.. | z=..`` vers un triplet, ou ``None``."""
+    valeurs = {}
+    for morceau in reste.split("|"):
+        if "=" not in morceau:
+            continue
+        cle, _, valeur = morceau.partition("=")
+        cle = cle.strip().lower()
+        if cle in ("x", "y", "z"):
+            try:
+                valeurs[cle] = float(valeur.strip())
+            except ValueError:
+                return None
+    if len(valeurs) != 3:
+        return None
+    return [valeurs["x"], valeurs["y"], valeurs["z"]]
+
+
+def read_planned_trajectories(path: str | os.PathLike) -> dict:
+    """Relire un export de trajectoires en un plan deja exprime en MRI 1.
+
+    Rend un dictionnaire de la meme forme que celui d'un .nip importe,
+    avec ``trajectories_t1`` rempli : les coordonnees du fichier sont
+    deja celles de MRI 1, donc rien n'est a transformer.
+
+    Leve ``ValueError`` si le fichier n'est pas un export de NeuXelec,
+    ou s'il ne contient aucune trajectoire : mieux vaut le dire que
+    poser un plan vide dont rien n'expliquerait le silence.
+    """
+    chemin = Path(path)
+    entete: dict[str, str] = {}
+    trajectoires: list[dict] = []
+    courante: dict | None = None
+
+    with open(chemin, encoding="utf-8", errors="ignore") as handle:
+        premiere = handle.readline().strip()
+        if premiere != TRAJECTORY_FILE_HEADER:
+            raise ValueError(
+                "This is not a NeuXelec trajectories file "
+                f"(its first line reads {premiere!r})."
+            )
+
+        for ligne in handle:
+            nu = ligne.strip()
+            if not nu or set(nu) == {"="}:
+                continue
+
+            if nu.startswith("["):
+                nom, _, reste = nu[1:].partition("]")
+                courante = {
+                    "name": nom.strip(),
+                    "contacts_t1_lps": [],
+                }
+                for morceau in reste.split("|"):
+                    cle, _, valeur = morceau.partition("=")
+                    cle, valeur = cle.strip().lower(), valeur.strip()
+                    if cle == "reference":
+                        courante["reference_key"] = valeur
+                        courante["reference"] = valeur
+                    elif cle == "hemisphere":
+                        courante["hemisphere"] = valeur
+                trajectoires.append(courante)
+                continue
+
+            if courante is None:
+                cle, _, valeur = nu.partition(":")
+                if valeur:
+                    entete[cle.strip().lower()] = valeur.strip()
+                continue
+
+            mot, _, reste = nu.partition("|")
+            mot = mot.strip().lower()
+            point = _parse_lps_fields(reste)
+            if point is None:
+                continue
+            if mot == "entry":
+                courante["entry_t1_lps"] = point
+                courante["entry_mm"] = point
+            elif mot == "target":
+                courante["target_t1_lps"] = point
+                courante["target_mm"] = point
+            elif mot.startswith("contact"):
+                courante["contacts_t1_lps"].append(point)
+
+    if not trajectoires:
+        raise ValueError("This trajectories file holds no electrode.")
+
+    for traj in trajectoires:
+        traj["contact_count"] = len(traj["contacts_t1_lps"])
+        if not traj.get("hemisphere"):
+            cible = traj.get("target_t1_lps")
+            if cible:
+                traj["hemisphere"] = hemisphere_from_lps_x(cible[0]) or ""
+
+    # "LPS (nom_de_l_IRM)" : on garde le nom entre parentheses, qui dit
+    # contre quelle IRM ces coordonnees ont ete calculees.
+    repere = entete.get("coordinate system", "")
+    etiquette = ""
+    if "(" in repere and ")" in repere:
+        etiquette = repere[repere.index("(") + 1 : repere.rindex(")")].strip()
+
+    return {
+        "source": entete.get("plan source", "NeuXelec trajectories"),
+        "patient": entete.get("patient", ""),
+        "export_date": entete.get("export date", ""),
+        "coordinate_label": etiquette,
+        "n_trajectories": len(trajectoires),
+        "trajectories": trajectoires,
+        "trajectories_t1": trajectoires,
+        "transform": {"mode": "identity", "from_trajectories_file": str(chemin)},
+    }
+
+
+def trajectories_inside_fraction(trajectories, image) -> float:
+    """Quelle part des points tombe dans le volume de l'image.
+
+    La question posee est : ces coordonnees decrivent-elles bien cette
+    IRM. Un plan calcule contre une autre serie se lit sans erreur et
+    se poserait a cote du cerveau ; seul un comptage le montre.
+    """
+    if image is None:
+        return 1.0
+
+    points = []
+    for traj in trajectories or []:
+        for cle in ("entry_t1_lps", "target_t1_lps"):
+            point = traj.get(cle)
+            if point:
+                points.append(point)
+        points.extend(traj.get("contacts_t1_lps") or [])
+    if not points:
+        return 0.0
+
+    taille = image.GetSize()
+    dedans = 0
+    for point in points:
+        try:
+            index = image.TransformPhysicalPointToIndex(
+                tuple(float(v) for v in point)
+            )
+        except Exception:
+            continue
+        if all(0 <= i < n for i, n in zip(index, taille, strict=True)):
+            dedans += 1
+    return dedans / len(points)
