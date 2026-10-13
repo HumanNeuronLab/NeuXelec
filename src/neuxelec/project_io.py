@@ -224,6 +224,20 @@ def write_project_dict(data: dict[str, Any], project_path: str | Path) -> Path:
 
 
 def save_project_json(state, project_path: str | Path) -> Path:
+    """Write the project, unless it was opened in View Only mode.
+
+    The refusal is here and not on the button because six places write a
+    project and three of them do it on their own, after a renamed
+    electrode, a saved camera or a stored slice position. A guard on the
+    button would have left those three open.
+    """
+    from .utils.app_mode import ProjectIsViewOnly, is_view_only
+
+    if is_view_only(state):
+        raise ProjectIsViewOnly(
+            "This project is open in View Only mode: it cannot be saved."
+        )
+
     return write_project_dict(build_project_dict_from_state(state), project_path)
 
 

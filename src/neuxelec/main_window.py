@@ -1322,6 +1322,20 @@ class NeuxelecWindow(QWidget):
         files_enabled = mode == "edit"
         reco_enabled = mode == "edit"
 
+        # Le projet ne peut pas s'ecrire en visualisation: le bouton le
+        # montre, et project_io le refuse de toute facon.
+        try:
+            btn_save = getattr(self, "_save_project_btn", None)
+            if btn_save is not None:
+                btn_save.setEnabled(files_enabled)
+                btn_save.setToolTip(
+                    ""
+                    if files_enabled
+                    else "This project is open in View Only mode: it cannot be saved."
+                )
+        except Exception:
+            pass
+
         # menu buttons
         for name in ("btn_menu_fileCoreg", "btn_menu_reconstruction"):
             try:
@@ -1551,6 +1565,13 @@ class NeuxelecWindow(QWidget):
             pass
 
     def _confirm_and_save_before_leaving_project(self) -> bool:
+        # Rien ne peut avoir ete modifie sur disque en visualisation, donc
+        # il n'y a rien a proposer d'enregistrer en partant.
+        from .utils.app_mode import is_view_only
+
+        if is_view_only(self.state):
+            return True
+
         """
         Return True if the user accepts leaving the current project.
 

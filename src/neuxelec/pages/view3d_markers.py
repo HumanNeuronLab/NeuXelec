@@ -362,9 +362,12 @@ class View3DMarkersMixin:
                 existing.activateWindow()
                 return
 
+            from ..utils.app_mode import is_edit_mode
+
             dlg = MarkerListDialog(
                 markers_provider=self._markers,
                 parent=self._dialog_parent(),
+                editable=is_edit_mode(self.state),
             )
 
             dlg.setModal(False)

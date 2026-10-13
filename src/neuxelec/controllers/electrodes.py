@@ -2602,12 +2602,10 @@ class ElectrodesController(QObject):
             pass
 
     def _is_edit_mode(self) -> bool:
-        """
-        Return True only when the project is opened in Edit mode.
-        """
-        mode = str(getattr(self.state, "app_mode", "edit") or "edit").lower().strip()
+        """True only when the project is opened in Edit mode."""
+        from ..utils.app_mode import is_edit_mode
 
-        return mode == "edit"
+        return is_edit_mode(self.state)
 
 
     # --------------------------------------------------- Stimulation

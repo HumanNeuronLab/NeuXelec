@@ -77,7 +77,12 @@ class StimulationResultsDialog(NeuXelecDialog):
         anatomy_lookup: Callable[[str, int], str | None] | None = None,
         parent=None,
     ):
+        from ..utils.app_mode import is_edit_mode
+
         self.state = state
+        # Les reglages d'affichage restent libres en visualisation; ce sont
+        # les fiches, donnees du patient, qui ne s'ecrivent plus.
+        self._editable = is_edit_mode(state)
         self._on_filters_changed = on_filters_changed
         self._on_display_changed = on_display_changed
         self._anatomy_lookup = anatomy_lookup
@@ -884,6 +889,10 @@ class StimulationResultsDialog(NeuXelecDialog):
         self.btn_add.setObjectName("secondaryButton")
         self.btn_add.clicked.connect(self.add_stimulation)
         buttons.addWidget(self.btn_add)
+        # En visualisation, les fiches se lisent. Les trois boutons qui les
+        # creent, corrigent ou effacent disparaissent plutot que de rester
+        # la, grises, a promettre quelque chose.
+        self.btn_add.setVisible(self._editable)
 
         buttons.addStretch(1)
         self.btn_edit = QPushButton(i18n.tr("Edit"))
@@ -891,10 +900,13 @@ class StimulationResultsDialog(NeuXelecDialog):
         self.btn_edit.clicked.connect(self.edit_selected)
         buttons.addWidget(self.btn_edit)
 
+        self.btn_edit.setVisible(self._editable)
+
         self.btn_delete = QPushButton(i18n.tr("Delete"))
         self.btn_delete.setObjectName("secondaryButton")
         self.btn_delete.clicked.connect(self.delete_selected)
         buttons.addWidget(self.btn_delete)
+        self.btn_delete.setVisible(self._editable)
         detail.addLayout(buttons)
 
         splitter.addWidget(right)

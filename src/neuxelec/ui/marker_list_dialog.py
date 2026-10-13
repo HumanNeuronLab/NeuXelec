@@ -92,8 +92,12 @@ class MarkerListDialog(QDialog):
         self,
         markers_provider: Callable[[], list[dict]],
         parent: QWidget | None = None,
+        editable: bool = True,
     ) -> None:
         super().__init__(parent)
+        # En visualisation, un marqueur se regarde et s'exporte; le
+        # renommer ou l'effacer serait modifier les donnees du patient.
+        self._editable = bool(editable)
 
         self._markers_provider = markers_provider
         self._positioned_once = False
@@ -302,7 +306,7 @@ class MarkerListDialog(QDialog):
 
         menu.addSeparator()
 
-        act_edit = menu.addAction("Edit marker")
+        act_edit = menu.addAction("Edit marker") if self._editable else None
 
         visible = bool(marker.get("visible", True))
         act_visibility = menu.addAction("Hide marker" if visible else "Show marker")
@@ -312,7 +316,7 @@ class MarkerListDialog(QDialog):
         # donnait deux exports voisins qui ne font pas la meme chose.
         menu.addSeparator()
 
-        act_delete = menu.addAction("Delete marker")
+        act_delete = menu.addAction("Delete marker") if self._editable else None
 
         choice = menu.exec(self.list_markers.viewport().mapToGlobal(pos))
 

@@ -599,8 +599,9 @@ view); <i>Show coronal slice</i>, <i>Show axial slice</i>, <i>Show sagittal
 slice</i> (3D view only); <i>Add stimulation result</i>, on every page;
 <i>Edit coordinates</i> (Reconstruction only);
 <i>Delete contact</i>, or <i>Delete N contacts</i>.</p>
-<p>In View Only mode, renaming and deleting are hidden; the colour, the labels
-and the projection stay available.</p>
+<p>In View Only mode, renaming, deleting and <i>Add stimulation result</i>
+are hidden; the colour, the labels and the projection stay available. See
+<i>View Only mode</i> for the whole of it.</p>
 
 <h3>Load Planning, on the Files page</h3>
 <p><i>Review plan alignment</i> reopens the comparison of the planning MRI with
@@ -627,6 +628,44 @@ names</i>, <i>Add</i> or <i>Remove patient name</i>, <i>Delete patient</i>. On
 one electrode: <i>Color</i>, <i>Add</i> or <i>Remove labels</i>. On a contact:
 <i>Add</i> or <i>Remove label</i>, <i>Show coronal</i>, <i>axial</i> or
 <i>sagittal slice</i>.</p>
+""",
+    ),
+    Section(
+        id="viewonly",
+        title="View Only mode",
+        body="""
+<p>A project can be opened to be read rather than worked on, to hand a case
+over without any risk of changing it.</p>
+
+<h3>What stays yours to play with</h3>
+<p>Everything that only changes what you see: colours and opacities, the
+filters and the appearance of the stimulation results, the camera, which slice
+is shown, labels, surface projections, the parcellation, full screen. You can
+explore a case exactly as in Edit mode.</p>
+<p>Every export stays available too, since none of them writes anything back:
+contact coordinates, BIDS, the stimulation results, the markers, screenshots in
+PNG, PDF or SVG, and the rotating GIFs.</p>
+
+<h3>What is not offered</h3>
+<p>Anything that changes the patient's data. The Files and Reconstruction pages
+are closed, so no image is imported, coregistered, deleted or renamed. In the
+electrode list, renaming and deleting are hidden, and so is <i>Add stimulation
+result</i>. In the 3D scene, <i>Add marker</i>, <i>Move marker</i>, <i>Edit
+marker</i> and <i>Delete marker</i> are hidden, while <i>Marker list</i>,
+<i>Hide marker</i> and the exports remain. The stimulation window shows its
+cards and its filters, without the buttons that add, correct or delete one.
+<i>Load MNI electrodes.tsv</i> and <i>Delete patient</i> are hidden from the
+MNI list.</p>
+
+<h3>The project file is never written</h3>
+<p>And that is enforced where the writing happens, not on the Save button.
+NeuXelec saves a project from six places, three of them on their own after a
+renamed electrode, a saved camera or a stored slice position; a guard on the
+button would have left those three writing. So the function that writes
+refuses, the button is switched off to say so, and leaving a project no longer
+asks whether you want to save it.</p>
+<p>A consequence worth knowing: a colour or a camera you change in View Only
+lasts as long as the session, and no longer.</p>
 """,
     ),
     Section(

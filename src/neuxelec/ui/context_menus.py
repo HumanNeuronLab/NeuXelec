@@ -197,6 +197,7 @@ def exec_3d_view_menu(
     fmri_keep_on: bool = False,
     background_is_custom: bool = False,
     stimulation_mode_on: bool = False,
+    editable: bool = True,
 ) -> str | None:
 
     menu = make_base_menu()
@@ -213,14 +214,19 @@ def exec_3d_view_menu(
     act_delete_marker = None
     act_show_hidden_markers = None
 
+    # Poser, deplacer, renommer ou supprimer un marqueur ecrit dans le
+    # projet: ce sont des donnees, pas de l'affichage. Montrer, cacher et
+    # exporter restent, puisqu'ils ne changent rien.
     if marker_under_cursor:
-        act_edit_marker = menu.addAction("Edit marker…")
-        act_move_marker = menu.addAction("Move marker")
+        if editable:
+            act_edit_marker = menu.addAction("Edit marker…")
+            act_move_marker = menu.addAction("Move marker")
         act_hide_marker = menu.addAction("Hide marker")
         act_export_marker = menu.addAction("Export marker…")
-        act_delete_marker = menu.addAction("Delete marker")
+        if editable:
+            act_delete_marker = menu.addAction("Delete marker")
 
-    elif can_add_marker:
+    elif can_add_marker and editable:
         act_add_marker = menu.addAction("Add marker…")
 
     if has_hidden_markers:
@@ -351,7 +357,8 @@ def exec_3d_view_menu(
         add_menu_section(menu, "MNI ATLAS")
 
     if show_mni_load_option:
-        act_load_mni_electrodes = menu.addAction("Load MNI electrodes.tsv…")
+        if editable:
+            act_load_mni_electrodes = menu.addAction("Load MNI electrodes.tsv…")
 
     if show_mni_t1_option:
         act_toggle_mni_t1_slices = menu.addAction(
@@ -669,7 +676,9 @@ def exec_electrode_tree_menu(
         # A stimulation result is entered from the contact it was
         # stimulated from, on any page: it is a record, not a view setting.
         menu.addSeparator()
-        act_add_stimulation = menu.addAction("Add stimulation result")
+        # Une stimulation est une donnee du patient, pas un reglage.
+        if editable:
+            act_add_stimulation = menu.addAction("Add stimulation result")
 
         # Edit coordinates only on Reconstruction
         if current_page == "pageReconstruction":
@@ -709,13 +718,14 @@ def exec_electrode_tree_menu(
         return None
 
 
-def exec_mni_electrode_tree_menu(
+def exec_mni_electrode_tree_menu(  # noqa: C901
     global_pos,
     *,
     kind: str,
     labels_on: bool = False,
     electrode_names_on: bool = False,
     patient_name_on: bool = False,
+    editable: bool = True,
 ) -> str | None:
     """
     Context menu for imported MNI electrodes in tv_Electrodes_3.
@@ -748,7 +758,8 @@ def exec_mni_electrode_tree_menu(
         )
 
         menu.addSeparator()
-        act_delete_patient = menu.addAction("Delete patient")
+        if editable:
+            act_delete_patient = menu.addAction("Delete patient")
 
     elif kind == "mni_group":
         act_color = menu.addAction("Color")

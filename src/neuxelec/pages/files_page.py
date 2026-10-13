@@ -5465,6 +5465,12 @@ class FilesPage:
         points at the new file, the file it pointed at before is forgotten.
         """
         from ..utils import modality_files as mf
+        from ..utils.app_mode import is_view_only
+
+        # Ceinture: la page Files est deja hors d'atteinte en visualisation,
+        # mais c'est la seule fenetre de NeuXelec qui efface des fichiers.
+        if is_view_only(self.state):
+            chain = []
 
         if chain is None:
             chain = mf.chain_for(modality, self.state, keep=out_path)

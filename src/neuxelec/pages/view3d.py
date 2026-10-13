@@ -8756,8 +8756,11 @@ class View3DPage(
                 not bool(marker.get("visible", True)) for marker in self._markers()
             )
 
+            from ..utils.app_mode import is_edit_mode
+
             choice = exec_3d_view_menu(
                 global_pos,
+                editable=is_edit_mode(self.state),
                 stimulation_mode_on=stimulation_mode_on,
                 has_lh=bool(lh_loaded and pial_checked),
                 has_rh=bool(rh_loaded and pial_checked),
@@ -13708,8 +13711,11 @@ class View3DPage(
                 ci = int(item.data(0, Qt.UserRole + 53))
                 labels_on = bool(mni_set.get("contact_label_visible", {}).get(str(ci), False))
 
+            from ..utils.app_mode import is_edit_mode
+
             choice = exec_mni_electrode_tree_menu(
                 tree.viewport().mapToGlobal(pos),
+                editable=is_edit_mode(self.state),
                 kind=str(kind),
                 labels_on=bool(labels_on),
                 electrode_names_on=bool(electrode_names_on),
