@@ -57,6 +57,7 @@ from neuxelec.utils.micro_tetrodes import ring_points, tetrode_ring
 from neuxelec.utils.mni_electrodes_io import load_bids_mni_electrodes_tsv
 
 from .view3d_camera import View3DCameraMixin
+from .view3d_display_settings import View3DDisplaySettingsMixin
 from .view3d_export import View3DExportMixin
 from .view3d_fullscreen import View3DFullscreenMixin
 from .view3d_markers import View3DMarkersMixin
@@ -249,6 +250,7 @@ class _MniTreeBulkCheckFilter(QObject):
 
 
 class View3DPage(
+    View3DDisplaySettingsMixin,
     View3DExportMixin,
     View3DFullscreenMixin,
     View3DMarkersMixin,

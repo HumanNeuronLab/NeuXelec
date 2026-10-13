@@ -293,6 +293,10 @@ double click returns to the plane of the electrode.</p>
 parcellations. A parcellation and a functional overlay are mutually exclusive,
 so the colours stay readable. Every card carries its own opacity and threshold;
 an fMRI threshold left at <i>auto</i> is derived from the map itself.</p>
+<p>These settings travel with the project. Reopen it and the window of the PET,
+the threshold of the SISCOM, the opacity of the CT and the layers that were
+shown come back as you left them, instead of being found again by hand at every
+opening.</p>
 
 <h3>Quick tools</h3>
 <p>The small arrow in the corner of each slice opens the quick tools: save a
@@ -366,7 +370,8 @@ Reconstruction page at the position of the 3D marker.</p>
 <p>The panels under the scene control the brain (mask, pial surfaces,
 isosurface), the electrodes, the three slice planes, and each functional
 overlay: PET, SPECT, SISCOM and fMRI, with threshold, opacity and minimum
-cluster size.</p>
+cluster size. Like those of the oblique page, these settings are saved with the
+project and come back with it, the first time you open the view.</p>
 
 <h3>Quick tools</h3>
 <p>The arrow in the corner of the scene opens the quick tools: screenshot,

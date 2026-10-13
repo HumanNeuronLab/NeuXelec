@@ -195,6 +195,10 @@ def build_project_dict_from_state(state) -> dict[str, Any]:
         # MNI electrode sets (generated or loaded), including per-set ("color")
         # and per-electrode ("group_color") colours, so they are restored on reload.
         "mni_electrode_sets": _json_safe(getattr(state, "mni_electrode_sets", []) or []),
+        # Comment les calques etaient regles: fenetre du PET, seuil du
+        # SISCOM, opacite du CT. Les retrouver evite de refaire ce reglage
+        # a chaque ouverture.
+        "display": _collect_display_settings(state),
         "view3d": {
             "saved_camera": getattr(state, "view3d_saved_camera", None),
         },
@@ -202,6 +206,41 @@ def build_project_dict_from_state(state) -> dict[str, Any]:
             "saved_views": getattr(state, "oblique_slice_saved_views", {}) or {},
         },
     }
+
+
+def _collect_display_settings(state) -> dict[str, Any]:
+    """Ask each page how its overlays are set, right now.
+
+    Asked at saving time rather than kept in step on every slider move:
+    the pages own their widgets, and a copy kept elsewhere would be one
+    more thing to forget to update.
+    """
+    out: dict[str, Any] = {}
+    relus = getattr(state, "display_settings", None) or {}
+    servies = getattr(state, "display_settings_applied", None) or set()
+
+    for cle, attribut in (("view3d", "view3d_page"), ("oblique", "oblique_page")):
+        # Une page qui n'a pas ete ouverte n'a pas recu ses reglages: ses
+        # widgets sont aux valeurs par defaut, et les lire effacerait ce
+        # que le projet gardait. On reconduit donc ce qui a ete relu.
+        if cle not in servies:
+            ancien = relus.get(cle)
+            if isinstance(ancien, dict) and ancien:
+                out[cle] = _json_safe(ancien)
+            continue
+
+        page = getattr(state, attribut, None)
+        lire = getattr(page, "display_settings_dict", None)
+        if not callable(lire):
+            continue
+        try:
+            bloc = lire()
+        except Exception:
+            continue
+        if bloc:
+            out[cle] = _json_safe(bloc)
+
+    return out
 
 
 def write_project_dict(data: dict[str, Any], project_path: str | Path) -> Path:
@@ -323,6 +362,7 @@ def create_empty_project_file(project_path: str | Path, patient_id: str) -> Path
         "stimulation_display": {},
         "markers": [],
         "converted_nifti_by_role": {},
+        "display": {},
         "view3d": {
             "saved_camera": None,
         },
@@ -488,6 +528,13 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
     display = data.get("stimulation_display")
     state.stimulation_display = display if isinstance(display, dict) else {}
     state.markers = _safe_list(data.get("markers"))
+
+    # Les reglages d'affichage attendent dans l'etat: les pages ne sont
+    # pas forcement pretes a ce moment du chargement, et c'est la fenetre
+    # principale qui les leur passera une fois les images en place.
+    affichage = data.get("display")
+    state.display_settings = affichage if isinstance(affichage, dict) else {}
+    state.display_settings_applied = set()
 
     # Un projet ecrit avant n'a pas ce bloc: la chaine d'une
     # modalite aura simplement un maillon de moins a proposer.

@@ -713,6 +713,9 @@ class NeuxelecWindow(QWidget):
 
         apply_project_dict_to_state(self.state, data, project_path)
         self.state.app_mode = str(mode)
+        # Un autre projet: ses reglages d'affichage n'ont pas encore ete
+        # reposes, meme si ceux du precedent l'avaient ete.
+        self.state.display_settings_applied = set()
 
         self._apply_patient_id_to_ui()
 
@@ -1491,6 +1494,45 @@ class NeuxelecWindow(QWidget):
         except Exception:
             pass
 
+    def _restore_display_settings(self, key: str, page) -> None:
+        """Put the overlays of one page back the way the project left them.
+
+        When the page opens, and not while the project loads: a page that
+        has nothing on screen yet renders itself behind its own overlay
+        when the user first comes to it, and pushing values into it before
+        that would make it draw twice.
+
+        Once per page and per project: a second visit must not undo what
+        was changed in between.
+        """
+        # Sur l'etat et non sur la fenetre: l'enregistrement a besoin de
+        # savoir quelles pages ont recu leurs reglages pour ne pas ecraser
+        # ceux d'une page restee fermee.
+        deja = getattr(self.state, "display_settings_applied", None)
+        if not isinstance(deja, set):
+            deja = set()
+            self.state.display_settings_applied = deja
+
+        if key in deja:
+            return
+
+        reglages = getattr(self.state, "display_settings", None)
+        bloc = reglages.get(key) if isinstance(reglages, dict) else None
+
+        deja.add(key)
+
+        if not isinstance(bloc, dict) or not bloc:
+            return
+
+        appliquer = getattr(page, "apply_display_settings", None)
+        if not callable(appliquer):
+            return
+
+        try:
+            appliquer(bloc)
+        except Exception as e:
+            print(f"[Project] Could not restore the {key} display settings:", e)
+
     def _on_page_changed(self, index: int):
         """
         Change de page sans afficher une vue partiellement rendue.
@@ -1535,12 +1577,14 @@ class NeuxelecWindow(QWidget):
                     self.oblique_page.set_active_page(True)
                 except Exception:
                     pass
+                self._restore_display_settings("oblique", self.oblique_page)
 
             elif page_name == "page3DView" and hasattr(self.view3d_page, "set_active_page"):
                 try:
                     self.view3d_page.set_active_page(True)
                 except Exception:
                     pass
+                self._restore_display_settings("view3d", self.view3d_page)
 
             elif page_name == "pageReconstruction" and hasattr(self.reco_page, "set_active_page"):
                 try:

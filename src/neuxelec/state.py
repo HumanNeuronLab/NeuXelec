@@ -79,6 +79,13 @@ class AppState:
         self.siscom_diff_in_t1: Any | None = None
         self.siscom_z_in_t1: Any | None = None
         self.siscom_thr_in_t1: Any | None = None
+        # Ce que le projet relu dit des reglages d'affichage, en
+        # attendant que les pages soient pretes a les recevoir.
+        self.display_settings: dict = {}
+        # Les pages qui ont recu les leurs. Une page qui n'a pas ete
+        # ouverte garde ses widgets aux valeurs par defaut, et les
+        # lire effacerait ce que le projet gardait.
+        self.display_settings_applied: set = set()
         # {modalite: NIfTI ecrit en convertissant son dossier DICOM}.
         # Le dossier lui-meme est dans *_source_path; ceci est ce
         # que la conversion a produit, et que rien d'autre ne retenait.

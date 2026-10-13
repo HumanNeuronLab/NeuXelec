@@ -88,6 +88,7 @@ from ..utils.pet_visualization import (
 from ..utils.siscom_visualization import (
     get_siscom_window,
 )
+from .oblique_display_settings import ObliqueDisplaySettingsMixin
 from .oblique_fmri import ObliqueFmriMixin
 from .oblique_spect import ObliqueSpectMixin
 
@@ -104,7 +105,9 @@ def _top_level_window():
     return None
 
 
-class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
+class ObliqueSlicePage(
+    ObliqueDisplaySettingsMixin, ObliqueFmriMixin, ObliqueSpectMixin, QObject
+):
     """
     First implementation of the Oblique Slice page.
 
