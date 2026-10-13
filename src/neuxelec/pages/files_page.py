@@ -384,6 +384,8 @@ class FilesPage:
             self.btn_save_t2.clicked.connect(lambda: self.save_coreg("T2"))
         if self.btn_save_fmri:
             self.btn_save_fmri.clicked.connect(lambda: self.save_coreg("fMRI"))
+        self._install_tidy_button()
+
         if self.btn_save_ct:
             self.btn_save_ct.clicked.connect(lambda: self.save_coreg("CT"))
         if self.btn_save_pet:
@@ -5430,6 +5432,98 @@ class FilesPage:
     # ------------------------------------------------------------------
     # Save (coreg modalities)
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Tidying the patient folder
+    #
+    # A single modality leaves four files behind: the DICOM folder, the
+    # NIfTI of its conversion, the cleaned copy and the coregistered
+    # volume. After seven modalities the folder cannot be read any more,
+    # which is the complaint this answers. The window decides nothing on
+    # its own: see neuxelec.utils.folder_tidy for what it will and will
+    # not ever propose.
+    # ------------------------------------------------------------------
+    def _install_tidy_button(self) -> None:
+        """Add the button under the save buttons, without touching the .ui."""
+        try:
+            from PySide6.QtWidgets import QPushButton, QVBoxLayout
+
+            card = self.ui.findChild(QWidget, "cardFilesToSave")
+            if card is None:
+                return
+            layout = card.layout()
+            if not isinstance(layout, QVBoxLayout):
+                return
+
+            self.btn_tidy_folder = QPushButton("Tidy up this folder...")
+            self.btn_tidy_folder.setObjectName("btn_FilesCoreg_tidyFolder")
+            self.btn_tidy_folder.setCursor(Qt.PointingHandCursor)
+            self.btn_tidy_folder.setToolTip(
+                "See what NeuXelec wrote in the patient folder, and put it away.\n"
+                "Your own files are listed but never moved or deleted."
+            )
+            self.btn_tidy_folder.clicked.connect(self.open_folder_tidy)
+            layout.addWidget(self.btn_tidy_folder)
+        except Exception as e:
+            print("[Files] Tidy button not installed:", e)
+
+    def _patient_folder(self) -> str | None:
+        """The folder the patient's files live in, as far as we can tell."""
+        for candidate in (
+            getattr(self.state, "project_path", None),
+            getattr(self.state, "t1_path", None),
+            getattr(self.state, "t1_source_path", None),
+            getattr(self.state, "last_browse_dir", None),
+        ):
+            if not candidate:
+                continue
+            try:
+                p = Path(str(candidate))
+                return str(p if p.is_dir() else p.parent)
+            except Exception:
+                continue
+        return None
+
+    def open_folder_tidy(self, folder: str | None = None) -> None:
+        folder = folder or self._patient_folder()
+        if not folder or not Path(folder).is_dir():
+            NeuXelecMessageDialog.information(
+                self._dialog_parent(),
+                "Tidy up",
+                "No patient folder yet: open a project or load an image first.",
+            )
+            return
+
+        try:
+            from ..ui.folder_tidy_dialog import FolderTidyDialog
+
+            dialog = FolderTidyDialog(folder, self.state, parent=self._dialog_parent())
+            dialog.exec()
+        except Exception as e:
+            NeuXelecMessageDialog.critical(
+                self._dialog_parent(), "Tidy up", f"Could not open the window.\n\n{e}"
+            )
+
+    def _saved_dialog(self, title: str, out_path: str, message: str = "") -> None:
+        """Say what was saved, and offer to tidy up from the same window.
+
+        The offer rides on a window the user already gets. A dialog of its
+        own after every save would be clicked through without being read
+        within a fortnight, which is how people delete what they needed.
+        """
+        choix = NeuXelecMessageDialog.choice(
+            self._dialog_parent(),
+            title,
+            message or ("Saved:\n" + str(out_path)),
+            [
+                ("tidy", "Tidy up this folder...", False),
+                ("close", "Close", True),
+            ],
+            cancel_text=None,
+        )
+        if choix == "tidy":
+            cible = Path(str(out_path))
+            self.open_folder_tidy(str(cible if cible.is_dir() else cible.parent))
+
     def save_coreg(self, modality: Modality):
         validated = {
             "T2": bool(getattr(self.state, "t2_validated", False)),
@@ -5542,11 +5636,7 @@ class FilesPage:
 
         self._update_buttons()
 
-        NeuXelecMessageDialog.information(
-            None,
-            f"Save {self._display_modality_name(modality)}",
-            "Saved:\n" + out_path,
-        )
+        self._saved_dialog(f"Save {self._display_modality_name(modality)}", out_path)
 
     def save_all_coreg_validated(self) -> None:
         """
@@ -5713,7 +5803,9 @@ class FilesPage:
         if failed:
             NeuXelecMessageDialog.warning(self._dialog_parent(), "Save all", msg)
         else:
-            NeuXelecMessageDialog.information(self._dialog_parent(), "Save all", msg)
+            # Saving everything at once is exactly when the folder fills up,
+            # so the offer to tidy rides on this window too.
+            self._saved_dialog("Save all", out_dir, message=msg)
 
     # ------------------------------------------------------------------
     # Enable / disable rules

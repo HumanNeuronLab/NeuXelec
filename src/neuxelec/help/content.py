@@ -188,6 +188,34 @@ SPECT are validated.</p>
 validated</b> writes everything in one folder. The button keeps a rose outline
 once the file exists on disk.</p>
 
+<h3>7. Tidy up the folder</h3>
+<p>A single modality leaves four files behind: the DICOM folder it came from,
+the NIfTI of that conversion, the cleaned copy NeuXelec reads, and the volume
+written after the coregistration. After seven modalities, plus the transforms,
+the brain mask and the defacing, the folder is no longer readable.</p>
+<p><b>Tidy up this folder</b>, under the save buttons, and the same offer on
+the window that confirms a save, show what is in there in three groups, with a
+size on every line.</p>
+<p><b>Yours. Never moved, never deleted.</b> DICOM folders, the images you
+imported, anything NeuXelec did not write. They are listed so you can see where
+the volume goes, and they have no tick box at all.</p>
+<p><b>Made by NeuXelec, still used by the project.</b> The cleaned copies, the
+coregistered volumes, the transforms. Ticking one moves it into a
+<code>neuxelec</code> subfolder, and the session is pointed at its new place
+straight away. Save the project afterwards to record it.</p>
+<p><b>Made by NeuXelec, nothing uses them any more.</b> A superseded ANTs
+output, the result of a registration that was run again. These are ticked for
+you, and they are the only files deletion is ever offered for. They go to the
+recycle bin when Windows allows it.</p>
+<p>How a file ends up in one group or another is decided by a list of the names
+NeuXelec itself writes. What is not on that list is yours, including what we
+did not think of. One consequence is worth knowing: the name of a coregistered
+volume is the one you typed in the save dialog, so it is only recognised while
+the project still points at it. Once the project has forgotten it, it is
+reported as yours and left alone.</p>
+<p>Nothing happens before you have seen the list and the window has said, in
+one line, how many files move, how many are deleted, and how much that is.</p>
+
 <h3>Export</h3>
 <p>The export dialog writes the contact coordinates as TXT, CSV, TSV, JSON,
 Cartool ELS or iELVIS, in LPS or RAS, and can produce a valid <b>BIDS</b> folder
@@ -623,6 +651,11 @@ sitting next to an <code>aparc+aseg</code> is picked up on its own and refines
 the white-matter labels.</p>
 <p><b>Plan</b>: NeuroInspire <code>.nip</code>.</p>
 <p><b>Export</b>: CSV, TSV, BIDS (<code>electrodes.tsv</code> plus derivatives).</p>
+<p><b>Written next to your images</b>: a cleaned copy
+<code>&lt;name&gt;_neuxelec.nii.gz</code> for every modality, the coregistered
+volumes you save, the ANTs transforms, and the by-products of the brain mask
+and the defacing. <i>Tidy up this folder</i>, on the Files page, puts them away
+without ever touching your own files.</p>
 <p><b>Pictures</b>: PNG and JPEG everywhere, GIF for the rotating animations,
 and PDF or SVG for an oblique slice, where the contacts and their names stay
 objects. The 3D scene has no vector export: see the quick tools of the 3D
