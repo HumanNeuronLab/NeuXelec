@@ -188,33 +188,27 @@ SPECT are validated.</p>
 validated</b> writes everything in one folder. The button keeps a rose outline
 once the file exists on disk.</p>
 
-<h3>7. Tidy up the folder</h3>
-<p>A single modality leaves four files behind: the DICOM folder it came from,
-the NIfTI of that conversion, the cleaned copy NeuXelec reads, and the volume
-written after the coregistration. After seven modalities, plus the transforms,
-the brain mask and the defacing, the folder is no longer readable.</p>
-<p><b>Tidy up this folder</b>, under the save buttons, and the same offer on
-the window that confirms a save, show what is in there in three groups, with a
-size on every line.</p>
-<p><b>Yours. Never moved, never deleted.</b> DICOM folders, the images you
-imported, anything NeuXelec did not write. They are listed so you can see where
-the volume goes, and they have no tick box at all.</p>
-<p><b>Made by NeuXelec, still used by the project.</b> The cleaned copies, the
-coregistered volumes, the transforms. Ticking one moves it into a
-<code>neuxelec</code> subfolder, and the session is pointed at its new place
-straight away. Save the project afterwards to record it.</p>
-<p><b>Made by NeuXelec, nothing uses them any more.</b> A superseded ANTs
-output, the result of a registration that was run again. These are ticked for
-you, and they are the only files deletion is ever offered for. They go to the
-recycle bin when Windows allows it.</p>
-<p>How a file ends up in one group or another is decided by a list of the names
-NeuXelec itself writes. What is not on that list is yours, including what we
-did not think of. One consequence is worth knowing: the name of a coregistered
-volume is the one you typed in the save dialog, so it is only recognised while
-the project still points at it. Once the project has forgotten it, it is
-reported as yours and left alone.</p>
-<p>Nothing happens before you have seen the list and the window has said, in
-one line, how many files move, how many are deleted, and how much that is.</p>
+<h3>7. What the modality leaves behind</h3>
+<p>A CT arrives as a DICOM folder, becomes a NIfTI, then a cleaned copy, and
+only then the volume resampled into MRI 1 that you save. Once that last file
+exists the first three are usually of no further use, and after seven
+modalities they are what makes a patient folder unreadable.</p>
+<p>So the save itself asks. <b>Clean up the CT files</b> opens on the volume
+you have just saved, which heads the list and has no tick box, and lists under
+it everything else of that modality that is still on disk: the DICOM folder
+with its size and its number of slices, the NIfTI of its conversion, the copy
+NeuXelec reads, and an earlier aligned volume if you had saved one.</p>
+<p><b>Nothing is ticked for you.</b> These are your files, the DICOM first of
+all. Tick what you want gone, and the window says in one line how many items
+that is and how much space. <i>Keep everything</i> closes it and changes
+nothing.</p>
+<p>What is deleted goes to the recycle bin when Windows allows it. The project
+is then pointed at the volume you saved, which is a perfectly good image of
+that modality, already in the space of MRI 1: without that, the next opening
+would ask for files that are gone. Save the project to record it.</p>
+<p>The same question follows MRI 2, fMRI, PET, both SPECT, SISCOM and the
+brain mask. A modality that has nothing left to offer simply confirms the
+save.</p>
 
 <h3>Export</h3>
 <p>The export dialog writes the contact coordinates as TXT, CSV, TSV, JSON,
@@ -652,10 +646,10 @@ the white-matter labels.</p>
 <p><b>Plan</b>: NeuroInspire <code>.nip</code>.</p>
 <p><b>Export</b>: CSV, TSV, BIDS (<code>electrodes.tsv</code> plus derivatives).</p>
 <p><b>Written next to your images</b>: a cleaned copy
-<code>&lt;name&gt;_neuxelec.nii.gz</code> for every modality, the coregistered
-volumes you save, the ANTs transforms, and the by-products of the brain mask
-and the defacing. <i>Tidy up this folder</i>, on the Files page, puts them away
-without ever touching your own files.</p>
+<code>&lt;name&gt;_neuxelec.nii.gz</code> for every modality, the NIfTI of a
+DICOM conversion, the coregistered volumes you save, the ANTs transforms, and
+the by-products of the brain mask and the defacing. Saving a modality offers to
+remove the ones that led to it.</p>
 <p><b>Pictures</b>: PNG and JPEG everywhere, GIF for the rotating animations,
 and PDF or SVG for an oblique slice, where the contacts and their names stay
 objects. The 3D scene has no vector export: see the quick tools of the 3D

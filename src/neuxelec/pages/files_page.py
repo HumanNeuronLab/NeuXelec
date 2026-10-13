@@ -384,8 +384,6 @@ class FilesPage:
             self.btn_save_t2.clicked.connect(lambda: self.save_coreg("T2"))
         if self.btn_save_fmri:
             self.btn_save_fmri.clicked.connect(lambda: self.save_coreg("fMRI"))
-        self._install_tidy_button()
-
         if self.btn_save_ct:
             self.btn_save_ct.clicked.connect(lambda: self.save_coreg("CT"))
         if self.btn_save_pet:
@@ -1050,6 +1048,7 @@ class FilesPage:
                 output_path=str(output_path),
             )
 
+            self._remember_conversion(role, source_path, nifti_path)
             return str(nifti_path)
 
         nifti_path = convert_to_nifti_if_needed(
@@ -1057,7 +1056,25 @@ class FilesPage:
             parent=self._dialog_parent(),
         )
 
+        self._remember_conversion(role, source_path, nifti_path)
         return str(nifti_path)
+
+    def _remember_conversion(self, role: str, source_path, nifti_path) -> None:
+        """Keep what a conversion produced, so it can be cleaned up later.
+
+        Only when it produced something new: a NIfTI that was already a
+        NIfTI comes back unchanged, and is the import itself.
+        """
+        try:
+            if not nifti_path or str(nifti_path) == str(source_path):
+                return
+            table = getattr(self.state, "converted_nifti_by_role", None)
+            if not isinstance(table, dict):
+                table = {}
+                self.state.converted_nifti_by_role = table
+            table[str(role)] = str(nifti_path)
+        except Exception:
+            pass
 
     @staticmethod
     def _guess_imaging_role(path: str) -> str:
@@ -4229,6 +4246,10 @@ class FilesPage:
             self.state.last_browse_dir = str(Path(out_path).parent)
         except Exception:
             pass
+        from ..utils import modality_files as _mf
+
+        chaine_masque = _mf.chain_for("brainmask", self.state, keep=out_path)
+
         self._discard_generated_brainmask(out_path)
         self.state.brainmask_path = out_path
         self.state.brainmask_generated = True
@@ -4243,11 +4264,7 @@ class FilesPage:
 
         self._update_buttons()
 
-        NeuXelecMessageDialog.information(
-            None,
-            "Save Brain Mask",
-            "Saved:\n" + out_path,
-        )
+        self._after_save("brainmask", "brain mask", out_path, chaine_masque)
 
     # ------------------------------------------------------------------
     # Iso-surface (NEW)
@@ -4640,6 +4657,10 @@ class FilesPage:
         except Exception as e:
             NeuXelecMessageDialog.critical(self._dialog_parent(), "Save failed", str(e))
             return
+        from ..utils import modality_files as _mf
+
+        chaine_siscom = _mf.chain_for("SISCOM", self.state, keep=out_path)
+
         self.state.siscom_coreg_path = out_path
         self.state.siscom_path = out_path
         try:
@@ -4649,11 +4670,7 @@ class FilesPage:
 
         self._update_buttons()
 
-        NeuXelecMessageDialog.information(
-            None,
-            "Save SISCOM",
-            "Saved:\n" + out_path,
-        )
+        self._after_save("SISCOM", "SISCOM", out_path, chaine_siscom)
 
     # ------------------------------------------------------------------
     # Coreg actions (PAIRWISE)
@@ -5433,96 +5450,54 @@ class FilesPage:
     # Save (coreg modalities)
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
-    # Tidying the patient folder
+    # What a modality leaves behind
     #
-    # A single modality leaves four files behind: the DICOM folder, the
-    # NIfTI of its conversion, the cleaned copy and the coregistered
-    # volume. After seven modalities the folder cannot be read any more,
-    # which is the complaint this answers. The window decides nothing on
-    # its own: see neuxelec.utils.folder_tidy for what it will and will
-    # not ever propose.
+    # A CT arrives as a DICOM folder, becomes a NIfTI, then a cleaned copy,
+    # and only then the volume resampled into MRI 1 that is saved here.
+    # Once that last file exists the other three are usually of no further
+    # use, and they are what makes a patient folder unreadable. The moment
+    # of the save is therefore the moment to ask.
     # ------------------------------------------------------------------
-    def _install_tidy_button(self) -> None:
-        """Add the button under the save buttons, without touching the .ui."""
-        try:
-            from PySide6.QtWidgets import QPushButton, QVBoxLayout
+    def _after_save(self, modality: str, display_name: str, out_path: str, chain=None) -> None:
+        """Confirm the save, and offer to remove what led to it.
 
-            card = self.ui.findChild(QWidget, "cardFilesToSave")
-            if card is None:
-                return
-            layout = card.layout()
-            if not isinstance(layout, QVBoxLayout):
-                return
+        ``chain`` is read before the state is rewritten: once the project
+        points at the new file, the file it pointed at before is forgotten.
+        """
+        from ..utils import modality_files as mf
 
-            self.btn_tidy_folder = QPushButton("Tidy up this folder...")
-            self.btn_tidy_folder.setObjectName("btn_FilesCoreg_tidyFolder")
-            self.btn_tidy_folder.setCursor(Qt.PointingHandCursor)
-            self.btn_tidy_folder.setToolTip(
-                "See what NeuXelec wrote in the patient folder, and put it away.\n"
-                "Your own files are listed but never moved or deleted."
-            )
-            self.btn_tidy_folder.clicked.connect(self.open_folder_tidy)
-            layout.addWidget(self.btn_tidy_folder)
-        except Exception as e:
-            print("[Files] Tidy button not installed:", e)
+        if chain is None:
+            chain = mf.chain_for(modality, self.state, keep=out_path)
 
-    def _patient_folder(self) -> str | None:
-        """The folder the patient's files live in, as far as we can tell."""
-        for candidate in (
-            getattr(self.state, "project_path", None),
-            getattr(self.state, "t1_path", None),
-            getattr(self.state, "t1_source_path", None),
-            getattr(self.state, "last_browse_dir", None),
-        ):
-            if not candidate:
-                continue
-            try:
-                p = Path(str(candidate))
-                return str(p if p.is_dir() else p.parent)
-            except Exception:
-                continue
-        return None
-
-    def open_folder_tidy(self, folder: str | None = None) -> None:
-        folder = folder or self._patient_folder()
-        if not folder or not Path(folder).is_dir():
+        if not chain:
             NeuXelecMessageDialog.information(
                 self._dialog_parent(),
-                "Tidy up",
-                "No patient folder yet: open a project or load an image first.",
+                f"Save {display_name}",
+                "Saved:\n" + str(out_path),
             )
             return
 
         try:
-            from ..ui.folder_tidy_dialog import FolderTidyDialog
+            from ..ui.modality_cleanup_dialog import ModalityCleanupDialog
 
-            dialog = FolderTidyDialog(folder, self.state, parent=self._dialog_parent())
+            dialog = ModalityCleanupDialog(
+                modality,
+                display_name,
+                chain,
+                Path(str(out_path)),
+                self.state,
+                parent=self._dialog_parent(),
+            )
             dialog.exec()
         except Exception as e:
-            NeuXelecMessageDialog.critical(
-                self._dialog_parent(), "Tidy up", f"Could not open the window.\n\n{e}"
+            NeuXelecMessageDialog.information(
+                self._dialog_parent(),
+                f"Save {display_name}",
+                "Saved:\n" + str(out_path) + f"\n\nThe clean-up window could not open.\n{e}",
             )
+            return
 
-    def _saved_dialog(self, title: str, out_path: str, message: str = "") -> None:
-        """Say what was saved, and offer to tidy up from the same window.
-
-        The offer rides on a window the user already gets. A dialog of its
-        own after every save would be clicked through without being read
-        within a fortnight, which is how people delete what they needed.
-        """
-        choix = NeuXelecMessageDialog.choice(
-            self._dialog_parent(),
-            title,
-            message or ("Saved:\n" + str(out_path)),
-            [
-                ("tidy", "Tidy up this folder...", False),
-                ("close", "Close", True),
-            ],
-            cancel_text=None,
-        )
-        if choix == "tidy":
-            cible = Path(str(out_path))
-            self.open_folder_tidy(str(cible if cible.is_dir() else cible.parent))
+        self._update_buttons()
 
     def save_coreg(self, modality: Modality):
         validated = {
@@ -5616,6 +5591,13 @@ class FilesPage:
         except Exception as e:
             NeuXelecMessageDialog.critical(self._dialog_parent(), "Save failed", str(e))
             return
+
+        # Read before the state is rewritten, otherwise the volume saved
+        # by an earlier run of this very button is forgotten here.
+        from ..utils import modality_files as _mf
+
+        chaine = _mf.chain_for(modality, self.state, keep=out_path)
+
         # IMPORTANT: store saved coreg path in state
         if modality == "T2":
             self.state.t2_coreg_path = out_path
@@ -5636,7 +5618,9 @@ class FilesPage:
 
         self._update_buttons()
 
-        self._saved_dialog(f"Save {self._display_modality_name(modality)}", out_path)
+        self._after_save(
+            modality, self._display_modality_name(modality), out_path, chaine
+        )
 
     def save_all_coreg_validated(self) -> None:
         """
@@ -5803,9 +5787,7 @@ class FilesPage:
         if failed:
             NeuXelecMessageDialog.warning(self._dialog_parent(), "Save all", msg)
         else:
-            # Saving everything at once is exactly when the folder fills up,
-            # so the offer to tidy rides on this window too.
-            self._saved_dialog("Save all", out_dir, message=msg)
+            NeuXelecMessageDialog.information(self._dialog_parent(), "Save all", msg)
 
     # ------------------------------------------------------------------
     # Enable / disable rules

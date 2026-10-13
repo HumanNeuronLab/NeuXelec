@@ -187,6 +187,11 @@ def build_project_dict_from_state(state) -> dict[str, Any]:
         # Implantation plan imported from NeuroInspire (already in MRI 1 space).
         "plan": _json_safe(getattr(state, "plan", None)),
         "markers": list(getattr(state, "markers", []) or []),
+        # Ce que chaque conversion DICOM a produit, pour que le
+        # nettoyage d'une modalite sache quoi proposer.
+        "converted_nifti_by_role": dict(
+            getattr(state, "converted_nifti_by_role", {}) or {}
+        ),
         # MNI electrode sets (generated or loaded), including per-set ("color")
         # and per-electrode ("group_color") colours, so they are restored on reload.
         "mni_electrode_sets": _json_safe(getattr(state, "mni_electrode_sets", []) or []),
@@ -303,6 +308,7 @@ def create_empty_project_file(project_path: str | Path, patient_id: str) -> Path
         "stimulations": [],
         "stimulation_display": {},
         "markers": [],
+        "converted_nifti_by_role": {},
         "view3d": {
             "saved_camera": None,
         },
@@ -468,6 +474,15 @@ def apply_project_dict_to_state(state, data: dict[str, Any], project_path: str |
     display = data.get("stimulation_display")
     state.stimulation_display = display if isinstance(display, dict) else {}
     state.markers = _safe_list(data.get("markers"))
+
+    # Un projet ecrit avant n'a pas ce bloc: la chaine d'une
+    # modalite aura simplement un maillon de moins a proposer.
+    converties = data.get("converted_nifti_by_role")
+    state.converted_nifti_by_role = (
+        {str(k): str(v) for k, v in converties.items() if v}
+        if isinstance(converties, dict)
+        else {}
+    )
 
     # A project written before the EEG reader simply has no "eeg" block, and
     # reads back as having no recording, which is what it is.

@@ -79,6 +79,10 @@ class AppState:
         self.siscom_diff_in_t1: Any | None = None
         self.siscom_z_in_t1: Any | None = None
         self.siscom_thr_in_t1: Any | None = None
+        # {modalite: NIfTI ecrit en convertissant son dossier DICOM}.
+        # Le dossier lui-meme est dans *_source_path; ceci est ce
+        # que la conversion a produit, et que rien d'autre ne retenait.
+        self.converted_nifti_by_role: dict[str, str] = {}
         self.t1_source_path: str | None = None
         # T1 conform / resolution check
         # t1_path is the actual T1 used by NeuXelec.
