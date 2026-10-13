@@ -62,7 +62,7 @@ def test_le_fichier_enregistre_ouvre_la_liste_sans_case(fenetre):
     premiere = _lignes(fenetre)[0]
 
     assert premiere.text(0) == "CT_to_T1.nii.gz"
-    assert "kept" in premiere.text(2)
+    assert premiere.text(2) == "just saved"
     assert not (premiere.flags() & Qt.ItemIsUserCheckable)
 
 
@@ -74,15 +74,14 @@ def test_rien_n_est_coche_d_avance(fenetre):
 
 def test_tant_que_rien_n_est_coche_le_bouton_dort(fenetre):
     assert not fenetre.btn_delete.isEnabled()
-    assert "changes nothing" in fenetre.lbl_preview.text()
+    assert fenetre.lbl_preview.text() == "Nothing ticked"
 
 
 def test_cocher_annonce_ce_qui_part(fenetre):
     _lignes(fenetre)[1].setCheckState(0, Qt.Checked)
 
     assert fenetre.btn_delete.isEnabled()
-    assert "Will delete 1 item(s)" in fenetre.lbl_preview.text()
-    assert "100 B" in fenetre.lbl_preview.text()
+    assert fenetre.lbl_preview.text() == "1 ticked, 100 B"
 
 
 def test_l_entete_nomme_la_modalite_et_le_fichier_enregistre(fenetre):
@@ -104,6 +103,6 @@ def test_un_dossier_se_voit_comme_un_dossier(app, tmp_path):
 
     ligne = _lignes(f)[1]
     assert ligne.text(0).endswith("\\")
-    assert "3 file(s)" in ligne.text(2)
+    assert "3 files" in ligne.text(2)
 
     f.deleteLater()

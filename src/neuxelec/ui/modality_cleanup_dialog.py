@@ -2,12 +2,12 @@
 
 A CT arrives as a DICOM folder, becomes a NIfTI, then a cleaned copy,
 and only then the volume resampled into MRI 1 that the user saves. Once
-that last file exists, the other three are usually of no further use,
-and they are what makes a patient folder unreadable.
+that last file exists the other three are usually of no further use, and
+they are what makes a patient folder unreadable.
 
-The window therefore opens on the save, lists exactly those files with
-their size, and ticks nothing: they belong to the user, the DICOM above
-all, and what is deleted here is deleted on their say-so alone.
+The window says as little as possible: a line per file, its size, three
+words for what it is. The list is the explanation, so there is no
+paragraph above it, and the window is only as tall as its rows.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..utils import modality_files as mf
-from .neuxelec_dialog import MUTED, NeuXelecDialog, explain
+from .neuxelec_dialog import MUTED, NeuXelecDialog
 from .neuxelec_message_dialog import NeuXelecMessageDialog
 
 
@@ -32,8 +32,8 @@ class ModalityCleanupDialog(NeuXelecDialog):
 
     def __init__(self, modality: str, display_name: str, chain, kept, state, parent=None):
         super().__init__(
-            f"Clean up the {display_name} files",
-            f"Saved: {kept}",
+            f"Clean up {display_name}",
+            getattr(kept, "name", str(kept)),
             parent=parent,
         )
         self.modality = str(modality)
@@ -43,17 +43,9 @@ class ModalityCleanupDialog(NeuXelecDialog):
         self.state = state
         self.report: dict | None = None
 
-        self.body.addWidget(
-            explain(
-                f"These files were used to produce the {display_name} you have "
-                "just saved. Tick the ones to delete: nothing is ticked for you, "
-                "and the saved volume is never touched."
-            )
-        )
-
         self.tree = QTreeWidget()
         self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(["File", "Size", "What it is"])
+        self.tree.setHeaderHidden(True)
         self.tree.setRootIsDecorated(False)
         self.tree.setUniformRowHeights(True)
         self.tree.itemChanged.connect(lambda *_a: self._update_preview())
@@ -61,30 +53,29 @@ class ModalityCleanupDialog(NeuXelecDialog):
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.body.addWidget(self.tree, 1)
+        self.body.addWidget(self.tree)
 
         self._fill()
 
-        self.lbl_preview = QLabel("")
-        self.lbl_preview.setWordWrap(True)
-        self.lbl_preview.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
-        self.body.addWidget(self.lbl_preview)
-
         row = QHBoxLayout()
-        self.btn_delete = QPushButton("Delete the ticked files")
+        self.lbl_preview = QLabel("")
+        self.lbl_preview.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
+
+        self.btn_delete = QPushButton("Delete")
         self.btn_delete.setObjectName("primaryButton")
         self.btn_delete.clicked.connect(self._delete)
 
-        self.btn_keep = QPushButton("Keep everything")
+        self.btn_keep = QPushButton("Keep all")
         self.btn_keep.setObjectName("secondaryButton")
         self.btn_keep.clicked.connect(self.reject)
 
+        row.addWidget(self.lbl_preview)
         row.addStretch(1)
         row.addWidget(self.btn_delete)
         row.addWidget(self.btn_keep)
         self.body.addLayout(row)
 
-        self.size_like_electrode_list(2.6)
+        self._size_to_content()
         self._update_preview()
 
     # ----------------------------------------------------------- le contenu
@@ -92,25 +83,20 @@ class ModalityCleanupDialog(NeuXelecDialog):
         self.tree.blockSignals(True)
         self.tree.clear()
 
-        # Le fichier garde, en premier et sans case: il est la raison de
-        # cette fenetre, et il ne doit pas pouvoir partir avec les autres.
+        # Le fichier garde ouvre la liste et n'a pas de case: il est la
+        # raison de cette fenetre, pas un candidat au depart.
         garde = QTreeWidgetItem(
             self.tree,
-            [
-                str(getattr(self.kept, "name", self.kept)),
-                "",
-                "kept: the volume you have just saved",
-            ],
+            [str(getattr(self.kept, "name", self.kept)), "", "just saved"],
         )
         garde.setFlags(Qt.ItemIsEnabled)
         garde.setDisabled(True)
 
         for fichier in self.chain:
-            nom = fichier.name
+            nom = fichier.name + ("\\" if fichier.is_folder else "")
             quoi = fichier.label
             if fichier.is_folder:
-                nom = nom + "\\"
-                quoi = f"{quoi}, {fichier.file_count} file(s)"
+                quoi = f"{quoi}, {fichier.file_count} files"
 
             item = QTreeWidgetItem(self.tree, [nom, mf.human_size(fichier.size), quoi])
             item.setData(0, Qt.UserRole, fichier)
@@ -119,6 +105,22 @@ class ModalityCleanupDialog(NeuXelecDialog):
             item.setCheckState(0, Qt.Unchecked)
 
         self.tree.blockSignals(False)
+
+    def _size_to_content(self) -> None:
+        """Aussi haute que ses lignes, pas que l'ecran.
+
+        La hauteur d'une ligne est demandee a la liste elle-meme: la
+        calculer de tete laissait une barre de defilement pour une ligne
+        qui manquait.
+        """
+        lignes = len(self.chain) + 1
+        hauteur_ligne = max(22, self.tree.sizeHintForRow(0))
+        # Exacte, et non minimale: le nombre de lignes ne bouge pas, donc
+        # une liste plus haute ne serait que du vide.
+        self.tree.setFixedHeight(min(380, hauteur_ligne * lignes + 12))
+        self.setMinimumSize(420, 200)
+        self.adjustSize()
+        self.resize(560, self.height())
 
     def _ticked(self) -> list:
         out = []
@@ -135,9 +137,9 @@ class ModalityCleanupDialog(NeuXelecDialog):
         octets = sum(int(f.size) for f in choisis)
         self.btn_delete.setEnabled(bool(choisis))
         self.lbl_preview.setText(
-            "Nothing ticked: closing this window changes nothing."
+            "Nothing ticked"
             if not choisis
-            else f"Will delete {len(choisis)} item(s), {mf.human_size(octets)}."
+            else f"{len(choisis)} ticked, {mf.human_size(octets)}"
         )
 
     # ----------------------------------------------------------- l'execution
@@ -146,57 +148,25 @@ class ModalityCleanupDialog(NeuXelecDialog):
         if not choisis:
             return
 
-        lignes = [f"{len(choisis)} item(s) will be deleted:"]
-        for fichier in choisis[:10]:
-            lignes.append(f"  {fichier.name}   {mf.human_size(fichier.size)}")
-        if len(choisis) > 10:
-            lignes.append(f"  and {len(choisis) - 10} more")
-        lignes.append("")
-        lignes.append(
-            "They go to the recycle bin when Windows allows it, and are removed "
-            "for good otherwise."
-        )
-        lignes.append(
-            f"The {self.display_name} of this project then points at the volume "
-            "you have just saved."
-        )
-
+        octets = mf.human_size(sum(int(f.size) for f in choisis))
         if not NeuXelecMessageDialog.question(
             self,
-            f"Clean up the {self.display_name} files",
-            "\n".join(lignes),
+            "Delete",
+            f"Delete {len(choisis)} item(s), {octets}?\n"
+            "To the recycle bin when Windows allows it.\n"
+            f"The project then points at {getattr(self.kept, 'name', self.kept)}.",
             accept_text="Delete",
         ):
             return
 
         self.report = mf.delete_chosen(choisis, self.state, self.modality, self.kept)
-        self._show_report(self.report)
-        self.accept()
 
-    def _show_report(self, rapport: dict) -> None:
-        lignes = []
-        if rapport["deleted"]:
-            ou = "to the recycle bin" if rapport["recycle_bin"] else "for good"
-            lignes.append(
-                f"Deleted {len(rapport['deleted'])} item(s), "
-                f"{mf.human_size(rapport['bytes'])}, {ou}."
-            )
-        if rapport["fields"]:
-            lignes.append("")
-            lignes.append(
-                "Save the project so it records that this modality is now the "
-                "volume you saved."
-            )
-        if rapport["failed"]:
-            lignes.append("")
-            lignes.append("Left alone:")
-            for chemin, raison in rapport["failed"][:8]:
+        # Rien a annoncer quand tout s'est passe: les fichiers ne sont plus
+        # la, et la fenetre se ferme. Seul un echec merite d'etre dit.
+        if self.report["failed"]:
+            lignes = ["Left alone:"]
+            for chemin, raison in self.report["failed"][:6]:
                 lignes.append(f"  {chemin}: {raison}")
+            NeuXelecMessageDialog.warning(self, "Delete", "\n".join(lignes))
 
-        if not lignes:
-            return
-
-        if rapport["failed"]:
-            NeuXelecMessageDialog.warning(self, "Clean up", "\n".join(lignes))
-        else:
-            NeuXelecMessageDialog.information(self, "Clean up", "\n".join(lignes))
+        self.accept()

@@ -193,14 +193,14 @@ once the file exists on disk.</p>
 only then the volume resampled into MRI 1 that you save. Once that last file
 exists the first three are usually of no further use, and after seven
 modalities they are what makes a patient folder unreadable.</p>
-<p>So the save itself asks. <b>Clean up the CT files</b> opens on the volume
+<p>So the save itself asks. <b>Clean up CT</b> opens on the volume
 you have just saved, which heads the list and has no tick box, and lists under
 it everything else of that modality that is still on disk: the DICOM folder
 with its size and its number of slices, the NIfTI of its conversion, the copy
 NeuXelec reads, and an earlier aligned volume if you had saved one.</p>
 <p><b>Nothing is ticked for you.</b> These are your files, the DICOM first of
 all. Tick what you want gone, and the window says in one line how many items
-that is and how much space. <i>Keep everything</i> closes it and changes
+that is and how much space. <i>Keep all</i> closes it and changes
 nothing.</p>
 <p>What is deleted goes to the recycle bin when Windows allows it. The project
 is then pointed at the volume you saved, which is a perfectly good image of

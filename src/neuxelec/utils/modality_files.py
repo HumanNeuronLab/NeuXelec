@@ -29,43 +29,43 @@ from pathlib import Path
 #:   (champ de l'etat, ce que c'est, en une ligne)
 CHAIN_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
     "T2": (
-        ("t2_source_path", "what you imported"),
-        ("t2_path", "the copy NeuXelec reads"),
-        ("t2_coreg_path", "an earlier volume aligned on MRI 1"),
+        ("t2_source_path", "imported"),
+        ("t2_path", "cleaned copy"),
+        ("t2_coreg_path", "earlier aligned"),
     ),
     "fMRI": (
-        ("fmri_source_path", "what you imported"),
-        ("fmri_path", "the copy NeuXelec reads"),
-        ("fmri_reg_path", "the grey anatomy recovered from the colour fusion"),
-        ("fmri_coreg_path", "an earlier volume aligned on MRI 1"),
+        ("fmri_source_path", "imported"),
+        ("fmri_path", "cleaned copy"),
+        ("fmri_reg_path", "fusion anatomy"),
+        ("fmri_coreg_path", "earlier aligned"),
     ),
     "CT": (
-        ("ct_source_path", "what you imported"),
-        ("ct_path", "the copy NeuXelec reads"),
-        ("ct_coreg_path", "an earlier volume aligned on MRI 1"),
+        ("ct_source_path", "imported"),
+        ("ct_path", "cleaned copy"),
+        ("ct_coreg_path", "earlier aligned"),
     ),
     "PET": (
-        ("pet_source_path", "what you imported"),
-        ("pet_path", "the copy NeuXelec reads"),
-        ("pet_coreg_path", "an earlier volume aligned on MRI 1"),
+        ("pet_source_path", "imported"),
+        ("pet_path", "cleaned copy"),
+        ("pet_coreg_path", "earlier aligned"),
     ),
     "ictalSPECT": (
-        ("ictal_spect_source_path", "what you imported"),
-        ("ictal_spect_path", "the copy NeuXelec reads"),
-        ("ictal_spect_coreg_path", "an earlier volume aligned on MRI 1"),
+        ("ictal_spect_source_path", "imported"),
+        ("ictal_spect_path", "cleaned copy"),
+        ("ictal_spect_coreg_path", "earlier aligned"),
     ),
     "interictalSPECT": (
-        ("interictal_spect_source_path", "what you imported"),
-        ("interictal_spect_path", "the copy NeuXelec reads"),
-        ("interictal_spect_coreg_path", "an earlier volume aligned on MRI 1"),
+        ("interictal_spect_source_path", "imported"),
+        ("interictal_spect_path", "cleaned copy"),
+        ("interictal_spect_coreg_path", "earlier aligned"),
     ),
     "SISCOM": (
-        ("siscom_path", "the SISCOM map"),
-        ("siscom_coreg_path", "an earlier SISCOM aligned on MRI 1"),
+        ("siscom_path", "SISCOM map"),
+        ("siscom_coreg_path", "earlier aligned"),
     ),
     "brainmask": (
-        ("brainmask_path", "the mask you loaded"),
-        ("brainmask_generated_path", "the mask NeuXelec computed"),
+        ("brainmask_path", "loaded mask"),
+        ("brainmask_generated_path", "computed mask"),
     ),
 }
 
@@ -147,7 +147,7 @@ def chain_for(modality: str, state, keep=None) -> list[ChainFile]:
     nifti = converted_nifti(state, modality)
     if nifti:
         # Juste apres l'import: c'est la sortie de la conversion DICOM.
-        entries.insert(1, (None, nifti, "the NIfTI written when converting that DICOM"))
+        entries.insert(1, (None, nifti, "converted NIfTI"))
 
     for champ, valeur, libelle in entries:
         if not isinstance(valeur, str) or not valeur.strip():
