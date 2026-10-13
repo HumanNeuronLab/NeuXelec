@@ -147,8 +147,9 @@ PAGE_TWO = f"""
       "Contact coordinates as TXT, CSV, TSV, JSON, Cartool ELS or iELVIS, in "
       "LPS or RAS, and a valid BIDS folder with the anatomical labels. "
       "Stimulation results leave as a table, a report or the records "
-      "themselves. Exported images can be defaced on the way out, and "
-      "screenshots and rotating GIFs come out on the colour of your slide.")}
+      "themselves. Exported images can be defaced on the way out, screenshots "
+      "and GIFs take the colour of your slide, and a slice leaves as PDF or "
+      "SVG with its labels still editable.")}
 
 <h2>Functional imaging where you need it</h2>
 <p>PET, ictal and inter-ictal SPECT, and the SISCOM computed inside the

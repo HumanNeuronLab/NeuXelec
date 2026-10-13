@@ -6,19 +6,33 @@ import numpy as np
 import pyvista as pv
 import scipy.io as sio
 import SimpleITK as sitk
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, Qt, QTimer
+from PySide6.QtCore import (
+    QEvent,
+    QMarginsF,
+    QObject,
+    QPoint,
+    QPointF,
+    QRectF,
+    QSize,
+    QSizeF,
+    Qt,
+    QTimer,
+)
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
     QImage,
     QLinearGradient,
+    QPageSize,
     QPainter,
+    QPdfWriter,
     QPen,
     QPixmap,
     QPolygonF,
     QTransform,
 )
+from PySide6.QtSvg import QSvgGenerator
 from PySide6.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
@@ -428,6 +442,9 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         self.slice_length_mm = 80.0
         self.slice_width_mm = 50.0
 
+        # De quoi refaire exactement le dernier trace de chaque vue sur
+        # un autre support: l'export vectoriel rejoue ces arguments.
+        self._last_canvas_args: dict[int, dict] = {}
         self._last_pm1 = None
         self._last_pm2 = None
 
@@ -3008,6 +3025,18 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
 
         target_size = image_label.size()
 
+        self._last_canvas_args[int(slot_index)] = dict(
+            pm_source=pm,
+            slot_index=slot_index,
+            zoom=zoom,
+            pan_xy=pan,
+            contact_rows=contact_rows,
+            contact_cols=contact_cols,
+            contact_names=contact_names,
+            ring_rc=ring_rc,
+            elec_name=elec_name,
+        )
+
         if target_size.width() > 10 and target_size.height() > 10:
             pm_display = self._render_oblique_slice_display_canvas(
                 pm_source=pm,
@@ -3533,130 +3562,180 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
             target_h = max(2, int(target_size.height()))
 
             remove_background = bool(self._get_oblique_slice_background_removed(slot_index))
-            angle = float(self._get_oblique_slice_rotation(slot_index)) % 360.0
-            zoom = max(1.0, float(zoom))
-
-            # -----------------------------------------------------
-            # Left/right display convention.
-            #
-            # Flip the anatomical source before zoom/pan and before
-            # drawing the contacts. Contact columns are mirrored too,
-            # while text labels and PET/SISCOM scalar bars remain readable.
-            # -----------------------------------------------------
-            # Before the flip and the crop, so the cache sees the slice itself
-            # rather than a fresh pixmap on every repaint.
-            if getattr(self, "_slice_background", None):
-                pm_source = self._slice_background_alpha(pm_source)
-
-            source_for_display = QPixmap(pm_source)
-            display_contact_cols = list(contact_cols)
-            display_ring_rc = list(ring_rc or [])
-
-            if bool(getattr(self, "_flip_lr_oblique", True)):
-                flip_transform = QTransform()
-                flip_transform.scale(-1.0, 1.0)
-
-                source_for_display = source_for_display.transformed(
-                    flip_transform,
-                    Qt.SmoothTransformation,
-                )
-
-                source_width = int(source_for_display.width())
-                display_contact_cols = [source_width - 1 - int(col) for col in contact_cols]
-                display_ring_rc = [
-                    (int(r), source_width - 1 - int(c)) for r, c in (ring_rc or [])
-                ]
-
-            # 1) Crop source for zoom/pan BEFORE visual rotation.
-            cropped, x0, y0, crop_w, crop_h = self._crop_source_pixmap_for_zoom(
-                source_for_display,
-                zoom=zoom,
-                pan_xy=pan_xy,
-            )
-
-            # A chosen background takes precedence over the plain "background
-            # removed" mode, and uses a soft edge instead of a hard cut.
             background = getattr(self, "_slice_background", None)
 
-            if not background and remove_background:
-                cropped = self._remove_black_background_from_pixmap(cropped)
-
-            # 2) Final fixed canvas = full QLabel.
             canvas = QPixmap(target_w, target_h)
             if background:
                 canvas.fill(QColor(str(background)))
             else:
                 canvas.fill(Qt.transparent if remove_background else QColor(0, 0, 0))
 
-            # 3) Fit the cropped source into the final canvas.
-            draw_x, draw_y, draw_w, draw_h, _scale = self._fit_source_rect_to_target(
-                cropped.width(),
-                cropped.height(),
+            painter = QPainter(canvas)
+            self._paint_oblique_slice_onto(
+                painter,
                 target_w,
                 target_h,
-            )
-
-            # Make the displayed slice bigger when it is visually rotated,
-            # so the diagonal view fills more of the canvas.
-            if abs(angle) > 1e-6:
-                rotation_cover_scale = 1.35  # increase to 1.45 or 1.55 if needed
-
-                center_x = draw_x + draw_w / 2.0
-                center_y = draw_y + draw_h / 2.0
-
-                draw_w *= rotation_cover_scale
-                draw_h *= rotation_cover_scale
-
-                draw_x = center_x - draw_w / 2.0
-                draw_y = center_y - draw_h / 2.0
-
-            painter = QPainter(canvas)
-            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            painter.setRenderHint(QPainter.TextAntialiasing, True)
-
-            # 4) Rotate ONLY the drawing coordinate system around the canvas centre.
-            # The canvas remains the full rectangular QLabel.
-            cx = float(target_w) / 2.0
-            cy = float(target_h) / 2.0
-
-            painter.translate(cx, cy)
-            painter.rotate(angle)
-            painter.translate(-cx, -cy)
-
-            # 5) Draw the slice in the rotated coordinate system.
-            painter.drawPixmap(
-                int(round(draw_x)),
-                int(round(draw_y)),
-                int(round(draw_w)),
-                int(round(draw_h)),
-                cropped,
-            )
-
-            # 6) Draw contacts in the same rotated coordinate system.
-            self._draw_contacts_on_transformed_canvas(
-                painter=painter,
-                contact_rows=contact_rows,
-                contact_cols=display_contact_cols,
-                contact_names=contact_names,
-                ring_rc=display_ring_rc,
-                elec_name=elec_name,
-                x0=x0,
-                y0=y0,
-                crop_w=crop_w,
-                crop_h=crop_h,
-                draw_x=draw_x,
-                draw_y=draw_y,
-                draw_w=draw_w,
-                draw_h=draw_h,
+                pm_source=pm_source,
+                slot_index=slot_index,
                 zoom=zoom,
+                pan_xy=pan_xy,
+                contact_rows=contact_rows,
+                contact_cols=contact_cols,
+                contact_names=contact_names,
+                elec_name=elec_name,
+                ring_rc=ring_rc,
             )
-
             painter.end()
             return canvas
 
         except Exception:
             return pm_source
+
+    def _paint_oblique_slice_onto(
+        self,
+        painter: QPainter,
+        target_w: int,
+        target_h: int,
+        pm_source: QPixmap,
+        slot_index: int,
+        zoom: float,
+        pan_xy,
+        contact_rows,
+        contact_cols,
+        contact_names,
+        elec_name: str | None,
+        ring_rc=None,
+        fill_background: bool = False,
+    ) -> None:
+        """Dessiner la coupe et ses contacts sur n'importe quel support.
+
+        Le trace est sorti du pixmap pour que l'export vectoriel le rejoue
+        tel quel dans un PDF ou un SVG. L'anatomie y restera une image,
+        puisque ce sont des voxels et que rien ne les vectorise, mais les
+        contacts deviennent des cercles et les noms du texte.
+
+        ``fill_background`` sert aux supports qui arrivent vides: le pixmap,
+        lui, est deja rempli par l'appelant.
+        """
+        remove_background = bool(self._get_oblique_slice_background_removed(slot_index))
+        angle = float(self._get_oblique_slice_rotation(slot_index)) % 360.0
+        zoom = max(1.0, float(zoom))
+
+        if fill_background:
+            fond = getattr(self, "_slice_background", None)
+            if fond:
+                painter.fillRect(0, 0, target_w, target_h, QColor(str(fond)))
+            elif not remove_background:
+                painter.fillRect(0, 0, target_w, target_h, QColor(0, 0, 0))
+
+        # -----------------------------------------------------
+        # Left/right display convention.
+        #
+        # Flip the anatomical source before zoom/pan and before
+        # drawing the contacts. Contact columns are mirrored too,
+        # while text labels and PET/SISCOM scalar bars remain readable.
+        # -----------------------------------------------------
+        # Before the flip and the crop, so the cache sees the slice itself
+        # rather than a fresh pixmap on every repaint.
+        if getattr(self, "_slice_background", None):
+            pm_source = self._slice_background_alpha(pm_source)
+
+        source_for_display = QPixmap(pm_source)
+        display_contact_cols = list(contact_cols)
+        display_ring_rc = list(ring_rc or [])
+
+        if bool(getattr(self, "_flip_lr_oblique", True)):
+            flip_transform = QTransform()
+            flip_transform.scale(-1.0, 1.0)
+
+            source_for_display = source_for_display.transformed(
+                flip_transform,
+                Qt.SmoothTransformation,
+            )
+
+            source_width = int(source_for_display.width())
+            display_contact_cols = [source_width - 1 - int(col) for col in contact_cols]
+            display_ring_rc = [
+                (int(r), source_width - 1 - int(c)) for r, c in (ring_rc or [])
+            ]
+
+        # 1) Crop source for zoom/pan BEFORE visual rotation.
+        cropped, x0, y0, crop_w, crop_h = self._crop_source_pixmap_for_zoom(
+            source_for_display,
+            zoom=zoom,
+            pan_xy=pan_xy,
+        )
+
+        # A chosen background takes precedence over the plain "background
+        # removed" mode, and uses a soft edge instead of a hard cut.
+        background = getattr(self, "_slice_background", None)
+
+        if not background and remove_background:
+            cropped = self._remove_black_background_from_pixmap(cropped)
+
+        # 3) Fit the cropped source into the final canvas.
+        draw_x, draw_y, draw_w, draw_h, _scale = self._fit_source_rect_to_target(
+            cropped.width(),
+            cropped.height(),
+            target_w,
+            target_h,
+        )
+
+        # Make the displayed slice bigger when it is visually rotated,
+        # so the diagonal view fills more of the canvas.
+        if abs(angle) > 1e-6:
+            rotation_cover_scale = 1.35  # increase to 1.45 or 1.55 if needed
+
+            center_x = draw_x + draw_w / 2.0
+            center_y = draw_y + draw_h / 2.0
+
+            draw_w *= rotation_cover_scale
+            draw_h *= rotation_cover_scale
+
+            draw_x = center_x - draw_w / 2.0
+            draw_y = center_y - draw_h / 2.0
+
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+
+        # 4) Rotate ONLY the drawing coordinate system around the canvas centre.
+        # The canvas remains the full rectangular QLabel.
+        cx = float(target_w) / 2.0
+        cy = float(target_h) / 2.0
+
+        painter.translate(cx, cy)
+        painter.rotate(angle)
+        painter.translate(-cx, -cy)
+
+        # 5) Draw the slice in the rotated coordinate system.
+        painter.drawPixmap(
+            int(round(draw_x)),
+            int(round(draw_y)),
+            int(round(draw_w)),
+            int(round(draw_h)),
+            cropped,
+        )
+
+        # 6) Draw contacts in the same rotated coordinate system.
+        self._draw_contacts_on_transformed_canvas(
+            painter=painter,
+            contact_rows=contact_rows,
+            contact_cols=display_contact_cols,
+            contact_names=contact_names,
+            ring_rc=display_ring_rc,
+            elec_name=elec_name,
+            x0=x0,
+            y0=y0,
+            crop_w=crop_w,
+            crop_h=crop_h,
+            draw_x=draw_x,
+            draw_y=draw_y,
+            draw_w=draw_w,
+            draw_h=draw_h,
+            zoom=zoom,
+        )
+
 
     def _apply_display_rotation_and_background(
         self,
@@ -3695,6 +3774,77 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         except Exception:
             return pixmap
 
+    def _save_oblique_slice_vector(
+        self,
+        slot_index: int,
+        filename: str,
+    ) -> bool:
+        """Ecrire la coupe en PDF ou en SVG.
+
+        L'anatomie reste une image, a sa propre resolution: ce sont des
+        voxels, aucun format ne les transforme en traces. Tout le reste,
+        contacts, noms, curseur, barres de couleur, sort en vectoriel,
+        donc net a n'importe quel grossissement et modifiable dans un
+        logiciel de dessin.
+        """
+        arguments = dict(self._last_canvas_args.get(int(slot_index)) or {})
+        if not arguments:
+            return False
+
+        label = self.image1 if int(slot_index) == 1 else self.image2
+        if label is None:
+            return False
+
+        taille = label.size()
+        largeur = max(2, int(taille.width()))
+        hauteur = max(2, int(taille.height()))
+        chemin = str(filename)
+
+        if chemin.lower().endswith(".svg"):
+            support = QSvgGenerator()
+            support.setFileName(chemin)
+            support.setSize(QSize(largeur, hauteur))
+            support.setViewBox(QRectF(0, 0, largeur, hauteur))
+            support.setTitle(f"NeuXelec oblique slice {int(slot_index)}")
+            support.setDescription(
+                "Anatomy as an image, contacts and labels as vector objects."
+            )
+            echelle = 1.0
+        else:
+            support = QPdfWriter(chemin)
+            support.setPageSize(
+                QPageSize(
+                    QSizeF(largeur, hauteur),
+                    QPageSize.Point,
+                    "NeuXelec",
+                    QPageSize.ExactMatch,
+                )
+            )
+            support.setPageMargins(QMarginsF(0, 0, 0, 0))
+            # Le trace reste en coordonnees d'ecran et c'est l'echelle qui
+            # porte la finesse: le texte et les cercles sont decrits, pas
+            # echantillonnes, et l'image de fond est posee a sa taille.
+            support.setResolution(600)
+            support.setTitle(f"NeuXelec oblique slice {int(slot_index)}")
+            echelle = float(support.width()) / float(largeur)
+
+        painter = QPainter(support)
+        try:
+            if echelle != 1.0:
+                painter.scale(echelle, echelle)
+            self._paint_oblique_slice_onto(
+                painter,
+                largeur,
+                hauteur,
+                fill_background=True,
+                **arguments,
+            )
+            self._paint_scalar_bars_onto(painter, largeur, hauteur)
+        finally:
+            painter.end()
+
+        return True
+
     def _save_oblique_slice_screenshot(
         self,
         slot_index: int,
@@ -3703,6 +3853,18 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
     ) -> None:
         try:
             filename = str(filename)
+
+            # PDF et SVG portent la transparence nativement et n'ont donc
+            # pas a etre ramenes au PNG.
+            if filename.lower().endswith((".pdf", ".svg")):
+                if not self._save_oblique_slice_vector(slot_index, filename):
+                    NeuXelecMessageDialog.warning(
+                        self._dialog_parent(),
+                        "Screenshot",
+                        "The slice has not been drawn yet, so there is nothing "
+                        "to export.",
+                    )
+                return
 
             if remove_background and not filename.lower().endswith(".png"):
                 filename = filename.rsplit(".", 1)[0] + ".png"
@@ -6181,17 +6343,36 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         cmap_name: str,
         x_frac: float,
     ) -> QPixmap:
+        """La barre sur un pixmap: le meme trace, sur un support raster."""
         if pm is None or pm.isNull():
             return pm
 
         out = pm.copy()
-
         painter = QPainter(out)
+        self._paint_vertical_scalar_bar(
+            painter, out.width(), out.height(), title, lo, hi, cmap_name, x_frac
+        )
+        painter.end()
+        return out
+
+    def _paint_vertical_scalar_bar(
+        self,
+        painter: QPainter,
+        w: int,
+        h: int,
+        title: str,
+        lo: float,
+        hi: float,
+        cmap_name: str,
+        x_frac: float,
+    ) -> None:
+        """Le trace de la barre, sur n'importe quel support.
+
+        Sorti du pixmap pour que l'export vectoriel ecrive un degrade et du
+        texte la ou le pixmap n'avait que des pixels.
+        """
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.TextAntialiasing, True)
-
-        w = out.width()
-        h = out.height()
 
         hi_txt = f"{float(hi):.2f}"
         lo_txt = f"{float(lo):.2f}"
@@ -6278,9 +6459,6 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         painter.drawText(label_x, hi_y, hi_txt)
         painter.drawText(label_x, lo_y, lo_txt)
 
-        painter.end()
-        return out
-
     def _get_pet_reference(self):
         """Brain-median PET intensity used to normalize the color scale to a ratio.
 
@@ -6354,17 +6532,15 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         lo, hi = get_pet_window(fallback_values, 2.0, 98.0)
         return lo, hi, None
 
-    def _overlay_pet_scalar_bar_on_pixmap(self, pm: QPixmap) -> QPixmap:
-        if pm is None or pm.isNull():
-            return pm
-
+    def _pet_scalar_bar_spec(self) -> dict | None:
+        """Ce que la barre PET doit dire, ou None s'il n'y a pas lieu."""
         show_pet = bool(self.chk_pet is not None and self.chk_pet.isChecked())
         if not show_pet:
-            return pm
+            return None
 
         info = self._get_pet_scalar_bar_range()
         if info is None:
-            return pm
+            return None
 
         gamma = float(info["gamma"])
         lo = float(info["lo"])
@@ -6379,54 +6555,67 @@ class ObliqueSlicePage(ObliqueFmriMixin, ObliqueSpectMixin, QObject):
         else:
             title = f"PET intensity a.u. (γ={gamma:.2f})"
 
-        return self._draw_vertical_scalar_bar_on_pixmap(
-            pm=pm,
-            title=title,
-            lo=lo,
-            hi=hi,
-            cmap_name=self._pet_colormap_name,
-            x_frac=0.70,
-        )
+        return {
+            "title": title,
+            "lo": lo,
+            "hi": hi,
+            "cmap_name": self._pet_colormap_name,
+            "x_frac": 0.70,
+        }
 
-    def _overlay_siscom_scalar_bar_on_pixmap(self, pm: QPixmap) -> QPixmap:
-        if pm is None or pm.isNull():
-            return pm
-
+    def _siscom_scalar_bar_spec(self) -> dict | None:
+        """Ce que la barre SISCOM doit dire, ou None s'il n'y a pas lieu."""
         show_siscom = bool(self.chk_siscom is not None and self.chk_siscom.isChecked())
         if not show_siscom:
-            return pm
+            return None
 
         info = self._get_siscom_scalar_bar_range()
         if info is None:
-            return pm
+            return None
 
-        lo = float(info["lo"])
-        hi = float(info["hi"])
+        return {
+            "title": "SISCOM Z",
+            "lo": float(info["lo"]),
+            "hi": float(info["hi"]),
+            "cmap_name": self._siscom_colormap_name,
+            "x_frac": 0.86,
+        }
 
-        return self._draw_vertical_scalar_bar_on_pixmap(
-            pm=pm,
-            title="SISCOM Z",
-            lo=lo,
-            hi=hi,
-            cmap_name=self._siscom_colormap_name,
-            x_frac=0.86,
-        )
+    def _scalar_bar_specs(self) -> list[dict]:
+        """Les barres a tracer, dans l'ordre, quel que soit le support."""
+        if not bool(getattr(self, "_show_color_scales", True)):
+            return []
+
+        specs: list[dict] = []
+        for nom in (
+            "_pet_scalar_bar_spec",
+            "_siscom_scalar_bar_spec",
+            "_fmri_scalar_bar_spec",
+        ):
+            fonction = getattr(self, nom, None)
+            if fonction is None:
+                continue
+            try:
+                spec = fonction()
+            except Exception:
+                spec = None
+            if spec:
+                specs.append(spec)
+        return specs
 
     def _overlay_scalar_bars_on_pixmap(self, pm: QPixmap) -> QPixmap:
         if pm is None or pm.isNull():
             return pm
 
-        if not bool(getattr(self, "_show_color_scales", True)):
-            return pm
-
         out = pm
-        out = self._overlay_pet_scalar_bar_on_pixmap(out)
-        out = self._overlay_siscom_scalar_bar_on_pixmap(out)
-        try:
-            out = self._overlay_fmri_scalar_bar_on_pixmap(out)
-        except Exception:
-            pass
+        for spec in self._scalar_bar_specs():
+            out = self._draw_vertical_scalar_bar_on_pixmap(pm=out, **spec)
         return out
+
+    def _paint_scalar_bars_onto(self, painter: QPainter, w: int, h: int) -> None:
+        """Les memes barres, sur un support vectoriel."""
+        for spec in self._scalar_bar_specs():
+            self._paint_vertical_scalar_bar(painter, w, h, **spec)
 
     def _overlay_contacts_and_labels_on_display_pixmap(
         self,

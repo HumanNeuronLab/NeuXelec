@@ -296,14 +296,16 @@ class ObliqueFmriMixin:
         return float(self._ofmri_levels(img).get("threshold", 0.0))  # 0 -> auto
 
     # ------------------------------------------------------------ scalar bar
-    def _overlay_fmri_scalar_bar_on_pixmap(self, pm):
-        """Vertical colour bar for the fMRI overlay (same drawer as PET / SISCOM,
-        placed left of the PET bar so the three never overlap)."""
-        if pm is None or pm.isNull():
-            return pm
+    def _fmri_scalar_bar_spec(self):
+        """What the fMRI colour bar says, or None when there is none.
+
+        Placed left of the PET bar so the three never overlap. Returning a
+        description rather than a painted pixmap lets the same bar be drawn
+        on a pixmap or written as vector objects in a PDF or an SVG.
+        """
         try:
             if not self._ofmri_is_on():
-                return pm
+                return None
             img = self._ofmri_img()
             lv = self._ofmri_levels(img)
             thr = self._ofmri_threshold(img)
@@ -314,16 +316,15 @@ class ObliqueFmriMixin:
                 lo, hi = -vmax, vmax
             else:
                 lo, hi = thr, vmax
-            return self._draw_vertical_scalar_bar_on_pixmap(
-                pm=pm,
-                title="fMRI activation",
-                lo=lo,
-                hi=hi,
-                cmap_name=self._ofmri_cmap(img),
-                x_frac=0.54,
-            )
+            return {
+                "title": "fMRI activation",
+                "lo": lo,
+                "hi": hi,
+                "cmap_name": self._ofmri_cmap(img),
+                "x_frac": 0.54,
+            }
         except Exception:
-            return pm
+            return None
 
     # -------------------------------------------------------------- blending
     def _blend_fmri_on_oblique_rgb(self, rgb, center, u, w_axis,

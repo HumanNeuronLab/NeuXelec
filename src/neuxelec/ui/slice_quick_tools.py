@@ -110,7 +110,9 @@ class SliceQuickTools(QWidget):
         self.panel_layout.addWidget(
             self._make_btn(
                 "qt_screenshot.svg",
-                "Save a screenshot of this oblique slice and copy it to the clipboard.",
+                "Save a screenshot of this oblique slice: PNG or JPEG, or PDF and\n"
+                "SVG, where the contacts and their names stay vector\n"
+                "objects. Raster formats are copied to the clipboard too.",
                 self._take_screenshot,
             )
         )
@@ -431,7 +433,8 @@ class SliceQuickTools(QWidget):
                 parent,
                 "Save oblique slice screenshot",
                 f"neuxelec_oblique_slice_{self.slot_index}.png",
-                "PNG image (*.png);;JPEG image (*.jpg *.jpeg)",
+                "PNG image (*.png);;PDF document (*.pdf);;SVG image (*.svg);;"
+                "JPEG image (*.jpg *.jpeg)",
             )
 
             if not filename:
@@ -440,16 +443,26 @@ class SliceQuickTools(QWidget):
             final_filename = str(filename)
 
             # QFileDialog does not always append the extension automatically.
-            if not final_filename.lower().endswith((".png", ".jpg", ".jpeg")):
+            if not final_filename.lower().endswith(
+                (".png", ".jpg", ".jpeg", ".pdf", ".svg")
+            ):
                 if "JPEG" in str(selected_filter):
                     final_filename += ".jpg"
+                elif "PDF" in str(selected_filter):
+                    final_filename += ".pdf"
+                elif "SVG" in str(selected_filter):
+                    final_filename += ".svg"
                 else:
                     final_filename += ".png"
 
-            # If background removal is enabled, force PNG.
-            # JPEG cannot store transparency.
-            if bool(self._background_removed) and not final_filename.lower().endswith(".png"):
+            # Without a background, the format has to carry transparency.
+            # PDF and SVG do; JPEG does not, so it becomes a PNG.
+            if bool(self._background_removed) and final_filename.lower().endswith(
+                (".jpg", ".jpeg")
+            ):
                 final_filename = str(Path(final_filename).with_suffix(".png"))
+
+            vectoriel = final_filename.lower().endswith((".pdf", ".svg"))
 
             if hasattr(self.owner, "_save_oblique_slice_screenshot"):
                 self.owner._save_oblique_slice_screenshot(
@@ -458,9 +471,18 @@ class SliceQuickTools(QWidget):
                     remove_background=bool(self._background_removed),
                 )
 
-                copied = self._copy_image_file_to_clipboard(final_filename)
+                # Le presse-papier ne transporte que des images: un PDF
+                # ou un SVG s'enregistre, et c'est tout.
+                copied = (
+                    False if vectoriel else self._copy_image_file_to_clipboard(final_filename)
+                )
 
-                if copied:
+                if vectoriel:
+                    msg = (
+                        "Saved as vector: the anatomy is an image, the contacts "
+                        "and their names are objects"
+                    )
+                elif copied:
                     if bool(self._background_removed):
                         msg = "Screenshot saved and copied without black background"
                     else:

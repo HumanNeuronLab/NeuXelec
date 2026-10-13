@@ -274,11 +274,18 @@ an fMRI threshold left at <i>auto</i> is derived from the map itself.</p>
 
 <h3>Quick tools</h3>
 <p>The small arrow in the corner of each slice opens the quick tools: save a
-screenshot (also copied to the clipboard), export a GIF that turns the plane
-around the electrode, save and restore a slice position, remove the black
-background, and rotate the image by 45, 90, 135 or 180 degrees.</p>
-<p><b>Remove background</b> applies on screen and to PNG screenshots, where the
-transparency is real. A GIF cannot carry it: the format has no alpha channel,
+screenshot, export a GIF that turns the plane around the electrode, save and
+restore a slice position, remove the black background, and rotate the image by
+45, 90, 135 or 180 degrees.</p>
+<p>A screenshot is written as a <b>PNG</b> or a <b>JPEG</b>, which are copied to
+the clipboard as well, or as a <b>PDF</b> or an <b>SVG</b>. Those two keep the
+contacts, their names and the colour bars as objects rather than pixels: they
+stay sharp at any magnification, and a drawing program can move a label or
+recolour a contact. The anatomy itself stays an image whatever the format,
+since it is made of voxels, but it is written at its own resolution rather than
+at the size of the window.</p>
+<p><b>Remove background</b> applies on screen and to PNG, PDF and SVG
+screenshots, where the transparency is real. A GIF cannot carry it: the format has no alpha channel,
 and the skin fades gradually into the air, which one transparent colour cannot
 reproduce. Asking for a GIF without a background therefore stops with an
 explanation rather than quietly returning a black one. For an animation meant
@@ -344,6 +351,10 @@ cluster size.</p>
 rotating GIF around X, Y or Z, the standard camera views (anterior, posterior,
 left, right and two obliques), a camera position saved in the project, and a
 transparent background for figures.</p>
+<p>The 3D scene is written as an image, and not as a PDF or an SVG the way the
+oblique slices are. The exporter that would do it renders the scene into a
+picture and wraps that picture in the file: the result claims to be vector
+without being one. A PNG at least says what it is.</p>
 
 <h3>Functional maps</h3>
 <p>An fMRI activation can be shown as a blob, projected on the pial surface, or
@@ -612,6 +623,10 @@ sitting next to an <code>aparc+aseg</code> is picked up on its own and refines
 the white-matter labels.</p>
 <p><b>Plan</b>: NeuroInspire <code>.nip</code>.</p>
 <p><b>Export</b>: CSV, TSV, BIDS (<code>electrodes.tsv</code> plus derivatives).</p>
+<p><b>Pictures</b>: PNG and JPEG everywhere, GIF for the rotating animations,
+and PDF or SVG for an oblique slice, where the contacts and their names stay
+objects. The 3D scene has no vector export: see the quick tools of the 3D
+view.</p>
 """,
     ),
     Section(
