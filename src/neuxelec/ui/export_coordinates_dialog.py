@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 import csv
@@ -1555,44 +1563,6 @@ class ExportCoordinatesDialog(QDialog):
                 );
             }
 
-            QScrollArea#exportCoordinatesScrollArea QScrollBar:vertical {
-                background-color: transparent;
-                border: none;
-                width: 10px;
-                margin: 5px 2px 5px 2px;
-                border-radius: 5px;
-            }
-
-            QScrollArea#exportCoordinatesScrollArea QScrollBar::handle:vertical {
-                min-height: 28px;
-                background-color: #3B3E48;
-                border: 1px solid #FF487D;
-                border-radius: 5px;
-            }
-
-            QScrollArea#exportCoordinatesScrollArea QScrollBar::handle:vertical:hover {
-                background-color: #4A4D58;
-                border: 1px solid #FF6B98;
-            }
-
-            QScrollArea#exportCoordinatesScrollArea QScrollBar::handle:vertical:pressed {
-                background-color: #343743;
-                border: 1px solid #FF487D;
-            }
-
-            QScrollArea#exportCoordinatesScrollArea QScrollBar::add-line:vertical,
-            QScrollArea#exportCoordinatesScrollArea QScrollBar::sub-line:vertical {
-                height: 0px;
-                width: 0px;
-                background: transparent;
-                border: none;
-            }
-
-            QScrollArea#exportCoordinatesScrollArea QScrollBar::add-page:vertical,
-            QScrollArea#exportCoordinatesScrollArea QScrollBar::sub-page:vertical {
-                background: transparent;
-                border: none;
-            }
             """)
 
     def _selected_electrode_indices(self) -> list[int]:

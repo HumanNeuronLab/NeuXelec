@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 import logging
@@ -21,6 +29,7 @@ if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     os.chdir(sys._MEIPASS)  # type: ignore[attr-defined]
 
 from .ui.project_loading_window import ProjectLoadingWindow
+from .ui.scrollbars import apply_scrollbars
 
 
 def _resolve_project_files(
@@ -169,6 +178,10 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setWindowIcon(_app_icon())
+
+    # Les ascenseurs, une fois pour toute l'application: la fenetre et
+    # ses filles n'en decrivent plus aucun.
+    apply_scrollbars(app)
 
     # Check for a newer version in the background (non-blocking, fail-silent).
     # If one is published in the website manifest, the user is offered to

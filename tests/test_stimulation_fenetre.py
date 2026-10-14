@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """La fenetre de saisie d'un resultat de stimulation.
 
 CE QU'ELLE DOIT RENDRE FACILE
@@ -849,12 +857,21 @@ def test_les_spinbox_ont_leurs_fleches():
 
 
 def test_la_barre_de_defilement_est_celle_du_logiciel():
-    """Le meme trait que dans la page oblique et la reconstruction."""
-    from neuxelec.ui.neuxelec_dialog import ROSE, STYLE
+    """Le meme trait que dans la page oblique et la reconstruction.
 
-    assert "QScrollBar::handle:vertical" in STYLE
-    assert "#3B3E48" in STYLE
-    assert f"border: 1px solid {ROSE}" in STYLE
+    La fenetre le garantissait en recopiant les regles; elle le garantit
+    maintenant en n'en ayant aucune. Le dessin vient de la feuille de
+    l'application, donc il est le meme partout, et c'est la ce qu'il
+    fallait verifier depuis le debut.
+    """
+    from neuxelec.ui.neuxelec_dialog import ROSE, STYLE
+    from neuxelec.ui.scrollbars import SCROLLBARS_QSS
+
+    assert "QScrollBar" not in STYLE
+
+    assert "QScrollBar::handle:vertical" in SCROLLBARS_QSS
+    assert "#3B3E48" in SCROLLBARS_QSS
+    assert f"border: 1px solid {ROSE}" in SCROLLBARS_QSS
 
 
 # ================================================== NA dans la saisie

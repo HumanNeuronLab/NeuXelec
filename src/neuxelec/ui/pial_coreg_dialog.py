@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 import tempfile
 import time
 from pathlib import Path
@@ -999,43 +1007,6 @@ class PialCoregDialog(QDialog):
                 border: 1px solid #20222A;
             }
 
-            QScrollArea#pialCoregScrollArea QScrollBar:vertical {
-                background-color: #111218;
-                width: 13px;
-                margin: 5px 2px 5px 2px;
-                border: none;
-                border-radius: 6px;
-            }
-
-            QScrollArea#pialCoregScrollArea QScrollBar::handle:vertical {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF8000,
-                    stop:1 #FF00A0
-                );
-                border-radius: 6px;
-                min-height: 22px;
-            }
-
-            QScrollArea#pialCoregScrollArea QScrollBar::handle:vertical:hover {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF922B,
-                    stop:1 #FF33B8
-                );
-            }
-
-            QScrollArea#pialCoregScrollArea QScrollBar::add-line:vertical,
-            QScrollArea#pialCoregScrollArea QScrollBar::sub-line:vertical {
-                height: 0px;
-                background: transparent;
-                border: none;
-            }
-
-            QScrollArea#pialCoregScrollArea QScrollBar::add-page:vertical,
-            QScrollArea#pialCoregScrollArea QScrollBar::sub-page:vertical {
-                background: transparent;
-            }
             """)
 
     def _start_progress_animation(self) -> None:

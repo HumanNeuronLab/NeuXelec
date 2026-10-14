@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """The frameless NeuXelec window: near-black shell, rose border, dragged by its head.
 
 Three dialogs had already each carried their own copy of this stylesheet, which
@@ -232,26 +240,6 @@ QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
     image: url({SPIN_DOWN}); width: 9px; height: 6px;
 }}
 QSplitter::handle {{ background: transparent; }}
-QScrollBar:vertical {{
-    background-color: transparent; border: none; width: 10px;
-    margin: 5px 2px 5px 2px; border-radius: 5px;
-}}
-QScrollBar::handle:vertical {{
-    min-height: 28px; background-color: #3B3E48;
-    border: 1px solid {ROSE}; border-radius: 5px;
-}}
-QScrollBar:horizontal {{
-    background-color: transparent; border: none; height: 10px;
-    margin: 2px 5px 2px 5px; border-radius: 5px;
-}}
-QScrollBar::handle:horizontal {{
-    min-width: 28px; background-color: #3B3E48;
-    border: 1px solid {ROSE}; border-radius: 5px;
-}}
-QScrollBar::add-line, QScrollBar::sub-line {{
-    width: 0px; height: 0px; border: none; background: transparent;
-}}
-QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; border: none; }}
 QSizeGrip#dialogResizeGrip {{ background: transparent; border: none; image: none; }}
 """
 

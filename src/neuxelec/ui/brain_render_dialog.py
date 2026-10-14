@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, Qt
@@ -615,45 +623,6 @@ class BrainRenderDialog(QDialog):
 
             QScrollArea#renderBrainScrollArea > QWidget > QWidget {
                 background-color: transparent;
-            }
-
-            QScrollArea#renderBrainScrollArea QScrollBar:vertical {
-                background-color: transparent;
-                width: 13px;
-                margin: 5px 2px 5px 2px;
-                border: none;
-                border-radius: 7px;
-            }
-
-            QScrollArea#renderBrainScrollArea QScrollBar::handle:vertical {
-                background-color: #3F424C;
-                border: 1px solid #FF487D;
-                border-radius: 6px;
-                min-height: 22px;
-            }
-
-            QScrollArea#renderBrainScrollArea QScrollBar::handle:vertical:hover {
-                background-color: #4B4E59;
-                border: 1px solid #FF6F9D;
-                border-radius: 6px;
-            }
-
-            QScrollArea#renderBrainScrollArea QScrollBar::handle:vertical:pressed {
-                background-color: #343743;
-                border: 1px solid #FF487D;
-                border-radius: 6px;
-            }
-
-            QScrollArea#renderBrainScrollArea QScrollBar::add-line:vertical,
-            QScrollArea#renderBrainScrollArea QScrollBar::sub-line:vertical {
-                height: 0px;
-                background: transparent;
-                border: none;
-            }
-
-            QScrollArea#renderBrainScrollArea QScrollBar::add-page:vertical,
-            QScrollArea#renderBrainScrollArea QScrollBar::sub-page:vertical {
-                background: transparent;
             }
 
             QLabel {

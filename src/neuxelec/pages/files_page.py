@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 import logging
@@ -78,7 +86,7 @@ class FilesPage:
         self._loading_overlay = (
             PageLoadingOverlay(
                 self._page_widget,
-                "FILES / COREGISTRATION",
+                "PATIENT DATA",
                 "Preparing import",
             )
             if self._page_widget is not None
@@ -135,6 +143,10 @@ class FilesPage:
             "BrainMask": self.ui.findChild(QLabel, "pill_FilesCoreg_BrainMask"),
             "Planning": self.ui.findChild(QLabel, "pill_FilesCoreg_Planning"),
         }
+        # Le mot d'etat n'existe plus que pour la parcellation, les
+        # surfaces et le plan: les lignes de l'imagerie ont quatre
+        # colonnes a la place. Les huit premieres cles valent donc None,
+        # et _set_status_item le sait.
         self._status_texts: dict[str, QLabel] = {
             "T1": self.ui.findChild(QLabel, "status_FilesCoreg_T1"),
             "T2": self.ui.findChild(QLabel, "status_FilesCoreg_T2"),
@@ -182,6 +194,24 @@ class FilesPage:
         )
         self.btn_load_surfaces = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_loadSurfaces")
         self.btn_load_planning = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_loadPlanning")
+
+        # Un seul bouton demande ce qu'il faut charger, et appelle ensuite
+        # la meme fonction qu'avant. Les quatre anciens n'existent plus dans
+        # le .ui; les attributs restent, a None, pour que le reste du
+        # fichier continue de les interroger sans rien casser.
+        self.btn_save = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_save")
+        if self.btn_save:
+            self.btn_save.clicked.connect(self.open_save_outputs)
+
+        self.btn_load = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_load")
+        if self.btn_load:
+            self.btn_load.clicked.connect(self.ask_what_to_load)
+            # Le menu du clic droit suivait le bouton Planning, qui n'existe
+            # plus: il suit maintenant celui-ci.
+            self.btn_load.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.btn_load.customContextMenuRequested.connect(
+                self._show_planning_context_menu
+            )
 
         if self.btn_load_imaging:
             self.btn_load_imaging.clicked.connect(self.load_imaging_bundle)
@@ -307,9 +337,9 @@ class FilesPage:
         self.btn_perform = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_performCoreg")
         self.btn_check_coreg = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_checkCoreg")
         if self.btn_perform:
-            self.btn_perform.clicked.connect(self.perform_coreg)
+            self.btn_perform.clicked.connect(self.ask_what_to_align)
         if self.btn_check_coreg:
-            self.btn_check_coreg.clicked.connect(self.check_coreg)
+            self.btn_check_coreg.clicked.connect(self.ask_what_to_review)
 
         # --- Brain mask button ---
         self.btn_brainmask = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_Brainmask")
@@ -379,6 +409,12 @@ class FilesPage:
         )
         self.btn_save_plan = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_savePlan")
         self.btn_save_all = self.ui.findChild(QAbstractButton, "btn_FilesCoreg_saveAll")
+
+        # Les boutons Save ne sont plus sur la page: ils vivent dans la
+        # fenetre ouverte par Save. Ils restent neanmoins des objets de la
+        # page, caches, parce que _update_buttons les active et que
+        # _saved_flags les marque. Rien de cette mecanique ne change.
+        self._ensure_save_buttons()
 
         if self.btn_save_t2:
             self.btn_save_t2.clicked.connect(lambda: self.save_coreg("T2"))
@@ -709,7 +745,7 @@ class FilesPage:
     def _dialog_parent(self):
         """
         Return the main NeuXelec window as parent for all dialogs opened
-        from the Files / Coregistration page.
+        from the Patient data page.
         """
         try:
             return self.ui.window()
@@ -3724,7 +3760,7 @@ class FilesPage:
             self.brainmask_bar.setVisible(True)
             self.brainmask_bar.setRange(0, 100)
             self.brainmask_bar.setValue(0)
-            self.brainmask_bar.setFormat(f"{label}: Preparing... %p%")
+            self._tile_progress("brainmask_bar", f"{label}: preparing...")
 
         try:
             self._brainmask_progress_timer.start()
@@ -3784,8 +3820,9 @@ class FilesPage:
             value = max(current_value, estimated_value)
 
             self.brainmask_bar.setValue(value)
-            self.brainmask_bar.setFormat(
-                f"{label}: {self._brainmask_progress_stage_text(value)}... %p%"
+            self._tile_progress(
+                "brainmask_bar",
+                f"{label}: {self._brainmask_progress_stage_text(value)}...",
             )
 
         except Exception:
@@ -3811,9 +3848,9 @@ class FilesPage:
 
         if success:
             self.brainmask_bar.setValue(100)
-            self.brainmask_bar.setFormat(f"{label}: Done")
+            self._tile_progress("brainmask_bar", f"{label}: done.")
         else:
-            self.brainmask_bar.setFormat(f"{label}: Failed")
+            self._tile_progress("brainmask_bar", f"{label}: failed.")
 
     def _brainmask_expected_duration_s(self) -> float:
         """How long the bar should take to fill.
@@ -3983,7 +4020,7 @@ class FilesPage:
                         int(getattr(self, "_brainmask_progress_max_before_done", 98)),
                     )
                 )
-                self.brainmask_bar.setFormat("Brain mask: Finalizing... %p%")
+                self._tile_progress("brainmask_bar", "Brain mask: finalizing...")
             elif v > 0:
                 self.brainmask_bar.setValue(max(int(self.brainmask_bar.value()), v))
             return
@@ -4288,7 +4325,7 @@ class FilesPage:
             self.brainmask_bar.setVisible(True)
             self.brainmask_bar.setRange(0, 100)
             self.brainmask_bar.setValue(0)
-            self.brainmask_bar.setFormat("Generating iso-surface... %p%")
+            self._tile_progress("brainmask_bar", "Generating iso-surface...")
 
         # You can tune percentile later from UI if you want; keep a safe default now
         self._iso_worker = IsoSurfaceWorker(self.state.t1_sitk, iso_percentile=60)
@@ -4491,7 +4528,7 @@ class FilesPage:
             self.siscom_bar.setVisible(True)
             self.siscom_bar.setRange(0, 100)
             self.siscom_bar.setValue(0)
-            self.siscom_bar.setFormat("Computing SISCOM... %p%")
+            self._tile_progress("siscom_bar", "Computing SISCOM...")
 
         if getattr(self, "btn_perf_siscom", None) is not None:
             self.btn_perf_siscom.setEnabled(False)
@@ -4695,8 +4732,9 @@ class FilesPage:
             self.coreg_bar.setVisible(True)
             self.coreg_bar.setRange(0, 100)
             self.coreg_bar.setValue(0)
-            self.coreg_bar.setFormat(
-                f"{self._display_modality_name(modality)} → MRI 1: Preparing ANTs registration... %p%"
+            self._tile_progress(
+                "coreg_bar",
+                f"{self._display_modality_name(modality)}: preparing ANTs...",
             )
 
         try:
@@ -4759,8 +4797,10 @@ class FilesPage:
             value = max(current_value, estimated_value)
 
             self.coreg_bar.setValue(value)
-            self.coreg_bar.setFormat(
-                f"{self._display_modality_name(modality)} → MRI 1: {self._coreg_progress_stage_text(value)}... %p%"
+            self._tile_progress(
+                "coreg_bar",
+                f"{self._display_modality_name(modality)}: "
+                f"{self._coreg_progress_stage_text(value)}...",
             )
 
         except Exception:
@@ -4786,10 +4826,12 @@ class FilesPage:
 
         if success:
             self.coreg_bar.setValue(100)
-            self.coreg_bar.setFormat(f"{self._display_modality_name(modality)} → MRI 1: Done")
+            self._tile_progress("coreg_bar", f"{self._display_modality_name(modality)}: done.")
         else:
             # Keep the last progress value visible, but show failure.
-            self.coreg_bar.setFormat(f"{self._display_modality_name(modality)} → MRI 1: Failed")
+            self._tile_progress(
+                "coreg_bar", f"{self._display_modality_name(modality)}: failed."
+            )
 
     def perform_coreg(self):
         fixed_path = getattr(self.state, "t1_path", None)
@@ -4804,7 +4846,7 @@ class FilesPage:
             NeuXelecMessageDialog.warning(
                 None,
                 "Coregistration",
-                "Please check EXACTLY ONE modality to coregister (MRI 2 or CT or PET or ictal SPECT or interictal SPECT).",
+                "Please pick exactly one image to align on MRI 1.",
             )
             return
 
@@ -4998,27 +5040,47 @@ class FilesPage:
         )
         return path or None
 
+    #: La ligne de la tuile ou s'ecrit l'etape d'un calcul en cours.
+    PROGRESS_LINES = {
+        "brainmask_bar": "cardBrainMaskSubtitle",
+        "coreg_bar": "cardCoregistrationSubtitle",
+        "siscom_bar": "cardSISCOMSubtitle",
+    }
+
+    def _tile_progress(self, barre_attr: str, texte: str, pourcent: bool = True) -> None:
+        """Dire ou en est un calcul, sans rien couper.
+
+        Le pourcentage va dans la barre, qui est etroite, et la phrase sur
+        la ligne de la tuile, qui a deux lignes de large. Les deux sont
+        dans la meme tuile, l'une sous l'autre.
+        """
+        from PySide6.QtWidgets import QLabel
+
+        barre = getattr(self, barre_attr, None)
+        if barre is not None:
+            barre.setFormat("%p%" if pourcent else "")
+
+        etiquette = self.ui.findChild(QLabel, self.PROGRESS_LINES[barre_attr])
+        if etiquette is not None:
+            etiquette.setText(texte)
+
     def _refresh_coreg_progress_ui(self) -> None:
+        """La barre ne vit que pendant un calcul.
+
+        Elle affichait l'etat de la modalite cochee, et la case reste
+        cochee apres coup: la tuile aurait garde une barre pleine
+        annoncant un alignement fait il y a une heure. Ce qui est aligne
+        se lit dans le cockpit; la barre dit ce qui tourne, maintenant.
+        """
         if self.coreg_bar is None:
             return
 
-        modality = self._selected_modality()
-        if modality is None:
-            self.coreg_bar.setVisible(False)
-            self.coreg_bar.setValue(0)
-            self.coreg_bar.setFormat("")
+        if bool(getattr(self, "_coreg_progress_running", False)):
             return
 
-        is_done = self._coreg_image_for(modality) is not None
-
-        if is_done:
-            self.coreg_bar.setVisible(True)
-            self.coreg_bar.setValue(100)
-            self.coreg_bar.setFormat(f"{self._display_modality_name(modality)} → MRI 1: Done")
-        else:
-            self.coreg_bar.setVisible(True)
-            self.coreg_bar.setValue(0)
-            self.coreg_bar.setFormat(f"{self._display_modality_name(modality)} → MRI 1: Ready")
+        self.coreg_bar.setVisible(False)
+        self.coreg_bar.setValue(0)
+        self.coreg_bar.setFormat("")
 
     def _on_progress(self, v: int):
         """
@@ -5044,10 +5106,12 @@ class FilesPage:
                         int(getattr(self, "_coreg_progress_max_before_done", 96)),
                     )
                 )
-                modality = self._display_modality_name(
+                # Le nom affiche, et non la cle: la variable le dit, pour
+                # que la ligne se relise sans remonter trois lignes.
+                nom_affiche = self._display_modality_name(
                     getattr(self, "_coreg_progress_modality", None) or "Image"
                 )
-                self.coreg_bar.setFormat(f"{self._display_modality_name(modality)} → MRI 1: Finalizing registration... %p%")
+                self._tile_progress("coreg_bar", f"{nom_affiche}: finalizing...")
             elif v > 0:
                 self.coreg_bar.setValue(max(int(self.coreg_bar.value()), v))
             return
@@ -5058,6 +5122,11 @@ class FilesPage:
         self.state.t1_sitk = res.fixed
         self._last_result = res  # type: ignore
         self._last_modality = modality  # type: ignore
+
+        # Un alignement vient d'etre calcule: c'est celui-la que Review
+        # doit ouvrir, sans reposer une question qui n'a plus qu'une
+        # reponse. Il cesse d'attendre des qu'il est relu.
+        self._modalite_a_relire = modality
 
         # Save only the transform matrix to the user-selected location
         try:
@@ -5175,7 +5244,7 @@ class FilesPage:
             NeuXelecMessageDialog.warning(
                 self._dialog_parent(),
                 "Review coregistration",
-                "Please select exactly one modality to check.",
+                "Please pick exactly one alignment to review.",
             )
             return
 
@@ -5849,6 +5918,189 @@ class FilesPage:
             button.setEnabled(bool((remembered or {}).get(name, button.isEnabled())))
         self._busy_enabled_before = None
 
+    #: Les sorties enregistrables, et le nom de leur bouton.
+    SAVE_BUTTONS = (
+        ("btn_save_t2", "btn_FilesCoreg_saveT2"),
+        ("btn_save_fmri", "btn_FilesCoreg_savefMRI"),
+        ("btn_save_ct", "btn_FilesCoreg_saveCT"),
+        ("btn_save_pet", "btn_FilesCoreg_savePET"),
+        ("btn_save_ictal", "btn_FilesCoreg_saveIctalSPECT"),
+        ("btn_save_interictal", "btn_FilesCoreg_saveInterIctalSPECT"),
+        ("btn_save_siscom", "btn_FilesCoreg_SaveSISCOM"),
+        ("btn_save_brainmask", "btn_FilesCoreg_SaveBrainmask"),
+        ("btn_save_plan", "btn_FilesCoreg_savePlan"),
+        ("btn_save_all", "btn_FilesCoreg_saveAll"),
+    )
+
+    def _ensure_save_buttons(self) -> None:
+        """Give the page its Save buttons even though the .ui has none.
+
+        They are never shown here: the window opened by Save lays out one
+        line per output and clicks these. Keeping them as real buttons is
+        what lets _update_buttons and _saved_flags go on working word for
+        word.
+        """
+        from PySide6.QtWidgets import QPushButton, QWidget
+
+        hote = getattr(self, "_save_buttons_host", None)
+        if hote is None:
+            hote = QWidget(self._page_widget)
+            hote.setObjectName("filesSaveButtonsHost")
+            hote.hide()
+            self._save_buttons_host = hote
+
+        for attribut, nom in self.SAVE_BUTTONS:
+            if getattr(self, attribut, None) is not None:
+                continue
+            bouton = QPushButton(hote)
+            bouton.setObjectName(nom)
+            bouton.setProperty("uiRole", "saveAction")
+            bouton.setEnabled(False)
+            bouton.hide()
+            setattr(self, attribut, bouton)
+
+    def open_save_outputs(self) -> None:
+        """Show what is saved, what is not, and let one line be written."""
+        try:
+            from ..ui.save_outputs_dialog import SaveOutputsDialog
+
+            dialog = SaveOutputsDialog(self, parent=self._dialog_parent())
+            dialog.exec()
+        except Exception as e:
+            NeuXelecMessageDialog.critical(
+                self._dialog_parent(),
+                "Save",
+                f"The save window could not open.\n\n{e}",
+            )
+            return
+
+        self._update_buttons()
+
+    def ask_what_to_load(self) -> None:
+        """Ask what to load, then do exactly what the old buttons did.
+
+        Four buttons sat side by side on the page for a question asked
+        once per import. The question is now asked when it arises, and the
+        page carries one button instead of four.
+        """
+        choix = NeuXelecMessageDialog.choice(
+            self._dialog_parent(),
+            "Load patient data",
+            "What do you want to load?",
+            [
+                ("imaging", "Imaging", False),
+                ("parcellation", "Parcellation", False),
+                ("surfaces", "Surfaces and brain mask", False),
+                ("planning", "Implantation plan", False),
+            ],
+            cancel_primary=True,
+        )
+
+        if choix == "imaging":
+            self.load_imaging_bundle()
+        elif choix == "parcellation":
+            self.load_parcellation_bundle()
+        elif choix == "surfaces":
+            self.load_surfaces_bundle()
+        elif choix == "planning":
+            self.load_planning_bundle()
+
+    #: Les images qui se recalent sur MRI 1, dans l'ordre du cockpit.
+    ALIGNABLE = (
+        ("T2", "t2_path"),
+        ("CT", "ct_path"),
+        ("PET", "pet_path"),
+        ("ictalSPECT", "ictal_spect_path"),
+        ("interictalSPECT", "interictal_spect_path"),
+        ("fMRI", "fmri_path"),
+    )
+
+    def _loaded_alignable(self) -> list:
+        """Les modalites chargees, donc alignables, dans l'ordre."""
+        return [cle for cle, champ in self.ALIGNABLE if getattr(self.state, champ, None)]
+
+    def _check_only(self, modality) -> None:
+        """Ne laisser cochee que cette modalite-la."""
+        cases = {
+            "T2": getattr(self, "chk_t2", None),
+            "CT": getattr(self, "chk_ct", None),
+            "PET": getattr(self, "chk_pet", None),
+            "ictalSPECT": getattr(self, "chk_ictal", None),
+            "interictalSPECT": getattr(self, "chk_interictal", None),
+            "fMRI": getattr(self, "chk_fmri", None),
+        }
+        for cle, case in cases.items():
+            if case is not None:
+                case.setChecked(cle == modality)
+
+    def _ask_which_modality(self, titre: str, question: str) -> bool:
+        """Poser la question que six cases posaient sur la page.
+
+        Une seule image se recale a la fois. La question a donc une seule
+        reponse, et elle se pose au moment du geste. Les cases restent,
+        hors de la vue: elles portent toujours la reponse, et tout le
+        code qui les lit continue de marcher.
+        """
+        if not getattr(self.state, "t1_path", None):
+            NeuXelecMessageDialog.warning(
+                self._dialog_parent(), titre, "Please load MRI 1 first."
+            )
+            return False
+
+        cles = self._loaded_alignable()
+        if not cles:
+            NeuXelecMessageDialog.warning(
+                self._dialog_parent(),
+                titre,
+                "Please load an image to align on MRI 1 first.",
+            )
+            return False
+
+        choix = NeuXelecMessageDialog.choice(
+            self._dialog_parent(),
+            titre,
+            question,
+            [(cle, self._display_modality_name(cle), False) for cle in cles],
+            cancel_primary=True,
+        )
+        if choix is None:
+            return False
+
+        self._check_only(choix)
+        return True
+
+    def ask_what_to_align(self) -> None:
+        if self._ask_which_modality("Align on MRI 1", "Which image do you want to align?"):
+            self.perform_coreg()
+
+    def _pending_review(self) -> str | None:
+        """L'alignement calcule qui attend encore sa relecture.
+
+        Il n'y en a qu'un: le dernier calcule. Il cesse d'attendre quand
+        il est relu, et la question revient alors, ce qui laisse relire
+        n'importe quelle autre image plus tard.
+        """
+        cle = getattr(self, "_modalite_a_relire", None)
+        if not cle or cle not in self._loaded_alignable():
+            return None
+
+        champ = {c: relu for c, _f, _rec, relu, _e in self.IMAGING_ROWS}.get(cle)
+        if champ and bool(getattr(self.state, champ, False)):
+            return None
+        return cle
+
+    def ask_what_to_review(self) -> None:
+        en_attente = self._pending_review()
+        if en_attente is not None:
+            self._check_only(en_attente)
+            self.check_coreg()
+            return
+
+        if self._ask_which_modality(
+            "Review alignment", "Which alignment do you want to review?"
+        ):
+            self.check_coreg()
+
     def load_brainmask(self) -> None:
         """Load an existing brain mask file and push it to state + 3D view."""
         start_dir = self._t1_preferred_dir()
@@ -6342,15 +6594,14 @@ class FilesPage:
             self.chk_interictal, bool(getattr(self.state, "interictal_spect_path", None))
         )
 
-        can_perform = t1_loaded and (self._selected_modality() is not None)
+        # Les deux boutons ouvrent une fenetre qui demande laquelle: ils
+        # s'allument des qu'il y a MRI 1 et une image a aligner, et non
+        # plus quand une case est cochee.
+        peut_aligner = bool(t1_loaded and self._loaded_alignable())
         if self.btn_perform is not None:
-            self.btn_perform.setEnabled(can_perform)
-
-        modality = self._selected_modality()
-        moving_path = self._moving_path_for(modality) if modality else None
-        can_check = bool(t1_loaded and modality and moving_path)
+            self.btn_perform.setEnabled(peut_aligner)
         if self.btn_check_coreg is not None:
-            self.btn_check_coreg.setEnabled(can_check)
+            self.btn_check_coreg.setEnabled(peut_aligner)
 
         if self.btn_save_t2 is not None:
             self.btn_save_t2.setEnabled(bool(getattr(self.state, "t2_validated", False)))
@@ -6468,6 +6719,7 @@ class FilesPage:
         # Keep the page visual state synchronized with the workflow state.
         # Styling is handled by dynamic Qt properties declared in MainWindow.ui.
         self._sync_files_workflow_visual_states()
+        self._sync_current_step()
         self._sync_files_status_overview()
 
         self._refresh_coreg_progress_ui()
@@ -6570,6 +6822,10 @@ class FilesPage:
         if label is not None:
             label.setText(text)
             self._set_dynamic_property(label, "status", state)
+
+        # Le nom porte lui aussi l'etat: une ligne sans fichier recule
+        # d'un ton au lieu de s'afficher comme les autres.
+        self._set_dynamic_property(name_lbl, "status", state)
 
         # Tooltip with the full file path on hover (name label + pill + status),
         # so hovering anywhere on the cockpit row reveals where the file lives.
@@ -6827,9 +7083,344 @@ class FilesPage:
                 if w is not None:
                     w.setToolTip(tip)
 
+        # Les lignes de l'imagerie ont quatre colonnes au lieu d'un mot:
+        # elles sont peintes apres, a partir d'un seul calcul, qui sert
+        # aussi a l'en-tete et aux lignes des tuiles.
+        etats = self._imaging_states()
+        self._sync_imaging_columns(etats)
+        self._sync_files_header(etats)
+        self._sync_step_lines(etats)
+
+    #: Ce que les quatre colonnes de l'imagerie lisent dans l'etat.
+    #:
+    #: (ligne, fichier charge, image recalee, relecture, fichier ecrit).
+    #: None veut dire "sans objet pour cette ligne": MRI 1 est la
+    #: reference, et SISCOM se calcule au lieu de se recaler.
+    IMAGING_ROWS = (
+        ("T1", "t1_path", None, None, None),
+        ("T2", "t2_path", "T2", "t2_validated", "t2_coreg_path"),
+        ("CT", "ct_path", "CT", "ct_validated", "ct_coreg_path"),
+        ("PET", "pet_path", "PET", "pet_validated", "pet_coreg_path"),
+        (
+            "ictalSPECT",
+            "ictal_spect_path",
+            "ictalSPECT",
+            "ictal_spect_validated",
+            "ictal_spect_coreg_path",
+        ),
+        (
+            "interictalSPECT",
+            "interictal_spect_path",
+            "interictalSPECT",
+            "interictal_spect_validated",
+            "interictal_spect_coreg_path",
+        ),
+        ("SISCOM", "siscom_path", None, "siscom_validated", "siscom_coreg_path"),
+        ("fMRI", "fmri_path", "fMRI", "fmri_validated", "fmri_coreg_path"),
+    )
+
+    #: Le signe de chaque etat. La couleur vient de la feuille de style.
+    #:
+    #: Sans objet ne met rien du tout: un point gris et un cercle vide se
+    #: ressemblaient trop pour porter deux sens opposes, rien a faire ici
+    #: et pas encore fait.
+    MARKS = {
+        "done": "\u25cf",
+        "todo": "\u25cf",
+        "off": "\u25cb",
+        "na": "",
+    }
+
+    def _imaging_states(self) -> dict:
+        """L'etat des quatre colonnes, ligne par ligne.
+
+        Un seul endroit decide de ce que valent LOAD, ALIGN, REVIEW et
+        SAVE: les points, la ligne de resume et les lignes des tuiles
+        disent alors forcement la meme chose.
+        """
+        etat = self.state
+        etats: dict[str, dict[str, str]] = {}
+
+        for cle, champ, recalable, champ_relu, champ_ecrit in self.IMAGING_ROWS:
+            charge = bool(getattr(etat, champ, None))
+            if cle == "SISCOM":
+                charge = charge or getattr(etat, "siscom_z_in_t1", None) is not None
+            relu = bool(champ_relu and getattr(etat, champ_relu, False))
+            ecrit = bool(champ_ecrit and getattr(etat, champ_ecrit, None))
+
+            if cle == "T1":
+                # La reference ne se recale pas sur elle-meme et n'est pas
+                # une sortie: ses deux dernieres cases restent vides. Un
+                # point y aurait demande ce qu'il voulait dire.
+                etats[cle] = {
+                    "load": "done" if charge else "off",
+                    "coreg": "na",
+                    "save": "na",
+                }
+                continue
+
+            if recalable is None:
+                # SISCOM ne se recale pas: il nait dans l'espace de MRI 1.
+                # Sa colonne dit donc seulement s'il est relu.
+                pret = relu
+                reste = charge and not relu
+            else:
+                # Relu ou ecrit vaut recale: un projet rouvert retrouve ses
+                # fichiers avant de retrouver ses images en memoire.
+                recale = bool(
+                    self._coreg_image_for(recalable) is not None or relu or ecrit
+                )
+                pret = recale and relu
+                reste = charge and not pret
+
+            etats[cle] = {
+                "load": "done" if charge else "off",
+                "coreg": "done" if pret else ("todo" if reste else "off"),
+                "save": "done" if ecrit else ("todo" if relu else "off"),
+            }
+
+        return etats
+
+    def _imaging_marks(self) -> dict:
+        """Les points du bloc IMAGING, trouves une fois pour toutes."""
+        marques = getattr(self, "_marques_imagerie", None)
+        if marques is None:
+            from PySide6.QtWidgets import QLabel
+
+            marques = {}
+            for cle, *_reste in self.IMAGING_ROWS:
+                # La colonne LOAD est l'ancienne pastille: elle garde son
+                # nom, donc l'info-bulle qui donne le chemin du fichier.
+                marques[(cle, "load")] = self.ui.findChild(QLabel, f"pill_FilesCoreg_{cle}")
+                marques[(cle, "name")] = self.ui.findChild(QLabel, f"label_FilesCoreg_{cle}")
+                for colonne in ("coreg", "save"):
+                    marques[(cle, colonne)] = self.ui.findChild(
+                        QLabel, f"{colonne}_FilesCoreg_{cle}"
+                    )
+            self._marques_imagerie = marques
+        return marques
+
+    def _sync_imaging_columns(self, etats: dict) -> None:
+        marques = self._imaging_marks()
+        for cle, colonnes in etats.items():
+            for colonne, valeur in colonnes.items():
+                point = marques.get((cle, colonne))
+                if point is None:
+                    continue
+                point.setText(self.MARKS[valeur])
+                self._set_dynamic_property(point, "status", valeur)
+
+            # Une ligne sans fichier recule d'un ton: la liste se lit
+            # alors par ce qui est la, et non par ce qui manque.
+            self._set_dynamic_property(
+                marques.get((cle, "name")), "status", colonnes["load"]
+            )
+
+    def _sync_files_header(self, etats: dict) -> None:
+        """Le patient a gauche, ou il en est a droite."""
+        from PySide6.QtWidgets import QLabel
+
+        nom = self.ui.findChild(QLabel, "filesPatientName")
+        if nom is not None:
+            identifiant = str(getattr(self.state, "patient_id", "") or "").strip()
+            nom.setText(identifiant or "Patient")
+
+        ligne = self.ui.findChild(QLabel, "filesSummaryLine")
+        if ligne is None:
+            return
+
+        charges = [c for c, v in etats.items() if v["load"] == "done"]
+        if not charges:
+            ligne.setText("Nothing loaded yet.")
+            return
+
+        morceaux = [f"{len(charges)} of {len(self.IMAGING_ROWS)} images"]
+
+        a_recaler = sum(1 for v in etats.values() if v["coreg"] == "todo")
+        if a_recaler:
+            morceaux.append(f"{a_recaler} to coregister")
+        elif any(v["coreg"] == "done" for v in etats.values()):
+            morceaux.append("all coregistered")
+
+        a_ecrire = sum(1 for v in etats.values() if v["save"] == "todo")
+        if a_ecrire:
+            morceaux.append(f"{a_ecrire} to save")
+        elif any(v["save"] == "done" for v in etats.values()):
+            morceaux.append("all saved")
+
+        plan = getattr(self.state, "plan", None)
+        if isinstance(plan, dict) and plan.get("trajectories_t1"):
+            morceaux.append("plan ready")
+
+        ligne.setText("  \u00b7  ".join(morceaux))
+
+    def _sync_step_lines(self, etats: dict) -> None:
+        """La ligne grise de chaque tuile: ce qui reste a faire, ici."""
+        from PySide6.QtWidgets import QLabel
+
+        etat = self.state
+        t1 = bool(getattr(etat, "t1_path", None))
+        charges = [c for c, v in etats.items() if v["load"] == "done"]
+
+        if not charges:
+            charge = "Nothing loaded yet."
+        else:
+            charge = f"{len(charges)} of {len(self.IMAGING_ROWS)} images loaded."
+
+        masque = bool(
+            getattr(etat, "brainmask_sitk", None) or getattr(etat, "brainmask_path", None)
+        )
+        if masque:
+            mask_line = "Ready."
+        elif not t1:
+            mask_line = "Needs MRI 1."
+        else:
+            mask_line = "Not generated yet."
+
+        a_aligner = 0
+        a_relire = 0
+        for cle, _champ, recalable, champ_relu, champ_ecrit in self.IMAGING_ROWS:
+            if cle == "T1" or etats[cle]["coreg"] != "todo":
+                continue
+            if recalable is None or self._coreg_image_for(recalable) is not None:
+                a_relire += 1
+            else:
+                a_aligner += 1
+
+        if not t1:
+            align_line = "Needs MRI 1."
+        elif not self._loaded_alignable():
+            align_line = "Nothing to align yet."
+        elif a_aligner and a_relire:
+            align_line = f"{a_aligner} to align, {a_relire} to review."
+        elif a_aligner:
+            align_line = f"{a_aligner} to align."
+        elif a_relire:
+            align_line = f"{a_relire} waiting for review."
+        else:
+            align_line = "All aligned and reviewed."
+
+        deux_spect = bool(
+            getattr(etat, "ictal_spect_validated", False)
+            and getattr(etat, "interictal_spect_validated", False)
+        )
+        if getattr(etat, "siscom_validated", False):
+            siscom_line = "Reviewed."
+        elif etats.get("SISCOM", {}).get("load") == "done":
+            siscom_line = "Waiting for review."
+        elif deux_spect:
+            siscom_line = "Ready to generate."
+        else:
+            siscom_line = "Needs both SPECT."
+
+        reste = sum(1 for v in etats.values() if v["save"] == "todo")
+        drapeaux = self._saved_flags()
+        if reste:
+            pluriel = "s" if reste > 1 else ""
+            save_line = f"{reste} output{pluriel} not written."
+        elif drapeaux.get("btn_save_all"):
+            save_line = "Everything saved."
+        else:
+            save_line = "Nothing to save yet."
+
+        lignes = {
+            "cardBulkImportSubtitle": charge,
+            "cardBrainMaskSubtitle": mask_line,
+            "cardCoregistrationSubtitle": align_line,
+            "cardSISCOMSubtitle": siscom_line,
+            "cardFilesToSaveSubtitle": save_line,
+        }
+
+        # Une tuile qui calcule garde son propre message: la barre dit le
+        # pourcentage, la ligne dit l'etape. Un rafraichissement pendant
+        # le calcul effacerait l'un des deux.
+        for attribut, carte in self.PROGRESS_LINES.items():
+            barre = getattr(self, attribut, None)
+            if barre is not None and not barre.isHidden():
+                lignes.pop(carte, None)
+
+        for nom, texte in lignes.items():
+            widget = self.ui.findChild(QLabel, nom)
+            if widget is not None:
+                widget.setText(texte)
+
+    #: Ce qui fait qu'une etape est faite, dans l'ordre du rail.
+    #:
+    #: La pastille rose n'est pas une decoration: c'est la seule chose de
+    #: la page qui dise ou l'on en est, maintenant que les numeros ne sont
+    #: plus repetes en capitales dans chaque titre.
+    def _step_done_flags(self) -> dict[str, bool]:
+        etat = self.state
+
+        def pose(*noms) -> bool:
+            return any(bool(getattr(etat, nom, None)) for nom in noms)
+
+        charge = pose(
+            "t1_path", "t2_path", "ct_path", "pet_path",
+            "ictal_spect_path", "interictal_spect_path", "fmri_path",
+            "parcel1_path", "lh_pial_path", "plan",
+        )
+        masque = pose("brainmask_path", "brainmask_generated_path")
+        aligne = pose(
+            "t2_validated", "ct_validated", "pet_validated",
+            "ictal_spect_validated", "interictal_spect_validated",
+            "fmri_validated",
+        )
+        siscom = bool(getattr(etat, "siscom_validated", False))
+
+        # Enregistre: plus rien d'enregistrable qui ne le soit.
+        drapeaux = self._saved_flags()
+        reste = False
+        for attribut, _nom in self.SAVE_BUTTONS:
+            if attribut == "btn_save_all":
+                continue
+            bouton = getattr(self, attribut, None)
+            if bouton is not None and bouton.isEnabled() and not drapeaux.get(attribut):
+                reste = True
+                break
+
+        return {
+            "1": charge,
+            "2": masque,
+            "3": aligne,
+            "4": siscom,
+            "5": bool(drapeaux.get("btn_save_all")) and not reste,
+        }
+
+    #: Les cinq tuiles, dans l'ordre des etapes.
+    STEP_CARDS = (
+        "cardBulkImport",
+        "cardBrainMask",
+        "cardCoregistration",
+        "cardSISCOM",
+        "cardFilesToSave",
+    )
+
+    def _sync_current_step(self) -> None:
+        """Marquer l'etape ou l'on en est, et elle seule.
+
+        Le rose sur une tuile n'est pas un ornement: c'est la seule chose
+        de la page qui dise par ou continuer. Ce qui est fait se lit dans
+        le cockpit, ligne par ligne, et dans la ligne grise de la tuile.
+        """
+        try:
+            from PySide6.QtWidgets import QFrame, QLabel
+
+            drapeaux = self._step_done_flags()
+            courante = next((n for n in "12345" if not drapeaux.get(n)), None)
+
+            for numero, carte in zip("12345", self.STEP_CARDS):
+                ici = numero == courante
+                self._set_dynamic_property(self.ui.findChild(QFrame, carte), "current", ici)
+                self._set_dynamic_property(
+                    self.ui.findChild(QLabel, f"filesStepKicker{numero}"), "current", ici
+                )
+        except Exception:
+            pass
+
     def _sync_files_workflow_visual_states(self) -> None:
         """
-        Update the visual feedback of Files / Coregistration without changing
+        Update the visual feedback of Patient data without changing
         the functional workflow or the enabled/disabled rules.
         """
         load_states = (

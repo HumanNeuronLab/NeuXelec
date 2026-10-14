@@ -1,13 +1,22 @@
-"""Ce que l'anneau des tetrodes devient une fois projete sur la coupe.
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Ce que le cone des tetrodes devient une fois projete sur la coupe.
 
-La coupe oblique contient l'axe de l'electrode, par construction. L'anneau
-lui est perpendiculaire, donc il est toujours vu par la tranche : il se
-projette en un segment de 2,8 mm en travers de la tige, et non en cercle.
-C'est la bonne lecture, et c'est ce que ces tests fixent, parce qu'un
-cercle dessine la serait une invention.
+La coupe oblique contient l'axe de l'electrode, par construction. Les deux
+bouts du tronc de cone lui sont perpendiculaires, donc ils sont toujours
+vus par la tranche : ils se projettent en deux segments en travers de la
+tige, 0,8 mm a l'orifice et 2,8 mm a l'anneau, et non en cercles. C'est la
+bonne lecture, et c'est ce que ces tests fixent, parce qu'un cercle dessine
+la serait une invention.
 
-La vue 3D, elle, montre l'anneau entier. Les deux vues disent la meme
-chose vue d'ailleurs.
+La vue 3D, elle, montre le cone entier. Les deux vues disent la meme chose
+vue d'ailleurs.
 """
 
 from __future__ import annotations
@@ -77,35 +86,58 @@ def _projeter(page, elec, center=(0.0, 0.0, 0.0)):
     )
 
 
-def test_l_anneau_traverse_la_tige_sur_deux_virgule_huit_millimetres(app):
-    """Deux fois le rayon de 1,4 mm, et pas davantage."""
-    pts = _projeter(_Page(), _electrode())
-    assert pts, "aucun point projete"
+def _largeur_mm(cercle):
+    cols = np.array([c for _, c in cercle], dtype=float)
+    return (cols.max() - cols.min()) / PX_PAR_MM
 
-    cols = np.array([c for _, c in pts], dtype=float)
-    largeur_mm = (cols.max() - cols.min()) / PX_PAR_MM
-    assert largeur_mm == pytest.approx(2.8, abs=0.05)
+
+def _recul_mm(cercle):
+    """Recul derriere le contact 1, compte positif vers l'arriere.
+
+    Le contact 1 est au centre du plan, donc a la ligne (H - 1) / 2, et
+    l'arriere de l'electrode est du cote des lignes decroissantes.
+    """
+    rows = np.array([r for r, _ in cercle], dtype=float)
+    return -(rows.mean() - (H - 1) / 2.0) / PX_PAR_MM
+
+
+def test_les_deux_bouts_du_cone_traversent_la_tige(app):
+    """0,8 mm a l'orifice, 2,8 mm a l'anneau: le diametre de la tige, puis
+    deux fois le rayon de 1,4 mm."""
+    cercles = _projeter(_Page(), _electrode())
+    assert len(cercles) == 2, "l'orifice et l'anneau"
+
+    orifice, anneau = cercles
+    assert _largeur_mm(orifice) == pytest.approx(0.8, abs=0.05)
+    assert _largeur_mm(anneau) == pytest.approx(2.8, abs=0.05)
 
 
 def test_l_anneau_tombe_a_la_profondeur_du_contact_un(app):
     """Pour un pas de 3,9 mm, 0,27 mm derriere, soit moins d'un demi-pixel."""
-    pts = _projeter(_Page(), _electrode())
-    rows = np.array([r for r, _ in pts], dtype=float)
+    orifice, anneau = _projeter(_Page(), _electrode())
 
-    # Le contact 1 est au centre du plan, donc a la ligne (H - 1) / 2.
-    # L'anneau recule vers l'arriere de l'electrode, donc vers les lignes
-    # decroissantes : le recul est compte positif dans ce sens.
-    recul_mm = -(rows.mean() - (H - 1) / 2.0) / PX_PAR_MM
-    assert recul_mm == pytest.approx(0.268, abs=0.06)
+    assert _recul_mm(anneau) == pytest.approx(0.268, abs=0.06)
+    rows = np.array([r for r, _ in anneau], dtype=float)
     assert rows.max() - rows.min() <= 1, "l'anneau doit etre vu par la tranche"
+
+
+def test_l_orifice_est_plus_loin_de_la_pointe_que_l_anneau(app):
+    """La tetrode sort vers la pointe: le cone s'evase vers l'avant.
+
+    A l'envers, il montrerait les tetrodes du mauvais cote de l'orifice,
+    et personne ne le verrait sur une coupe ou tout se ressemble.
+    """
+    orifice, anneau = _projeter(_Page(), _electrode())
+
+    assert _recul_mm(orifice) == pytest.approx(2.0, abs=0.06)
+    assert _recul_mm(orifice) > _recul_mm(anneau)
 
 
 def test_un_pas_plus_grand_recule_l_anneau(app):
     """Le 09A51 a un pas de 6,1 mm : son anneau recule de 2,47 mm."""
-    pts = _projeter(_Page(), _electrode(ref="DIXI-MM08-09A51D08", pas=6.1))
-    rows = np.array([r for r, _ in pts], dtype=float)
-    recul_mm = -(rows.mean() - (H - 1) / 2.0) / PX_PAR_MM
-    assert recul_mm == pytest.approx(6.1 - 3.63, abs=0.06)
+    _orifice, anneau = _projeter(_Page(), _electrode(ref="DIXI-MM08-09A51D08", pas=6.1))
+
+    assert _recul_mm(anneau) == pytest.approx(6.1 - 3.63, abs=0.06)
 
 
 def test_rien_quand_la_case_est_decochee(app):

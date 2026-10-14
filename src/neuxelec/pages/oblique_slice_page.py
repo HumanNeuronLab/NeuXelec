@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 import logging
@@ -75,7 +83,7 @@ from neuxelec.ui.pyvista_quick_tools import PyVistaQuickTools
 from neuxelec.ui.slice_quick_tools import SliceQuickTools
 
 from ..utils.cortex_mask import build_cortex_mask, cortex_label_ids
-from ..utils.micro_tetrodes import ring_points, tetrode_ring
+from ..utils.micro_tetrodes import exit_points, ring_points, tetrode_ring
 from ..utils.pet_visualization import (
     blend_pet_on_rgb,
     compute_pet_reference,
@@ -3489,19 +3497,11 @@ class ObliqueSlicePage(
             font.setPointSize(max(8, int(8 + 2 * float(zoom))))
             painter.setFont(font)
 
-            # L'anneau d'abord, en trait seul : un disque plein se lirait
-            # comme un contact reconstruit, or cette position est calculee.
-            # Les contacts passent ensuite par-dessus et restent lisibles.
+            # Les deux bouts du tronc de cone d'abord, en trait seul : un
+            # disque plein se lirait comme un contact reconstruit, or cette
+            # position est calculee. Les contacts passent ensuite par-dessus
+            # et restent lisibles.
             if ring_rc:
-                polygone = QPolygonF(
-                    [
-                        QPointF(
-                            float(draw_x) + (float(c) - float(x0)) * scale_x,
-                            float(draw_y) + (float(r) - float(y0)) * scale_y,
-                        )
-                        for r, c in ring_rc
-                    ]
-                )
                 painter.save()
                 anneau_pen = QPen(
                     QColor(
@@ -3511,7 +3511,20 @@ class ObliqueSlicePage(
                 anneau_pen.setWidth(max(1, int(round(min(scale_x, scale_y)))))
                 painter.setPen(anneau_pen)
                 painter.setBrush(Qt.NoBrush)
-                painter.drawPolygon(polygone)
+                for cercle in ring_rc:
+                    if not cercle:
+                        continue
+                    painter.drawPolygon(
+                        QPolygonF(
+                            [
+                                QPointF(
+                                    float(draw_x) + (float(c) - float(x0)) * scale_x,
+                                    float(draw_y) + (float(r) - float(y0)) * scale_y,
+                                )
+                                for r, c in cercle
+                            ]
+                        )
+                    )
                 painter.restore()
 
             for r, c, txt in zip(contact_rows, contact_cols, contact_names):
@@ -3659,7 +3672,8 @@ class ObliqueSlicePage(
             source_width = int(source_for_display.width())
             display_contact_cols = [source_width - 1 - int(col) for col in contact_cols]
             display_ring_rc = [
-                (int(r), source_width - 1 - int(c)) for r, c in (ring_rc or [])
+                [(int(r), source_width - 1 - int(c)) for r, c in cercle]
+                for cercle in (ring_rc or [])
             ]
 
         # 1) Crop source for zoom/pan BEFORE visual rotation.
@@ -7200,13 +7214,18 @@ class ObliqueSlicePage(
         H: int,
         W: int,
     ):
-        """Where the tetrodes land, as a closed polyline in slice pixels.
+        """Where the tetrodes can be, as closed polylines in slice pixels.
 
-        L'anneau entier est projete, et non sa seule intersection avec le
-        plan. Un cercle coupe un plan en deux points au plus : les dessiner
-        seuls donnerait deux taches sans rapport visible avec l'electrode,
-        alors que l'ellipse projetee dit d'un coup d'oeil ou sont les
-        tetrodes et sous quelle obliquite la coupe les traverse.
+        Deux cercles sont rendus : celui des orifices, a la surface de la
+        tige, et celui du deploiement maximal. Ce sont les deux bouts du
+        tronc de cone, et une tetrode a moitie sortie se trouve entre les
+        deux.
+
+        Les cercles entiers sont projetes, et non leur seule intersection
+        avec le plan. Un cercle coupe un plan en deux points au plus : les
+        dessiner seuls donnerait des taches sans rapport visible avec
+        l'electrode, alors que l'ellipse projetee dit d'un coup d'oeil ou
+        sont les tetrodes et sous quelle obliquite la coupe les traverse.
         """
         case = getattr(self, "chk_micro_tetrodes", None)
         if case is None or not case.isChecked():
@@ -7235,10 +7254,13 @@ class ObliqueSlicePage(
                 if away > 2.0:
                     return []
 
-            rel = np.asarray(ring_points(ring, n=96), dtype=np.float64) - center[None, :]
-            rows = np.round((rel @ u - s_min) / max(1e-9, (s_max - s_min)) * (H - 1))
-            cols = np.round((rel @ w - t_min) / max(1e-9, (t_max - t_min)) * (W - 1))
-            return [(int(r), int(c)) for r, c in zip(rows, cols, strict=True)]
+            cercles = []
+            for points in (exit_points(ring, n=96), ring_points(ring, n=96)):
+                rel = np.asarray(points, dtype=np.float64) - center[None, :]
+                rows = np.round((rel @ u - s_min) / max(1e-9, (s_max - s_min)) * (H - 1))
+                cols = np.round((rel @ w - t_min) / max(1e-9, (t_max - t_min)) * (W - 1))
+                cercles.append([(int(r), int(c)) for r, c in zip(rows, cols, strict=True)])
+            return cercles
         except Exception:
             logging.getLogger(__name__).exception("Could not project the tetrode ring")
             return []

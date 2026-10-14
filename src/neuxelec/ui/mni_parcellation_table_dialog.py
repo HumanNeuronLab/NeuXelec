@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 import csv
@@ -1077,75 +1085,6 @@ class MniParcellationTableDialog(QDialog):
                 );
             }
 
-            QTableWidget#parcellationTable QScrollBar:vertical,
-            QTableWidget#parcellationTable QScrollBar:horizontal {
-                background-color: #111218;
-                border: none;
-                border-radius: 6px;
-            }
-
-            QTableWidget#parcellationTable QScrollBar:vertical {
-                width: 13px;
-                margin: 5px 2px 5px 2px;
-            }
-
-            QTableWidget#parcellationTable QScrollBar:horizontal {
-                height: 13px;
-                margin: 2px 5px 2px 5px;
-            }
-
-            QTableWidget#parcellationTable QScrollBar::handle:vertical {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF8000,
-                    stop:1 #FF00A0
-                );
-                border-radius: 6px;
-                min-height: 22px;
-            }
-
-            QTableWidget#parcellationTable QScrollBar::handle:horizontal {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #FF8000,
-                    stop:1 #FF00A0
-                );
-                border-radius: 6px;
-                min-width: 22px;
-            }
-
-            QTableWidget#parcellationTable QScrollBar::handle:vertical:hover {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF922B,
-                    stop:1 #FF33B8
-                );
-            }
-
-            QTableWidget#parcellationTable QScrollBar::handle:horizontal:hover {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #FF922B,
-                    stop:1 #FF33B8
-                );
-            }
-
-            QTableWidget#parcellationTable QScrollBar::add-line:vertical,
-            QTableWidget#parcellationTable QScrollBar::sub-line:vertical,
-            QTableWidget#parcellationTable QScrollBar::add-line:horizontal,
-            QTableWidget#parcellationTable QScrollBar::sub-line:horizontal {
-                width: 0px;
-                height: 0px;
-                background: transparent;
-                border: none;
-            }
-
-            QTableWidget#parcellationTable QScrollBar::add-page:vertical,
-            QTableWidget#parcellationTable QScrollBar::sub-page:vertical,
-            QTableWidget#parcellationTable QScrollBar::add-page:horizontal,
-            QTableWidget#parcellationTable QScrollBar::sub-page:horizontal {
-                background: transparent;
-            }
             """)
 
     # ------------------------------------------------------------------

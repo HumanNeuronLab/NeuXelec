@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Single source of the NeuXelec documentation.
 
 Three renderings share this module:
@@ -105,8 +113,8 @@ MANUAL_SECTIONS: list[Section] = [
 the implanted electrodes and exports coordinates that other tools can read.
 The work always follows the same order.</p>
 <ol>
-<li><b>Files &amp; coregistration</b> - import the images, align them on MRI 1,
-review each alignment and save the results.</li>
+<li><b>Patient data</b> - import the images, align them on MRI 1, review each
+alignment and save the results.</li>
 <li><b>Reconstruction</b> - place the electrodes on the post-implantation CT.</li>
 <li><b>Oblique slice</b> - inspect the contacts along the axis of an electrode.</li>
 <li><b>3D view</b> - see the electrodes, the brain surface and the functional
@@ -115,8 +123,9 @@ maps together.</li>
 <p>On top of that, electrical stimulation results are recorded by hand, one
 card per stimulated pair, and read back on the brain in a mode of their own:
 see <i>Stimulation results</i>.</p>
-<p>The left menu carries the patient identifier, <b>Save project</b>, this
-<b>User guide</b>, and the four pages. A project file (<code>.json</code>)
+<p>The left menu carries the patient name, with a line saying whether the
+project on disk is up to date, then the four pages, then <b>Save project</b> and
+this <b>User guide</b>. A project file (<code>.json</code>)
 remembers the paths of the images, the electrodes and the display settings; it
 does <b>not</b> contain the images themselves. It travels between computers:
 see <i>Moving a project</i>.</p>
@@ -125,68 +134,84 @@ their title bar. The language changes what is shown, never what is stored: a
 descriptor picked in French is saved in English, so two cards of the same
 patient stay comparable.</p>
 <p><b>Watch out.</b> Validating a coregistration keeps it for the session only.
-It is written to disk when you click the matching <i>Save</i> button, or
-<i>Save all validated</i>. NeuXelec warns you when you save the project with
+It is written to disk from the <i>Save</i> window of the Patient data page,
+line by line or all at once. NeuXelec warns you when you save the project with
 work that is not on disk yet.</p>
 """,
     ),
     Section(
         id="files",
-        title="Files and coregistration",
+        title="Patient data",
         body="""
 <p>Everything starts here. MRI 1 is the reference: every other image is aligned
 on it, and all coordinates are expressed in its space.</p>
+<p>The page reads in two bands. On top, the five steps, in the order they are
+done: load, brain mask, align, SISCOM, save. The one with its number in rose is
+where you are, and its grey line follows the calculation while it runs.
+Underneath, the cockpit: what this patient already has.</p>
 
 <h3>1. Import the data</h3>
-<p><b>Load Imaging</b> takes several files at once (NIfTI, DICOM folder,
-FreeSurfer <code>.mgz</code>) and asks you to assign each one to a modality:
-MRI 1, MRI 2, CT, PET, ictal and inter-ictal SPECT, SISCOM, fMRI. <b>Load
-Parcellation</b>, <b>Load Surfaces</b> and <b>Load Planning</b> take the atlas
-volumes, the pial surfaces and brain mask, and a NeuroInspire
-<code>.nip</code> plan.</p>
+<p><b>Load</b> asks what you are loading: imaging, parcellation, surfaces and
+brain mask, or the implantation plan. Imaging takes several files at once
+(NIfTI, DICOM folder, FreeSurfer <code>.mgz</code>) and asks you to assign each
+one to a modality: MRI 1, MRI 2, CT, PET, ictal and inter-ictal SPECT, SISCOM,
+fMRI. Surfaces take the pial surfaces and an existing brain mask, and planning
+takes a NeuroInspire <code>.nip</code> file.</p>
 <p>Images are cleaned on import (intensity sanitising, 1 mm isotropic for MRI 1)
 and the cleaned copy becomes the file NeuXelec uses.</p>
 
 <h3>2. The cockpit</h3>
 <p>The cockpit is the state of the patient at a glance. <b>Imaging</b> is split
 into <b>Structural</b> (MRI 1, MRI 2, CT) and <b>Functional</b> (PET, SPECT,
-SISCOM, fMRI), followed by parcellations, surfaces and the plan. A grey dot
-means missing, blue means loaded and waiting for coregistration, green means
-coregistered or available. Hovering a row shows the full path of the file.</p>
+SISCOM, fMRI), and each row carries three columns: <b>LOAD</b>,
+<b>COREGISTERED</b> and <b>SAVE</b>. A green dot means done, an orange dot is
+what remains to do, an empty circle means nothing is loaded there, and an empty
+cell means the column has no meaning for that row: MRI 1 keeps its LOAD dot
+alone, since it is not coregistered onto itself and is not an output to
+save.</p>
+<p>A coregistration only turns green once you have reviewed it, because only a
+reviewed one can be saved. While it is orange, the grey line of the <i>Align on
+MRI 1</i> step says which of the two is missing, the registration or the
+review. Parcellations, surfaces and the plan have one dot and one word.
+Hovering a row shows the full path of the file.</p>
 
 <h3>3. Align a modality</h3>
-<p>Tick exactly one modality and press <b>Perform coregistration</b>. NeuXelec
-uses ANTs: rigid then affine for the other modalities, and <b>rigid only for the
-CT</b>, so the geometry of the electrodes is never scaled. Then press <b>Review
-coregistration</b>: the reference is green, the moving image is red, the wheel
-zooms, Ctrl+wheel moves through the slices, and a manual console lets you
-correct the alignment by hand before accepting it.</p>
+<p><b>Align</b> asks which image to put on MRI 1, then uses ANTs: rigid then
+affine for the other modalities, and <b>rigid only for the CT</b>, so the
+geometry of the electrodes is never scaled. <b>Review</b> opens the comparison
+on the alignment that was just computed, and asks which one only when none is
+waiting: the reference is green, the moving image is red, the wheel zooms,
+Ctrl+wheel moves through the slices, and a manual console lets you correct the
+alignment by hand before accepting it.</p>
 
 <h3>4. The implantation plan</h3>
-<p><b>Load Planning</b> reads a NeuroInspire <code>.nip</code> file. When the
+<p><b>Load</b>, answered with <i>Implantation plan</i>, reads a NeuroInspire
+<code>.nip</code> file. When the
 plan was made on another MRI, that image is registered on MRI 1 first, which
 takes about three minutes and shows the usual progress. The alignment is then
 presented for review, reference in green and planning MRI in red, exactly like
 any other modality: <b>every trajectory of the plan rests on this one
 registration</b>. A correction made by hand there is applied to the coordinates
-of the trajectories, not only to the image. A right click on <b>Load
-Planning</b> reopens that review later in the session.</p>
+of the trajectories, not only to the image. A right click on <b>Load</b>
+reopens that review later in the session.</p>
 
 <h3>5. Brain mask and SISCOM</h3>
-<p><b>Generate brain mask</b> produces the mask used for 3D rendering and for
-cropping the functional overlays. It works by registering MRI 1 onto the
+<p><b>Generate</b>, in the brain mask step, produces the mask used for 3D
+rendering and for cropping the functional overlays. It works by registering MRI 1 onto the
 reference template and bringing the template's own mask back, which takes a few
 minutes. That registration is the same one the MNI coordinates and the defacing
 need, so it is computed once per patient and kept in the transforms folder: the
 second feature to ask for it gets it in seconds. NeuXelec recomputes it if you
 change MRI 1 or the template.</p>
-<p><b>Generate SISCOM</b> computes the ictal minus inter-ictal map once both
-SPECT are validated.</p>
+<p><b>Generate</b>, in the SISCOM step, computes the ictal minus inter-ictal
+map once both SPECT are validated.</p>
 
 <h3>6. Save</h3>
-<p>Each validated output has its own <i>Save</i> button, and <b>Save all
-validated</b> writes everything in one folder. The button keeps a rose outline
-once the file exists on disk.</p>
+<p><b>Save</b> opens one line per output. A rose outline and the word
+<i>saved</i> mean the file exists on disk; a grey outline and <i>not saved</i>
+mean the result lives in this session only; a line that cannot be pressed has
+nothing to save yet. One button at the bottom writes everything that is
+left.</p>
 
 <h3>7. What the modality leaves behind</h3>
 <p>A CT arrives as a DICOM folder, becomes a NIfTI, then a cleaned copy, and
@@ -340,6 +365,14 @@ The entry appears only when a parcellation names grey regions, the filter is
 shared between the oblique slice and the 3D view, and it never alters the
 contacts you showed or hid by hand.</p>
 
+<h3>Micro tetrodes</h3>
+<p><b>Micro tetrodes</b> draws the two ends of the cone of possible tetrode
+positions: the circle of the exit holes, 0.8 mm across, and the ring of full
+deployment, 2.8 mm. The slice contains the axis of the electrode, so both are
+seen edge-on and read as two segments across the shaft, with everything
+possible lying between them. Where those numbers come from, and why a cone, is
+told under <i>3D view</i>.</p>
+
 <h3>White matter and wmparc</h3>
 <p>An <code>aparc+aseg</code> parcellation labels the cortex gyrus by gyrus but
 puts every cerebral white-matter voxel under one generic label, so a contact in
@@ -405,6 +438,29 @@ keeps its name, colour and size, so moving one is not filling it in again.</p>
 <b>Export all</b>, beside <i>Close</i> in that list, writes every marker of the
 list into one text file, with the coordinates and the slice each was dropped
 on.</p>
+
+<h3>Micro tetrodes</h3>
+<p><b>Micro tetrodes</b> shows where the tetrodes of a DIXI MICRODEEP
+micro-macro electrode can be. They are four tungsten wires held inside eighty
+micrometres: a CT does not see them, and the manufacturer's own sheet counts
+nine visible contacts on a nine-macro electrode. This position is therefore
+<b>computed from the geometry of the product</b>, never reconstructed from an
+image, and it is drawn translucent for that reason.</p>
+<p>Three numbers from DIXI carry it. The tetrodes leave through a hole between
+macros 1 and 2, 0.9 mm from the distal edge of macro 2, and deploy over 2 mm at
+30 degrees from the axis. A deployed tip therefore lands 1.4 mm from the axis
+and 1.73 mm closer to the electrode tip than the hole.</p>
+<p>What is drawn is a cone, because two things are unknown. The electrode turns
+freely around its axis while it is implanted, and that rotation is written down
+nowhere: the depth of the tips is known, their azimuth is not. And the tetrodes
+are retractable: fully deployed the tip is on the ring at the wide end, half out
+it is somewhere between the exit hole and that ring. The cone is the whole of
+what is possible, and its wide ring is the nominal position, the one a fully
+deployed tetrode takes.</p>
+<p>The narrow end is a circle and not a point: it has the radius of the shaft,
+0.4 mm, because the tetrode leaves the surface of the electrode and not its
+centre. On the oblique page the same cone is seen edge-on, as two segments
+across the shaft.</p>
 
 <h3>Stimulation results</h3>
 <p>A right click in the scene opens <b>Stimulation results</b>: one tab to
@@ -608,7 +664,7 @@ slice</i> (3D view only); <i>Add stimulation result</i>, on every page;
 are hidden; the colour, the labels and the projection stay available. See
 <i>View Only mode</i> for the whole of it.</p>
 
-<h3>Load Planning, on the Files page</h3>
+<h3>Load, on the Patient data page</h3>
 <p><i>Review plan alignment</i> reopens the comparison of the planning MRI with
 MRI 1, so the registration every trajectory rests on can be checked again, and
 corrected by hand if needed. The entry is greyed out until a plan is loaded, and
@@ -772,7 +828,7 @@ TOUR_STEPS: list[TourStep] = [
     ),
     TourStep(
         title="The four pages",
-        body="Files and coregistration, Reconstruction, Oblique slice, 3D view. "
+        body="Patient data, Reconstruction, Oblique slice, 3D view. "
         "The work follows that order, from importing the images to the "
         "reconstructed electrodes.",
         target=[
@@ -785,30 +841,32 @@ TOUR_STEPS: list[TourStep] = [
     ),
     TourStep(
         title="Import the patient data",
-        body="Select several files at once, then assign each one to its modality. "
-        "NIfTI, DICOM folders and FreeSurfer volumes are all accepted.",
-        target="btn_FilesCoreg_loadImaging",
+        body="One button asks what you are loading, then takes several files at "
+        "once and lets you assign each one to its modality. NIfTI, DICOM folders "
+        "and FreeSurfer volumes are all accepted.",
+        target="btn_FilesCoreg_load",
         page="pageFiles",
     ),
     TourStep(
         title="The cockpit",
-        body="The state of the patient at a glance: structural images, functional "
-        "images, parcellations, surfaces and plan. Hover a row to see the "
-        "full path of the file.",
+        body="The state of the patient at a glance. Three columns per image: "
+        "loaded, coregistered, saved. Green is done, orange is what is left. "
+        "Hover a row to see the full path of the file.",
         target="cardFilesStatusOverview",
         page="pageFiles",
     ),
     TourStep(
         title="Align on MRI 1",
-        body="Tick one modality, run the coregistration, then review it. MRI 1 is "
-        "the reference for every image and every coordinate.",
+        body="Align asks which image to register, then Review opens the "
+        "comparison. MRI 1 is the reference for every image and every "
+        "coordinate.",
         target="cardCoregistration",
         page="pageFiles",
     ),
     TourStep(
         title="Save what you validated",
         body="A validated coregistration lives in the session only. It reaches the "
-        "disk when you save it here, and the button then keeps a rose outline.",
+        "disk when you save it here, and its line then keeps a rose outline.",
         target="cardFilesToSave",
         page="pageFiles",
     ),

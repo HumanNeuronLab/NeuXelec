@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 import json
@@ -709,53 +717,6 @@ class OpenProjectDialog(QDialog):
                 border: 1px solid #292B34;
             }
 
-            QScrollBar:vertical {
-                background-color: #111218;
-                width: 14px;
-                margin: 5px 3px 8px 2px;
-                border: none;
-                border-radius: 6px;
-            }
-
-            QScrollBar::handle:vertical {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF8000,
-                    stop:1 #FF00A0
-                );
-                border-radius: 6px;
-                min-height: 18px;
-            }
-
-            QScrollBar::handle:vertical:hover {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF922B,
-                    stop:1 #FF33B8
-                );
-                border-radius: 6px;
-            }
-
-            QScrollBar::handle:vertical:pressed {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #E56F00,
-                    stop:1 #E0008C
-                );
-                border-radius: 6px;
-            }
-
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {
-                height: 0px;
-                background: transparent;
-                border: none;
-            }
-
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical {
-                background: transparent;
-            }
             """)
 
     # ============================================================

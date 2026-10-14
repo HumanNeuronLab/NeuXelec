@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, Qt
@@ -535,71 +543,4 @@ class NeuXelecColorDialog(QDialog):
                 );
             }
 
-            QScrollBar:vertical {
-                background-color: transparent;
-                border: none;
-                width: 10px;
-                margin: 5px 2px 5px 2px;
-                border-radius: 5px;
-            }
-
-            QScrollBar::handle:vertical {
-                min-height: 28px;
-                background-color: #3B3E48;
-                border: 1px solid #FF487D;
-                border-radius: 5px;
-            }
-
-            QScrollBar::handle:vertical:hover {
-                background-color: #4A4D58;
-                border: 1px solid #FF6B98;
-            }
-
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {
-                height: 0px;
-                width: 0px;
-                border: none;
-                background: transparent;
-            }
-
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical {
-                background: transparent;
-                border: none;
-            }
-
-            QScrollBar:horizontal {
-                background-color: transparent;
-                border: none;
-                height: 10px;
-                margin: 2px 5px 2px 5px;
-                border-radius: 5px;
-            }
-
-            QScrollBar::handle:horizontal {
-                min-width: 28px;
-                background-color: #3B3E48;
-                border: 1px solid #FF487D;
-                border-radius: 5px;
-            }
-
-            QScrollBar::handle:horizontal:hover {
-                background-color: #4A4D58;
-                border: 1px solid #FF6B98;
-            }
-
-            QScrollBar::add-line:horizontal,
-            QScrollBar::sub-line:horizontal {
-                height: 0px;
-                width: 0px;
-                border: none;
-                background: transparent;
-            }
-
-            QScrollBar::add-page:horizontal,
-            QScrollBar::sub-page:horizontal {
-                background: transparent;
-                border: none;
-            }
             """)

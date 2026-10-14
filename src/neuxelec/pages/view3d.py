@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 import logging
@@ -53,7 +61,12 @@ from neuxelec.utils.fmri_visualization import (
     auto_fmri_levels,
     filter_small_clusters,
 )
-from neuxelec.utils.micro_tetrodes import ring_points, tetrode_ring
+from neuxelec.utils.micro_tetrodes import (
+    cone_surface,
+    exit_points,
+    ring_points,
+    tetrode_ring,
+)
 from neuxelec.utils.mni_electrodes_io import load_bids_mni_electrodes_tsv
 
 from .view3d_camera import View3DCameraMixin
@@ -5762,7 +5775,7 @@ class View3DPage(
                 # ---------- micro tetrodes ----------
                 # Hors du bloc des contacts : l'anneau ne depend pas de ce
                 # qui est affiche, seulement de la geometrie de l'electrode.
-                self._draw_micro_tetrode_ring(elec_id, elec, color)
+                self._draw_micro_tetrode_cone(elec_id, elec, color)
 
                 # ---------- labels ----------
                 try:
@@ -5844,15 +5857,20 @@ class View3DPage(
         # Stimulation Result doit se reappliquer par-dessus.
         self.apply_stimulation_mode_visibility()
 
-    def _draw_micro_tetrode_ring(self, elec_id: int, elec: dict, color) -> None:
-        """Draw where the tetrodes of a micro-macro electrode land.
+    def _draw_micro_tetrode_cone(self, elec_id: int, elec: dict, color) -> None:
+        """Draw where the tetrodes of a micro-macro electrode can be.
 
-        Un cercle, et non des points : l'electrode tourne librement autour
+        Un volume, et non des points : l'electrode tourne librement autour
         de son axe pendant l'implantation, cette rotation n'est enregistree
-        nulle part, et poser deux points dessus inventerait une orientation.
+        nulle part, et les tetrodes peuvent n'etre sorties qu'a moitie. Le
+        lieu honnete est donc le tronc de cone, de l'orifice a l'anneau,
+        et poser deux points dessus inventerait une orientation et un
+        deploiement.
 
-        Le tube est translucide pour que l'anneau ne puisse pas se confondre
-        avec un contact reconstruit. Il est calcule, pas mesure.
+        L'anneau garde son trait au grand bout : c'est la position
+        nominale, celle du deploiement a fond, et c'est celle que le labo
+        utilise. Tout est calcule, rien n'est mesure, d'ou la
+        transparence.
         """
         bouton = getattr(self, "btn_micro_tetrodes", None)
         if bouton is None or not bouton.isChecked():
@@ -5872,17 +5890,38 @@ class View3DPage(
             return
 
         try:
-            ras = _lps_to_ras_points(np.asarray(ring_points(ring, n=96), dtype=np.float32))
-            tube = pv.lines_from_points(ras, close=True).tube(radius=0.22, n_sides=12)
-            actor = self.plotter.add_mesh(tube, color=color, opacity=0.55)
-            try:
-                actor.PickableOff()
-            except Exception:
-                pass
-            self._apply_electrode_actor_depth_mode(actor)
-            self._elec_actors[(elec_id, "tetrodes")] = actor
+            sommets, faces = cone_surface(ring, n=96)
+            cone = pv.PolyData(
+                _lps_to_ras_points(np.asarray(sommets, dtype=np.float32)), faces
+            )
+            acteur_cone = self.plotter.add_mesh(cone, color=color, opacity=0.18)
+
+            # Les deux bouts sont des cercles, donc des tubes, et ce sont
+            # les deux bouts du meme objet: leur trait est presque le
+            # meme. Un gros tube a l'anneau en faisait un beignet, qui
+            # pesait plus que ce qu'il montrait.
+            acteurs = {"tetrodes_cone": acteur_cone}
+            for nom, points, rayon in (
+                ("tetrodes_exit", exit_points(ring, n=96), 0.07),
+                ("tetrodes", ring_points(ring, n=96), 0.09),
+            ):
+                ras = _lps_to_ras_points(np.asarray(points, dtype=np.float32))
+                tube = pv.lines_from_points(ras, close=True).tube(
+                    radius=rayon, n_sides=12
+                )
+                acteurs[nom] = self.plotter.add_mesh(tube, color=color, opacity=0.55)
+
+            for a in acteurs.values():
+                try:
+                    a.PickableOff()
+                except Exception:
+                    pass
+                self._apply_electrode_actor_depth_mode(a)
+
+            for nom, a in acteurs.items():
+                self._elec_actors[(elec_id, nom)] = a
         except Exception:
-            logging.getLogger(__name__).exception("Could not draw the tetrode ring")
+            logging.getLogger(__name__).exception("Could not draw the tetrode cone")
 
     def _remove_actor(self, which: str) -> None:
         if self.plotter is None:

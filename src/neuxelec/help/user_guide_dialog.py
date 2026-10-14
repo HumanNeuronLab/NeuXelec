@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """The User guide window: the whole manual, inside the application.
 
 Same text as the PDF published on the website, so a user who forgot how
@@ -91,47 +99,6 @@ QPushButton#guideClose { color: white; border: 1px solid %(a)s;
                       stop:0 #FF7A3D, stop:1 %(a)s); }
 
 /* Same scroll bars as the rest of NeuXelec (MainWindow.ui). */
-QScrollBar:vertical {
-    background-color: #111218;
-    width: 12px;
-    margin: 4px 2px 4px 2px;
-    border: none;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical {
-    background: qlineargradient(
-        x1:0, y1:0, x2:0, y2:1,
-        stop:0 #FF8000,
-        stop:1 #FF00A0
-    );
-    border-radius: 5px;
-    min-height: 25px;
-}
-QScrollBar:horizontal {
-    background-color: #111218;
-    height: 12px;
-    margin: 2px 4px 2px 4px;
-    border: none;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal {
-    background: qlineargradient(
-        x1:0, y1:0, x2:1, y2:0,
-        stop:0 #FF8000,
-        stop:1 #FF00A0
-    );
-    border-radius: 5px;
-    min-width: 25px;
-}
-QScrollBar::add-line, QScrollBar::sub-line {
-    width: 0px;
-    height: 0px;
-    border: none;
-    background: transparent;
-}
-QScrollBar::add-page, QScrollBar::sub-page {
-    background: transparent;
-}
 """ % {"a": _ACCENT}
 
 _HTML_HEAD = """

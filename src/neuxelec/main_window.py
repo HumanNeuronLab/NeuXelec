@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 from pathlib import Path
@@ -512,7 +520,15 @@ class NeuxelecWindow(QWidget):
         except Exception:
             return None
 
-    def _set_save_project_saved(self, saved: bool) -> None:
+    def _set_save_project_saved(self, saved: bool, texte: str | None = None) -> None:
+        # La ligne du menu se met a jour avant le retour anticipe: deux
+        # etats differents peuvent partager le meme drapeau (pas de
+        # projet, et projet modifie), et ils ne disent pas la meme chose.
+        self._set_menu_project_state(
+            texte if texte is not None else ("project saved" if saved else "unsaved changes"),
+            saved,
+        )
+
         btn = getattr(self, "_save_project_btn", None)
         if btn is None:
             return
@@ -523,12 +539,32 @@ class NeuxelecWindow(QWidget):
         btn.style().polish(btn)
         btn.update()
 
+    def _set_menu_project_state(self, texte: str, saved: bool) -> None:
+        """Ecrire l'etat du projet sous le nom du patient."""
+        etiquette = getattr(self, "_menu_project_state", None)
+        if etiquette is None:
+            etiquette = self.ui.findChild(QLabel, "menuProjectState")
+            self._menu_project_state = etiquette
+        if etiquette is None:
+            return
+
+        if etiquette.text() == texte and bool(etiquette.property("saved")) == bool(saved):
+            return
+
+        etiquette.setText(texte)
+        etiquette.setProperty("saved", bool(saved))
+        etiquette.style().unpolish(etiquette)
+        etiquette.style().polish(etiquette)
+        etiquette.update()
+
     def _refresh_save_project_state(self) -> None:
         import os
 
         path = getattr(self.state, "project_path", None)
         if not path:
-            self._set_save_project_saved(False)
+            # Pas encore de fichier: dire "modifie" serait faux, il n'y a
+            # rien a comparer.
+            self._set_save_project_saved(False, "no project file")
             return
         try:
             mtime = os.path.getmtime(path) if os.path.exists(path) else None
@@ -1067,7 +1103,7 @@ class NeuxelecWindow(QWidget):
             if siscom_path:
                 img = sitk.ReadImage(siscom_path)
 
-                # Keep the image in memory so Files/Coregistration can still
+                # Keep the image in memory so Patient data can still
                 # open Check SISCOM after a project reload.
                 self.state.siscom_z_in_t1 = img
                 self.state.siscom_thr_in_t1 = None

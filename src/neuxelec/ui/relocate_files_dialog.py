@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Ask the user where the project's missing files went.
 
 Opened only when a file the project actually needs could not be found by
@@ -500,22 +508,5 @@ class RelocateFilesDialog(QDialog):
             QPushButton#primaryButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF922B, stop:1 #FF33B8);
             }
-            QScrollBar:vertical {
-                background-color: transparent;
-                border: none;
-                width: 10px;
-                margin: 5px 2px 5px 2px;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:vertical {
-                min-height: 28px;
-                background-color: #3B3E48;
-                border: 1px solid #FF487D;
-                border-radius: 5px;
-            }
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical { height: 0px; border: none; background: transparent; }
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical { background: transparent; border: none; }
             QSizeGrip#dialogResizeGrip { background: transparent; border: none; image: none; }
             """)

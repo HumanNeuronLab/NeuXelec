@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -184,6 +192,7 @@ class NeuXelecMessageDialog(QDialog):
         message: str,
         choices: Sequence[tuple[str, str, bool]],
         cancel_text: str | None = "Cancel",
+        cancel_primary: bool = False,
     ) -> str | None:
         """
         choices:
@@ -200,7 +209,9 @@ class NeuXelecMessageDialog(QDialog):
         dlg = cls(title, message, parent=parent, kind="question")
 
         if cancel_text is not None:
-            dlg._add_button(cancel_text, primary=False, accepted=False)
+            # Une question dont les reponses se valent n'a pas de choix
+            # recommande: c'est alors la sortie qui porte le contour.
+            dlg._add_button(cancel_text, primary=bool(cancel_primary), accepted=False)
 
         for value, label, primary in choices:
             dlg._add_choice_button(
@@ -680,35 +691,6 @@ class NeuXelecMessageDialog(QDialog):
                 );
             }
 
-            QScrollArea#messageScrollArea QScrollBar:vertical {
-                background-color: #111218;
-                width: 11px;
-                margin: 4px 2px 4px 2px;
-                border: none;
-                border-radius: 5px;
-            }
-
-            QScrollArea#messageScrollArea QScrollBar::handle:vertical {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF8000,
-                    stop:1 #FF00A0
-                );
-                border-radius: 5px;
-                min-height: 22px;
-            }
-
-            QScrollArea#messageScrollArea QScrollBar::add-line:vertical,
-            QScrollArea#messageScrollArea QScrollBar::sub-line:vertical {
-                height: 0px;
-                background: transparent;
-                border: none;
-            }
-
-            QScrollArea#messageScrollArea QScrollBar::add-page:vertical,
-            QScrollArea#messageScrollArea QScrollBar::sub-page:vertical {
-                background: transparent;
-            }
             """)
 
 

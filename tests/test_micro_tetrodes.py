@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """La geometrie des tetrodes doit redonner le tableau de reference.
 
 Le tableau Electrodes_Parameters donne, par reference, les distances entre
@@ -167,3 +175,59 @@ def test_un_axe_aligne_sur_un_axe_du_monde_ne_casse_pas_la_base():
         assert float(u @ axe) == pytest.approx(0.0, abs=1e-12)
         assert float(v @ axe) == pytest.approx(0.0, abs=1e-12)
         assert float(u @ v) == pytest.approx(0.0, abs=1e-12)
+
+
+# ============================================ le tronc de cone
+
+
+def test_le_cone_va_de_la_surface_de_la_tige_a_l_anneau():
+    """Les deux bouts, et rien d'invente entre eux.
+
+    Un cone pointu sur l'axe dirait que la tetrode peut se trouver au
+    centre de la tige. Elle en sort: le petit bout a le rayon de la tige.
+    """
+    from neuxelec.utils.micro_tetrodes import cone_surface, exit_points
+
+    contacts = _chaine((10.0, 0.0, 0.0), (1.0, 0.0, 0.0), 3.9, 9)
+    anneau = tetrode_ring("DIXI-MM08-09A33D08", 3.9, contacts)
+
+    petit = exit_points(anneau, n=32)
+    rayons = np.linalg.norm(petit - anneau.exit_center[None, :], axis=1)
+    assert rayons == pytest.approx(np.full(32, 0.4), abs=1e-9)
+
+    sommets, faces = cone_surface(anneau, n=32)
+    assert sommets.shape == (64, 3)
+    # Deux triangles par quadrilatere, chacun precede de son compte.
+    assert len(faces) == 32 * 2 * 4
+    assert set(faces[0::4]) == {3}
+
+
+def test_la_hauteur_du_cone_est_la_composante_axiale_de_la_tetrode():
+    """2 mm a 30 degres: 1,732 mm le long de l'axe, et pas autre chose."""
+    from neuxelec.utils.micro_tetrodes import cone_surface
+
+    contacts = _chaine((10.0, 0.0, 0.0), (1.0, 0.0, 0.0), 3.9, 9)
+    anneau = tetrode_ring("DIXI-MM08-09A33D08", 3.9, contacts)
+
+    hauteur = float(np.dot(anneau.center - anneau.exit_center, anneau.axis))
+    assert hauteur == pytest.approx(2.0 * math.cos(math.radians(30.0)), abs=1e-9)
+
+    sommets, _ = cone_surface(anneau, n=16)
+    le_long = (sommets - anneau.exit_center[None, :]) @ anneau.axis
+    assert le_long.min() == pytest.approx(0.0, abs=1e-9)
+    assert le_long.max() == pytest.approx(hauteur, abs=1e-9)
+
+
+def test_le_cone_s_evase_vers_la_pointe():
+    """Le grand bout est du cote de la pointe, pas du cote de la tete.
+
+    L'orifice est entre les macros 1 et 2, et la tetrode sort vers
+    l'avant: si le cone s'evasait vers l'arriere, il montrerait les
+    tetrodes du mauvais cote de l'electrode.
+    """
+    contacts = _chaine((10.0, 0.0, 0.0), (1.0, 0.0, 0.0), 3.9, 9)
+    anneau = tetrode_ring("DIXI-MM08-09A33D08", 3.9, contacts)
+
+    vers_la_pointe = float(np.dot(anneau.center - anneau.exit_center, anneau.axis))
+    assert vers_la_pointe > 0.0
+    assert anneau.radius_mm > 0.4

@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Où tombent les tétrodes d'une électrode micro-macro DIXI MICRODEEP.
 
 CE QUE LE SCANNER NE MONTRE PAS
@@ -26,12 +34,17 @@ cette rotation n'est enregistrée nulle part. La profondeur des bouts est
 donc connue, leur azimut ne l'est pas. Le lieu honnête est le cercle, et
 poser deux points dessus reviendrait à inventer une orientation.
 
-CE QUE CELA SUPPOSE
+CE QUE L'ON MONTRE : UN TRONC DE CONE
 
-Que les tétrodes soient déployées à fond. Elles sont rétractables, le
-microdrive a une position "deployed" franche, et c'est celle qui est
-utilisée ici. Rétractées, il n'y a rien à montrer ; à moitié sorties, le
-bout serait quelque part entre l'orifice et cet anneau.
+Les tétrodes sont rétractables. Déployées à fond, le bout est sur
+l'anneau ; à moitié sorties, il est quelque part entre l'orifice et lui.
+Sur toutes les sorties possibles et tous les azimuts possibles, ces bouts
+couvrent la surface latérale d'un tronc de cône : petit bout le cercle
+des orifices, à la surface de la tige, grand bout l'anneau.
+
+Un cône pointu sur l'axe dirait que la tétrode peut se trouver au centre
+de la tige, ce qui est faux : elle en sort. Le petit bout a donc le rayon
+de la tige, 0,4 mm, et il se confond avec elle à l'écran.
 
 Sources : DIXI medical, MICRODEEP Micro-Macro Depth Electrode, fiche
 produit et présentation Genève du 13.07.2021, pages 4 et 11.
@@ -193,15 +206,48 @@ def perpendicular_basis(axis: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return u, v / float(np.linalg.norm(v))
 
 
-def ring_points(ring: TetrodeRing, n: int = 64) -> np.ndarray:
-    """Échantillonner l'anneau en ``n`` points, en millimètres LPS."""
-    u, v = perpendicular_basis(ring.axis)
+def _circle_points(center, axis, radius_mm: float, n: int) -> np.ndarray:
+    u, v = perpendicular_basis(axis)
     angles = np.linspace(0.0, 2.0 * np.pi, int(n), endpoint=False)
     return (
-        ring.center[None, :]
-        + ring.radius_mm * (np.cos(angles)[:, None] * u[None, :])
-        + ring.radius_mm * (np.sin(angles)[:, None] * v[None, :])
+        np.asarray(center, dtype=float)[None, :]
+        + float(radius_mm) * (np.cos(angles)[:, None] * u[None, :])
+        + float(radius_mm) * (np.sin(angles)[:, None] * v[None, :])
     )
+
+
+def ring_points(ring: TetrodeRing, n: int = 64) -> np.ndarray:
+    """Échantillonner l'anneau en ``n`` points, en millimètres LPS."""
+    return _circle_points(ring.center, ring.axis, ring.radius_mm, n)
+
+
+def exit_points(ring: TetrodeRing, n: int = 64) -> np.ndarray:
+    """Le cercle des orifices, à la surface de la tige.
+
+    L'azimut de l'orifice n'est pas connu, pas plus que celui du bout :
+    c'est la même rotation qui les emporte tous les deux.
+    """
+    return _circle_points(ring.exit_center, ring.axis, SHAFT_RADIUS_MM, n)
+
+
+def cone_surface(ring: TetrodeRing, n: int = 96) -> tuple[np.ndarray, np.ndarray]:
+    """La surface latérale du tronc de cône : sommets et triangles.
+
+    Les sommets sont en millimètres LPS, les ``n`` premiers sur le cercle
+    des orifices et les ``n`` suivants sur l'anneau. Les faces sont au
+    format de PyVista, chaque triangle précédé de son nombre de sommets.
+    """
+    n = max(3, int(n))
+    petit = exit_points(ring, n)
+    grand = ring_points(ring, n)
+    sommets = np.vstack([petit, grand])
+
+    faces = []
+    for i in range(n):
+        j = (i + 1) % n
+        faces.extend([3, i, j, n + j])
+        faces.extend([3, i, n + j, n + i])
+    return sommets, np.asarray(faces, dtype=np.int64)
 
 
 def tetrode_ring(

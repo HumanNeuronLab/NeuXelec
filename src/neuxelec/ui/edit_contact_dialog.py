@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -524,49 +532,4 @@ class EditContactDialog(QDialog):
                 );
             }
 
-            QScrollArea#editCoordinatesScrollArea QScrollBar:vertical {
-                background-color: #111218;
-                width: 13px;
-                margin: 5px 2px 5px 2px;
-                border: none;
-                border-radius: 6px;
-            }
-
-            QScrollArea#editCoordinatesScrollArea QScrollBar::handle:vertical {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF8000,
-                    stop:1 #FF00A0
-                );
-                border-radius: 6px;
-                min-height: 22px;
-            }
-
-            QScrollArea#editCoordinatesScrollArea QScrollBar::handle:vertical:hover {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FF922B,
-                    stop:1 #FF33B8
-                );
-            }
-
-            QScrollArea#editCoordinatesScrollArea QScrollBar::handle:vertical:pressed {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #E56F00,
-                    stop:1 #E0008C
-                );
-            }
-
-            QScrollArea#editCoordinatesScrollArea QScrollBar::add-line:vertical,
-            QScrollArea#editCoordinatesScrollArea QScrollBar::sub-line:vertical {
-                height: 0px;
-                background: transparent;
-                border: none;
-            }
-
-            QScrollArea#editCoordinatesScrollArea QScrollBar::add-page:vertical,
-            QScrollArea#editCoordinatesScrollArea QScrollBar::sub-page:vertical {
-                background: transparent;
-            }
             """)
