@@ -1,0 +1,52 @@
+NeuXelec
+Localisation d'electrodes SEEG et imagerie multimodale.
+
+Copyright (C) 2026 Hopitaux Universitaires de Geneve
+                   et Universite de Geneve.
+
+Auteur: Jules Veber, Human Neuron Lab,
+        Hopitaux Universitaires de Geneve / Universite de Geneve.
+
+NeuXelec a ete concu et ecrit par Jules Veber. Les droits d'utilisation
+sur le logiciel appartiennent aux Hopitaux Universitaires de Geneve et a
+l'Universite de Geneve, conformement a l'article 17 de la loi federale
+sur le droit d'auteur, qui attribue a l'employeur les droits exclusifs
+d'utilisation sur un logiciel cree dans l'exercice d'une activite a son
+service. La qualite d'auteur reste celle de la personne qui a ecrit
+l'oeuvre.
+
+LICENCE
+
+NeuXelec est un logiciel libre: vous pouvez le redistribuer et le
+modifier selon les termes de la GNU General Public License telle que
+publiee par la Free Software Foundation, soit la version 3, soit toute
+version ulterieure de votre choix.
+
+NeuXelec est distribue dans l'espoir qu'il sera utile, mais SANS AUCUNE
+GARANTIE, ni meme la garantie implicite de QUALITE MARCHANDE ou
+d'ADEQUATION A UN USAGE PARTICULIER. Voir la GNU General Public License
+pour plus de details.
+
+Le texte complet de la licence se trouve dans le fichier LICENSE.
+
+CE QUE LA LICENCE IMPOSE A QUI REDISTRIBUE
+
+Quiconque distribue NeuXelec, modifie ou non, doit le faire sous la meme
+licence et rendre disponible le code source complet de ce qu'il
+distribue, y compris de ses propres modifications. L'usage commercial
+est permis; l'appropriation fermee ne l'est pas.
+
+COMPOSANTS DE TIERS
+
+NeuXelec s'appuie sur des bibliotheques et des outils publies sous leurs
+propres licences, toutes compatibles avec la GPL-3.0. L'inventaire
+complet, avec les textes de licence, est dans le dossier licenses/ et
+son fichier THIRD_PARTY.md.
+
+NeuXelec est un outil de recherche. Ce n'est pas un dispositif medical
+certifie, et il ne doit pas servir de seule base a une decision
+clinique, diagnostique ou therapeutique.
+
+Contact: contact@neuxelec.com
+Site: neuxelec.com
+Code source: github.com/HumanNeuronLab/NeuXelec

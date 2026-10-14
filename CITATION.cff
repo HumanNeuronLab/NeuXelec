@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+title: NeuXelec
+message: >-
+  Si vous utilisez NeuXelec dans un travail publie, merci de le citer
+  avec les informations ci-dessous.
+type: software
+authors:
+  - given-names: Jules
+    family-names: Veber
+    email: contact@neuxelec.com
+    affiliation: >-
+      Human Neuron Lab, Hopitaux Universitaires de Geneve et Universite
+      de Geneve, Geneve, Suisse
+repository-code: 'https://github.com/HumanNeuronLab/NeuXelec'
+url: 'https://neuxelec.com'
+abstract: >-
+  NeuXelec rassemble toutes les images d'un patient SEEG dans un meme
+  espace, reconstruit les electrodes implantees et exporte des
+  coordonnees que d'autres outils savent lire. Il couvre la
+  coregistration multimodale avec ANTs, la reconstruction des contacts
+  sur le CT post-implantation, les coupes obliques le long de l'axe des
+  electrodes, le nommage anatomique par parcellation, la vue 3D avec les
+  surfaces corticales et les cartes fonctionnelles, les resultats de
+  stimulation electrique, et l'export BIDS. Les droits d'utilisation du
+  logiciel appartiennent aux Hopitaux Universitaires de Geneve et a
+  l'Universite de Geneve.
+keywords:
+  - SEEG
+  - stereoelectroencephalography
+  - electrode localization
+  - epilepsy
+  - neuroimaging
+  - coregistration
+  - brain parcellation
+license: GPL-3.0-or-later
+version: 1.3.0
+date-released: '2026-10-14'

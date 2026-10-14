@@ -1,3 +1,11 @@
+# NeuXelec, localisation d'electrodes SEEG et imagerie multimodale.
+# Copyright (C) 2026 Hopitaux Universitaires de Geneve
+#                    et Universite de Geneve.
+# Auteur: Jules Veber, Human Neuron Lab.
+#
+# Ce programme est un logiciel libre, distribue sous licence GNU General
+# Public License version 3 ou ulterieure. Voir le fichier LICENSE.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Build the printed NeuXelec manual as a PDF.
 
 Same source as the in-application User guide (``neuxelec.help.content``), so the
@@ -182,6 +190,10 @@ def body_html(breaks: set[str] | None = None) -> str:
         "<p>NeuXelec is developed at the Human Neuron Lab, Hopitaux "
         "Universitaires de Geneve and Universite de Geneve, and released under "
         "the GNU General Public License v3 or later.</p>"
+        "<p><b>Copyright</b> (C) 2026 Hopitaux Universitaires de Geneve and "
+        "Universite de Geneve. <b>Author</b> Jules Veber. Redistributing "
+        "NeuXelec, modified or not, requires the same licence and the complete "
+        "source code of what is distributed.</p>"
         "<p>NeuXelec is a research tool. It is not a certified medical device "
         "and every result must be reviewed by the clinician in charge.</p>"
     )

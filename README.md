@@ -185,10 +185,17 @@ This produces `installer/NeuXelec_Setup_<version>.exe`.
 
 ## License
 
-Released under the **GNU General Public License v3.0 (GPL-3.0)**. You are free
-to use, study, modify and redistribute NeuXelec, provided that any distributed
-derivative work is also released under GPL-3.0 with its complete source code
-made available. See [LICENSE](LICENSE) for the full text.
+**Copyright (C) 2026 Hopitaux Universitaires de Geneve and Universite de
+Geneve.** Author: **Jules Veber**, Human Neuron Lab.
+
+Released under the **GNU General Public License v3.0 or later (GPL-3.0+)**. You
+are free to use, study, modify and redistribute NeuXelec, provided that any
+distributed derivative work is also released under GPL-3.0 with its complete
+source code made available. Commercial use is permitted; closing the source is
+not. See [LICENSE](LICENSE) for the full text and [COPYRIGHT](COPYRIGHT) for the
+notice.
+
+Citing NeuXelec in a publication: see [CITATION.cff](CITATION.cff).
 
 > **Research use only.** NeuXelec is not a certified medical device and must not
 > be used as the sole basis for any clinical, diagnostic or treatment decision.

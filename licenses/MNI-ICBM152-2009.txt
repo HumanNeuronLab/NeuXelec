@@ -1,0 +1,27 @@
+MNI ICBM 152 non-linear atlases, 2009 release
+(mni_icbm152_nlin_asym_09c)
+
+Copyright (C) 1993-2004 Louis Collins, McConnell Brain Imaging Centre,
+Montreal Neurological Institute, McGill University.
+
+Permission to use, copy, modify, and distribute this software and its
+documentation for any purpose and without fee is hereby granted, provided that
+the above copyright notice appear in all copies. The authors and McGill
+University make no representations about the suitability of this software for
+any purpose. It is provided "as is" without express or implied warranty.
+
+Source: https://nist.mni.mcgill.ca/icbm-152-nonlinear-atlases-2009/
+
+Files in NeuXelec derived from this release, converted from MINC with mnc2nii
+(the conversion is recorded in each NIfTI descrip field):
+
+    tools/templates/template_T1.nii
+    tools/templates/template_T1w.nii.gz
+    tools/templates/template_brain_mask.nii
+    tools/templates/template_brain_mask.nii.gz
+
+Citation:
+
+    Fonov V, Evans AC, Botteron K, Almli CR, McKinstry RC, Collins DL.
+    Unbiased average age-appropriate atlases for pediatric studies.
+    NeuroImage. 2011;54(1):313-327.

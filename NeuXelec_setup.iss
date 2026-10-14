@@ -63,6 +63,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "dist\NeuXelec\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+; La mention de droit d'auteur voyage avec le logiciel installe.
+Source: "COPYRIGHT"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Start menu
